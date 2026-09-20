@@ -1,0 +1,216 @@
+<section class="module" id="module-3" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">03</span>
+      <h1 class="module-title">The Deep Agent Producer</h1>
+      <p class="module-subtitle">Creative direction enters a locked soundstage: the model may propose the shot plan, but application code still owns the theater.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">A director with a narrow call sheet</h2>
+        <p>A user’s direction becomes a compact <span class="term" data-definition="A validated plan is structured data checked against explicit rules before the application accepts it. Ask an AI coding agent to validate model output before using it.">validated arrangement plan</span>, not arbitrary code or a pile of raw notes. The <span class="term" data-definition="Deep Agents is the framework that hosts the producer model, its tools, files, permissions, and saved progress inside one controlled runtime.">Deep Agents framework</span> gives creativity a stage with marked boundaries.</p>
+
+        <div class="arch-diagram animate-in">
+          <div class="arch-zone arch-zone-browser">
+            <h4 class="arch-zone-label">Read-only production desk</h4>
+            <div class="arch-component" data-desc="The brief carries the listener's direction; runtime skill files carry the producer's reusable instructions. Both can be read, neither can be rewritten by the model." onclick="showArchDesc(this)">
+              <div class="arch-icon">📓</div>
+              <span>Brief + <span class="term" data-definition="A runtime skill file is a small instruction document mounted into the agent's temporary workspace so it can follow a repeatable method.">runtime skills</span></span>
+            </div>
+            <div class="arch-component" data-desc="This is the producer's one allowed tool. It reports the musical palettes the deterministic compiler actually supports." onclick="showArchDesc(this)">
+              <div class="arch-icon">🎨</div>
+              <span>One <span class="term" data-definition="A palette tool is a controlled function the model can call to learn which musical sound sets the application supports.">palette tool</span></span>
+            </div>
+          </div>
+
+          <div class="flow-arrow">→</div>
+
+          <div class="arch-zone arch-zone-external">
+            <h4 class="arch-zone-label">Bounded creative room</h4>
+            <div class="arch-component" data-desc="The OpenAI model chooses tempo, energy, density, contour, source role, and rationale. It proposes intent; it does not author timeline events." onclick="showArchDesc(this)">
+              <div class="arch-icon">🎬</div>
+              <span><span class="term" data-definition="An OpenAI model is the language model making the creative proposal from the supplied direction and constraints.">OpenAI model</span></span>
+            </div>
+            <div class="arch-component" data-desc="LangGraph uses a Postgres-backed checkpointer to preserve the agent run under the job's thread id, so progress is durable and attributable." onclick="showArchDesc(this)">
+              <div class="arch-icon">🧷</div>
+              <span><span class="term" data-definition="A checkpointer saves an agent run's state so work can resume consistently instead of starting from memory each time.">LangGraph checkpointer</span> + <span class="term" data-definition="Postgres is a relational database. Here it provides durable storage for the agent's checkpointed state.">Postgres</span></span>
+            </div>
+          </div>
+
+          <div class="flow-arrow">→</div>
+
+          <div class="arch-zone arch-zone-server">
+            <h4 class="arch-zone-label">Application-owned gate</h4>
+            <div class="arch-component" data-desc="The Zod schema rejects malformed or out-of-range proposals before they reach music code." onclick="showArchDesc(this)">
+              <div class="arch-icon">✅</div>
+              <span><span class="term" data-definition="A Zod schema is an executable checklist for data shape and limits. If the proposal breaks the checklist, validation fails.">Zod plan</span></span>
+            </div>
+            <div class="arch-component" data-desc="Deterministic application code converts the accepted plan into canonical musical events. The model cannot bypass this compiler." onclick="showArchDesc(this)">
+              <div class="arch-icon">⚙️</div>
+              <span><span class="term" data-definition="A compiler translates one structured representation into another. Here it turns high-level musical intent into exact canonical events.">Deterministic compiler</span></span>
+            </div>
+          </div>
+          <div class="arch-description" id="arch-desc-module3">Tap a component to read its job on the soundstage.</div>
+        </div>
+
+        <div class="badge-list animate-in">
+          <div class="badge-item">
+            <code class="badge-code">READ ONLY</code>
+            <span class="badge-desc">The model may read the brief, skills, and workspace; write operations are denied.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">NO RAW EVENTS</code>
+            <span class="badge-desc">The model describes musical intent; application code creates exact timeline events.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">ONE PALETTE CALL</code>
+            <span class="badge-desc">The supported choices are discovered once, keeping the planning pass compact.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">BOUNDED SPEND</code>
+            <span class="badge-desc">A <span class="term" data-definition="A spend limit caps how much paid model work one operation may consume. It keeps retries or critique loops from growing without control.">spend limit</span> keeps creative iteration inside the job budget.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The producer’s room, in real code</h2>
+        <p>The constructor connects the model, its single tool, its output contract, and its durable memory. The system prompt makes the boundary unusually explicit: propose a plan, never pretend to hear, and leave exact events to deterministic code.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/agent/producer.ts</span>
+            <pre><code>    const agent = createDeepAgent({
+      name: &quot;pocket-producer&quot;,
+      model,
+      tools: [paletteTool],
+      responseFormat: providerStrategy(arrangementPlanSchema),
+      checkpointer: await checkpoint(),
+      skills: [&quot;/skills/&quot;],
+      permissions: [
+        { operations: [&quot;read&quot;], paths: [&quot;/&quot;] },
+        { operations: [&quot;read&quot;], paths: [&quot;/skills/**&quot;, &quot;/workspace/**&quot;] },
+        { operations: [&quot;write&quot;], paths: [&quot;/**&quot;], mode: &quot;deny&quot; },
+        { operations: [&quot;read&quot;], paths: [&quot;/**&quot;], mode: &quot;deny&quot; }
+      ],
+      systemPrompt: &quot;You are Pocket Producer's main producer. Read /skills/arrange-short-instrumental/SKILL.md and /workspace/brief.md, call list_supported_palettes once, then immediately return one valid compact arrangement plan. Do not list the filesystem. Never claim to hear audio. Do not create raw timeline events; deterministic application code compiles the plan.&quot;
+    });
+    const agentInput = { messages: [{ role: &quot;user&quot;, content: &quot;Plan this supported instrumental now. Use the source when one is available.&quot; }], files: await runtimeFiles(input.direction, input.hasSource) };
+    const result = await agent.invoke(
+      agentInput as never,
+      { configurable: { thread_id: input.jobId }, recursionLimit: 24 }
+    );</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Create one named producer inside the Deep Agents framework.</p>
+              <p class="tl">Give it the selected model and exactly one controlled tool: the supported-palette lookup.</p>
+              <p class="tl">Require its answer to match the arrangement-plan schema, then attach saved run state from the checkpointer.</p>
+              <p class="tl">Mount the reusable skill instructions into its private <span class="term" data-definition="A runtime is the controlled environment where a program executes, including the files and tools it can access.">runtime</span>.</p>
+              <p class="tl">Allow reads only in the approved locations; explicitly deny writes and all other reads.</p>
+              <p class="tl">Tell the producer to read its instructions, inspect the supported palette once, and return a compact plan without inventing listening or timeline work.</p>
+              <p class="tl">Build the one user message plus the runtime files that describe this particular job.</p>
+              <p class="tl">Invoke the agent under the job’s <span class="term" data-definition="A thread ID is a stable label that ties saved agent state to one job, much like a claim number ties updates to one case.">thread ID</span>, with a <span class="term" data-definition="A recursion limit caps how many internal reasoning or tool steps an agent run may take before it must stop.">recursion limit</span> of 24.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The proposal has rails</h2>
+        <p>The model can be expressive inside eight named fields, but the <span class="term" data-definition="A domain contract states which business data is allowed and which rules it must satisfy before the rest of the system trusts it.">domain contract</span> decides what counts as usable. A beautiful answer outside those rails is still invalid.</p>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">⏱️</div>
+            <h4 class="pattern-title">Tempo has a lane</h4>
+            <p class="pattern-desc"><code>tempoBpm</code> must be a whole number from 78 through 112.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">〰️</div>
+            <h4 class="pattern-title">Contour is enumerable</h4>
+            <p class="pattern-desc">Melody shape must be <code>falling</code>, <code>rising</code>, or <code>wave</code>—not an invented label.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">🎚️</div>
+            <h4 class="pattern-title">Intensity is bounded</h4>
+            <p class="pattern-desc">Energy, drum density, and bass motion are numeric controls with explicit minimums and maximums.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🧾</div>
+            <h4 class="pattern-title">Reasoning stays compact</h4>
+            <p class="pattern-desc">The rationale must be present and no longer than 400 characters.</p>
+          </div>
+        </div>
+
+        <div class="callout callout-accent animate-in">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">Proposal is not authority</strong>
+            <p><span class="term" data-definition="Model output is the data produced by a language model. Treat it as untrusted input until deterministic application rules validate it.">Model output</span> becomes useful only after validation; the next module’s compiler—not the model—turns accepted intent into music.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Soundcheck: keep creativity inside the contract</h2>
+        <p>Choose the response that protects the architecture while keeping the product moving.</p>
+
+        <div class="quiz-container" id="quiz-module3">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="Exactly. Add a narrow tool that returns only the needed reference data; do not grant broad filesystem access."
+               data-explanation-wrong="Not quite. The producer needs a deliberately scoped capability, not broader authority or a prompt pretending the data exists.">
+            <div class="scenario-context">
+              <span class="scenario-label">Tool permission</span>
+              <p>A new feature needs the producer to look up one approved chord vocabulary. What is the safest extension?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Allow reads across the whole filesystem so the model can search for it.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Add one read-only tool that returns the approved chord vocabulary.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Tell the model in the prompt to assume the vocabulary is valid.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="Exactly. Schema failure means the proposal never crossed the application-owned gate, so no musical state should be committed."
+               data-explanation-wrong="Not quite. A plausible or partially valid answer is still untrusted; accepting or repairing it silently would move authority back into model output.">
+            <div class="scenario-context">
+              <span class="scenario-label">Schema failure</span>
+              <p>The model returns 126 BPM and an otherwise lovely plan. What should happen next?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Commit it because musical quality matters more than the numeric range.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Quietly clamp the tempo to 112 and claim the model returned a valid plan.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Reject the proposal before compilation and use the controlled retry or failure path.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="Exactly. The fallback must enter through the same schema and compiler, so provenance changes but safety and determinism do not."
+               data-explanation-wrong="Not quite. Bypassing validation or pretending a fallback came from the live model breaks trust and makes behavior harder to audit.">
+            <div class="scenario-context">
+              <span class="scenario-label">Fallback mode</span>
+              <p>The model provider is unavailable during a demo. How should a fixture plan enter the system?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Label it as fixture output, validate it with the same schema, then send it through the same compiler.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Insert raw timeline events directly so the fallback feels instant.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Present the fixture as a live model result to keep the experience seamless.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

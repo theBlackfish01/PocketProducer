@@ -1,0 +1,388 @@
+<section class="module" id="module-2" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">02</span>
+      <h1 class="module-title">API, Database, and Durable Jobs</h1>
+      <p class="module-subtitle">See how accepted work survives a closed browser, a crashed worker, and a race to commit.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Accepted work travels like registered mail</h2>
+        <p>
+          Once the <span class="term" data-definition="An API is a defined doorway that accepts requests from another part of the product.">API</span>
+          accepts a <span class="term" data-definition="A durable job is a saved record of background work that survives browser exits and process crashes.">durable job</span>,
+          closing the <span class="term" data-definition="A browser is the app that displays the web interface; it does not own accepted background work.">browser</span>
+          does not cancel it.
+        </p>
+        <p>
+          <span class="term" data-definition="PostgreSQL is the database that stores lasting product state and coordinates job ownership.">PostgreSQL</span>
+          keeps the receipt, custody record, and expiry time.
+        </p>
+
+        <div class="pattern-cards registered-mail-flow" aria-label="Durable job registered-mail metaphor">
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">📨</div>
+            <h3 class="pattern-title">1 · Accepted</h3>
+            <p class="pattern-desc">The request receives a job record instead of waiting for the full production.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">🧾</div>
+            <h3 class="pattern-title">2 · Registered</h3>
+            <p class="pattern-desc">The database records who owns the work, its state, and its event history.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">🪪</div>
+            <h3 class="pattern-title">3 · Claimed</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="A worker is a background process that claims accepted jobs and performs their expensive steps.">worker</span>
+              receives a temporary custody pass.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🔐</div>
+            <h3 class="pattern-title">4 · Fenced</h3>
+            <p class="pattern-desc">The final write is allowed only if custody and cancellation checks still pass.</p>
+          </div>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">💡</span>
+          <div>
+            <h3>Key insight</h3>
+            <p>The worker performs the job, but PostgreSQL decides whether the worker still has permission to finish it.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The ledger separates six kinds of truth</h2>
+        <p>Keeping these records distinct makes retries safe and tells the product exactly what happened.</p>
+
+        <div class="pattern-cards schema-cards" aria-label="Pocket Producer durable schema">
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">📁</div>
+            <h3 class="pattern-title">Project</h3>
+            <p class="pattern-desc">Names the current selected version and carries a version counter for coordinated updates.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">🎙️</div>
+            <h3 class="pattern-title">Asset</h3>
+            <p class="pattern-desc">
+              An <span class="term" data-definition="An asset is an uploaded sound or other source file owned by a project.">asset</span>
+              is source material, not a finished composition version.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">📋</div>
+            <h3 class="pattern-title">Job ledger</h3>
+            <p class="pattern-desc">
+              The job, <span class="term" data-definition="A job event is a numbered fact in the history of one job, such as accepted, progressed, or succeeded.">event</span>,
+              <span class="term" data-definition="An outbox is a database-backed delivery list that prevents a saved request from being lost between storage and background processing.">outbox</span>,
+              and <span class="term" data-definition="An external effect is a paid or remote action, tracked separately so a retry does not accidentally perform it twice.">external effect</span>
+              records answer different questions.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🎼</div>
+            <h3 class="pattern-title">Revision</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="An immutable revision is a saved composition version that is never edited in place; a change creates another revision.">revision</span>
+              preserves the composition, render paths, measurements, and change summary.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">🔬</div>
+            <h3 class="pattern-title">Analysis</h3>
+            <p class="pattern-desc">
+              <span class="term" data-definition="Analysis is structured information measured or inferred from audio, such as loudness, timing, or musical features.">Analysis</span>
+              describes audio without becoming the audio itself.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">📦</div>
+            <h3 class="pattern-title">Export</h3>
+            <p class="pattern-desc">
+              An <span class="term" data-definition="An export is a packaged result prepared for another tool, with editability depending on whether it contains notes, clips, or audio stems.">export</span>
+              is a delivery artifact with explicit fidelity, not another project head.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Listen to the custody conversation</h2>
+        <p>
+          A <span class="term" data-definition="A lease is temporary permission for one worker to act on a job; it expires so another worker can recover abandoned work.">lease</span>
+          gives one worker time-limited custody, while a
+          <span class="term" data-definition="A heartbeat is a periodic signal that extends a valid lease while a worker is still making progress.">heartbeat</span>
+          proves it is still active.
+        </p>
+
+        <div class="chat-window" id="chat-module2-durable-job">
+          <div class="chat-messages">
+            <div class="chat-message" data-msg="0" data-sender="api" style="display:none">
+              <div class="chat-avatar" style="background: #7e22ce">API</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #7e22ce">API</span>
+                <p>PostgreSQL, save this accepted production job and its outbox delivery record.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="1" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>Recorded. The job survives even if the browser leaves now.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="2" data-sender="worker-a" style="display:none">
+              <div class="chat-avatar" style="background: #ca8a04">A</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #ca8a04">Worker A</span>
+                <p>May I claim the next delivered job?</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="3" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>Lease granted to Worker A for 45 seconds, generation 8.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="4" data-sender="worker-b" style="display:none">
+              <div class="chat-avatar" style="background: #b7791f">B</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #b7791f">Worker B</span>
+                <p>Can I claim that same job?</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="5" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>No. The row is skipped while Worker A holds a valid lease.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="6" data-sender="worker-a" style="display:none">
+              <div class="chat-avatar" style="background: #ca8a04">A</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #ca8a04">Worker A</span>
+                <p>Heartbeat: I am still working. Please extend my lease.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="7" data-sender="api" style="display:none">
+              <div class="chat-avatar" style="background: #7e22ce">API</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #7e22ce">API</span>
+                <p>The listener requested cancellation.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="8" data-sender="worker-a" style="display:none">
+              <div class="chat-avatar" style="background: #ca8a04">A</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #ca8a04">Worker A</span>
+                <p>The render just finished. May I commit the revision?</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="9" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>Commit rejected. The cancellation fence closed before your final write.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="chat-typing" id="chat-module2-durable-job-typing" style="display:none">
+            <div class="chat-avatar" id="chat-module2-durable-job-typing-avatar">?</div>
+            <div class="chat-typing-dots">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
+
+          <div class="chat-controls">
+            <button class="btn chat-next-btn" type="button">Next Message</button>
+            <button class="btn chat-all-btn" type="button">Play All</button>
+            <button class="btn chat-reset-btn" type="button">Replay</button>
+            <span class="chat-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">PostgreSQL grants and checks custody</h2>
+        <p>
+          The database claim uses a <span class="term" data-definition="A transaction is a set of database changes treated as one safe unit, so competing workers cannot see a half-finished decision.">transaction</span>
+          and a <span class="term" data-definition="A row lock temporarily reserves one database record while a decision is being made.">row lock</span>
+          to hand a job to exactly one worker.
+        </p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code>export async function claimNextJob(workerId: string): Promise&lt;JobRecord | null&gt; {
+  const result = await getPool().query(
+    `WITH candidate AS (
+       SELECT id FROM job
+       WHERE (state='queued' OR (state='running' AND lease_until &lt; now()))
+         AND EXISTS (SELECT 1 FROM outbox WHERE outbox.job_id=job.id AND delivered_at IS NOT NULL)
+       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+     ) UPDATE job SET state='running',stage=CASE WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
+       lease_owner=$1,lease_generation=lease_generation+1,lease_until=now()+interval '45 seconds',attempts=attempts+1,updated_at=now()
+     WHERE id=(SELECT id FROM candidate)
+     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_generation,attempts,cancellation_requested_at`,
+    [workerId]</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Define a background claim that returns one job record, or nothing when no work is ready.</p>
+              <p class="tl">
+                Ask the shared database connection pool to run one <span class="term" data-definition="A SQL query is a structured instruction that asks a relational database to read or change records.">SQL query</span>.
+              </p>
+              <p class="tl">Start by finding one candidate job identifier.</p>
+              <p class="tl">A queued job is ready, and a running job becomes ready again only after its lease expires.</p>
+              <p class="tl">Require proof that the outbox delivery finished before any worker can claim the job.</p>
+              <p class="tl">Choose the oldest candidate, lock it, and skip any row already locked by another worker.</p>
+              <p class="tl">Mark the winner as running and choose the stage that matches its job kind.</p>
+              <p class="tl">Record the owner, advance the lease generation, set a 45-second expiry, and count the attempt.</p>
+              <p class="tl">Update only the chosen candidate and return everything the worker needs for safe execution.</p>
+              <p class="tl">Bind the requesting worker identifier into the query rather than mixing it into the SQL text.</p>
+            </div>
+          </div>
+        </div>
+
+        <h3 class="screen-subheading">Finishing work is a second permission check</h3>
+        <p>
+          A <span class="term" data-definition="A commit fence is a final set of checks that blocks a stale, cancelled, or no-longer-authorized worker from publishing results.">commit fence</span>
+          asks whether the same worker still owns the same lease generation before changing durable state.
+        </p>
+
+        <div class="pattern-cards commit-fence-cards" aria-label="Commit fence checks">
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">1</div>
+            <h3 class="pattern-title">Lease generation</h3>
+            <p class="pattern-desc">Reject an old worker whose expired job has already been reclaimed with a newer generation.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">2</div>
+            <h3 class="pattern-title">Cancellation</h3>
+            <p class="pattern-desc">Reject a result when cancellation was recorded before the final write.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">3</div>
+            <h3 class="pattern-title">Current state</h3>
+            <p class="pattern-desc">Require the job to remain running instead of trusting an outdated in-memory copy.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">4</div>
+            <h3 class="pattern-title">Project head</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="The project head is the revision currently selected as the latest active version.">project head</span>
+              advances only when it still matches the version this job expected.
+            </p>
+          </div>
+        </div>
+
+        <div class="pattern-cards comparison-grid">
+          <div class="pattern-card comparison-card comparison-good">
+            <span class="comparison-icon">✓</span>
+            <h3>Valid but no longer latest</h3>
+            <p>Keep the immutable revision as a successful result, but do not silently replace a newer project head.</p>
+          </div>
+          <div class="pattern-card comparison-card comparison-bad">
+            <span class="comparison-icon">✕</span>
+            <h3>Invalid custody</h3>
+            <p>Reject the commit when the lease generation, running state, or cancellation check fails.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Debug the sorting center</h2>
+        <p>Choose the response that preserves evidence, avoids duplicate effects, and respects current ownership.</p>
+
+        <div class="quiz-container" id="quiz-module2">
+          <div class="quiz-question-block"
+               data-correct="m2-q1-idempotency"
+               data-explanation-right="Exactly. A duplicate revision key during retry is evidence that the earlier attempt may already have committed, so inspect the idempotency boundary before doing any external work again."
+               data-explanation-wrong="Not quite. Removing the constraint or inventing another result can hide a repeated commit and may repeat paid work; first determine what the prior attempt already completed.">
+            <h3 class="quiz-question">1. A retried job hits a duplicate key for its creator job when inserting a revision. What should you investigate first?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m2-q1-delete" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Delete the uniqueness rule so every retry can insert</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q1-idempotency" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Check whether the prior attempt already committed and reuse its recorded outcome</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q1-provider" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Call the paid provider again before reading the ledger</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m2-q2-expiry"
+               data-explanation-right="Exactly. Lease expiry is the recovery mechanism: another worker can reclaim the abandoned job with a newer generation and the old worker loses commit authority."
+               data-explanation-wrong="Not quite. Immediate double ownership risks duplicate effects, while marking success invents a result; let the recorded lease expire and reclaim safely.">
+            <h3 class="quiz-question">2. A worker crashes halfway through a running job and sends no more heartbeats. What is the safe recovery?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m2-q2-expiry" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Allow the lease to expire, then let another worker claim a newer generation</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q2-immediate" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Give a second worker the same live lease immediately</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q2-success" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Mark the job successful because some work probably finished</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m2-q3-preserve"
+               data-explanation-right="Exactly. A valid result remains an immutable revision, but the head check protects the newer user choice from being replaced by a late completion."
+               data-explanation-wrong="Not quite. The worker still has valid custody, so the result can be preserved; the stale part is only its authority to become the selected project head.">
+            <h3 class="quiz-question">3. A worker still has a valid lease, but the listener selected a newer revision before it finished. How should the late result commit?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m2-q3-overwrite" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Store it and overwrite the newer project head</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q3-discard" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Discard every trace of the completed result</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q3-preserve" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Store the immutable revision, mark success, and leave the newer head selected</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" type="button" onclick="checkQuiz('quiz-module2')">Check Answers</button>
+          <button class="quiz-reset-btn" type="button" onclick="resetQuiz('quiz-module2')">Try Again</button>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">🎛️</span>
+          <div>
+            <h3>Next: the producer inside the worker</h3>
+            <p>The next module follows the claimed job into the planning loop that proposes safe musical operations.</p>
+          </div>
+        </aside>
+      </section>
+    </div>
+  </div>
+</section>

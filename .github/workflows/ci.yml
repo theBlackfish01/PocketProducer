@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: pocket
+          POSTGRES_PASSWORD: pocket_local_only
+          POSTGRES_DB: pocket_producer
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -U pocket -d pocket_producer"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: true
+      APP_ENV: test
+      DATABASE_URL: postgresql://pocket:pocket_local_only@127.0.0.1:54329/pocket_producer
+      FIXTURE_MODE: true
+      DEV_LOCAL_AUTH: true
+      INITIAL_BUILD_API_BUDGET_USD: 0
+      MAX_JOB_COST_USD: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:integration
+      - run: pnpm build
+      - run: pnpm generate:fixtures
+      - run: pnpm seed:demo
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e

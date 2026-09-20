@@ -1,0 +1,19 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  '@google/genai': false
+  esbuild: true
+  protobufjs: false
+
+minimumReleaseAgeExclude:
+  - openai@7.20.0
+
+supportedArchitectures:
+  os:
+    - win32
+  cpu:
+    - x64
+  libc:
+    - current

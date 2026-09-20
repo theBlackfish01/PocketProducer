@@ -1,0 +1,258 @@
+<section class="module" id="module-5" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">05</span>
+      <h1 class="module-title">Two Honest Borders</h1>
+      <p class="module-subtitle">How <span class="term" data-definition="Gemini is Google's family of AI models. Here it is used only as a bounded audio critic, not as the owner of the song.">Gemini</span> advice and <span class="term" data-definition="Nexus is the export document format used here to describe a project and its editable audio parts. It does not itself render sound or log in to Audiotool.">Nexus</span> export stay useful without claiming powers they do not have.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The song can cross neither border—and still exist</h2>
+        <p>Pocket Producer can create music without either external <span class="term" data-definition="A provider is an outside service the app can ask to do specialized work. Treat it like a contractor: useful, but never the owner of the core record.">provider</span>. Each checkpoint has a narrow passport stamp, and an unavailable service is reported as unavailable.</p>
+
+        <div class="flow-steps integration-border-flow" aria-label="The two integration boundaries">
+          <div class="flow-step">
+            <div class="flow-step-num">♪</div>
+            <h3>Canonical composition</h3>
+            <p>The app-owned source of truth for sections, tracks, timing, and intent.</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step checkpoint-card">
+            <div class="flow-step-num">G</div>
+            <h3>Gemini checkpoint</h3>
+            <p>May inspect real <span class="term" data-definition="WAV is an uncompressed audio file format. It preserves the sound samples a critic or renderer needs without hiding them behind a streaming service.">WAV</span> bytes and offer observations; it cannot rewrite the composition.</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">↔</div>
+          <div class="flow-step checkpoint-card">
+            <div class="flow-step-num">N</div>
+            <h3>Nexus checkpoint</h3>
+            <p>May label local <span class="term" data-definition="A stem is one separately exported musical part, such as drums or bass. Stems let someone remix parts without receiving every original note and instrument setting.">stems</span> in a <span class="term" data-definition="A manifest is a structured packing list. It records what files belong to an export and what each one means.">manifest</span>; it does not render them or change a remote project.</p>
+          </div>
+        </div>
+
+        <div class="badge-list integration-status-ledger">
+          <div class="badge-item">
+            <code class="badge-code">GEMINI · BUILT / NOT LIVE</code>
+            <span class="badge-desc">The audio-analysis <span class="term" data-definition="An adapter is a small translator between the app's own rules and an outside service's interface. It lets the rest of the app stay stable if the provider changes.">adapter</span> is built, but no Gemini <span class="term" data-definition="An API key is a secret credential an app presents to a service. It must stay server-side and should never appear in course pages, logs, or browser code.">API key</span> is configured and no live call has run.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">NEXUS 0.0.17 · LOCAL VERIFIED</code>
+            <span class="badge-desc">The offline document and local editable-stem manifest are verified; <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">Audiotool OAuth</span> and <span class="term" data-definition="A remote mutation is a change sent to another service, such as creating or editing a project on Audiotool's servers.">remote mutation</span> are not.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">FFMPEG · ABSENT</code>
+            <span class="badge-desc"><span class="term" data-definition="FFmpeg is a command-line media tool commonly used to encode, decode, and inspect audio or video files.">FFmpeg</span> is not installed, so no FFmpeg-backed result should be implied.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Reserve the toll before paying it</h2>
+        <p>A Gemini attempt first reserves an <span class="term" data-definition="An idempotency key is a unique label for one intended side effect. Reusing it lets the system recognize a retry instead of charging for the same work twice.">idempotency key</span>. If the same attempt already exists, the code reuses a completed answer or returns an honest unavailable result rather than risking duplicate billing.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/providers/gemini.ts</span>
+            <pre><code>    const idempotencyKey = `gemini:${purpose}:${input.hash}:audio-critique-v1`;
+    const reserved = await getPool().query&lt;{ id: string }&gt;(
+      "INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider) VALUES($1,$2,$3,$4,'pending','gemini') ON CONFLICT(job_id,idempotency_key) DO NOTHING RETURNING id",
+      [input.jobId, purpose, idempotencyKey, canonicalHash({ hash: input.hash, purpose, measured })]
+    );
+    effectId = reserved.rows[0]?.id;
+    if (!effectId) {
+      const prior = await getPool().query&lt;{ state: string; output: { analysis?: AudioAnalysis } | null }&gt;("SELECT state,output FROM effect WHERE job_id=$1 AND idempotency_key=$2", [input.jobId, idempotencyKey]);
+      if (prior.rows[0]?.state === "succeeded" &amp;&amp; prior.rows[0].output?.analysis) return prior.rows[0].output.analysis;
+      return { status: "unavailable", assetHash: input.hash, model: config.GEMINI_MODEL, promptVersion: "audio-critique-v1", purpose, inspectedInterval: { start: 0, end: input.durationSeconds }, measured, observations: [], uncertainty: "A previous Gemini attempt did not complete; it was not repeated to avoid duplicate billing.", suggestedActions: [], repairAction: "none", usage: { promptTokens: 0, candidateTokens: 0, totalTokens: 0 } };
+    }
+    await getPool().query("UPDATE job SET estimated_cost_usd=estimated_cost_usd+$2 WHERE id=$1", [input.jobId, estimatedCallCost]);</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Name this one critique from its purpose, audio fingerprint, and prompt version.</p>
+              <p class="tl">Try to reserve one pending provider effect. A duplicate reservation is deliberately ignored.</p>
+              <p class="tl">Fingerprint the measured input too, so the record says exactly what was submitted.</p>
+              <p class="tl">Keep the new reservation’s ID—if there is one.</p>
+              <p class="tl">No new ID means this exact attempt was seen before, so look up its recorded outcome.</p>
+              <p class="tl">If that earlier attempt succeeded, return its saved analysis instead of calling Gemini again.</p>
+              <p class="tl">If it did not finish, say “unavailable” and explain why it was not repeated.</p>
+              <p class="tl">Only the newly reserved call adds its estimated cost to the job.</p>
+            </div>
+          </div>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon" aria-hidden="true">✦</span>
+          <p><strong>Aha:</strong> uncertainty is data, not permission to spend again. The safe result can be “we do not know, and we did not double-charge.”</p>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">An export is a ladder, not a magic portal</h2>
+        <p><span class="term" data-definition="Export fidelity describes how much editing freedom survives when music leaves one system for another. Higher fidelity preserves smaller, more meaningful musical pieces.">Fidelity</span> must be named precisely. The current verified Nexus path reaches editable stems locally, not a fully editable remote Audiotool project.</p>
+
+        <div class="flow-steps fidelity-ladder" aria-label="Export fidelity from most to least editable">
+          <article class="flow-step fidelity-rung">
+            <div class="pattern-icon">1</div>
+            <h3 class="pattern-title">Notes</h3>
+            <p class="pattern-desc">Individual musical events remain editable: pitch, length, timing, and instrument choices.</p>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">›</div>
+          <article class="flow-step fidelity-rung">
+            <div class="pattern-icon">2</div>
+            <h3 class="pattern-title">Audio clips</h3>
+            <p class="pattern-desc">Regions can move and trim, but their recorded sound is already fixed.</p>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">›</div>
+          <article class="flow-step fidelity-rung fidelity-rung-current">
+            <div class="pattern-icon">✓</div>
+            <h3 class="pattern-title">Editable stems</h3>
+            <p class="pattern-desc"><strong>Current local export.</strong> Drums, bass, and other parts stay separate for mixing.</p>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">›</div>
+          <article class="flow-step fidelity-rung">
+            <div class="pattern-icon">4</div>
+            <h3 class="pattern-title">Stereo mix</h3>
+            <p class="pattern-desc">Everything is fused into one left-and-right audio file.</p>
+          </article>
+        </div>
+
+        <div class="pattern-cards boundary-cards">
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">📦</div>
+            <h3 class="pattern-title">What Nexus does</h3>
+            <p class="pattern-desc">Writes an offline document that maps composition metadata and local stem paths with an <code>editable-stem</code> label.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🚧</div>
+            <h3 class="pattern-title">What remains outside</h3>
+            <p class="pattern-desc">The render pipeline creates audio. Audiotool login and remote project creation still require unverified client configuration and OAuth.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Use the evidence label that fits</h2>
+        <p>A status sentence should say what artifact exists, where it exists, and which boundary has not been crossed. These notebook labels are safe language for reviews and handoffs.</p>
+
+        <div class="badge-list truth-language">
+          <div class="badge-item">
+            <code class="badge-code">MEASURED</code>
+            <span class="badge-desc">“The waveform measurement reports this value.” A measured fact comes from the audio bytes, not the model’s taste.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">MODEL OPINION</code>
+            <span class="badge-desc">“Gemini observed this, with stated uncertainty.” Advice may guide a revision but does not silently become fact.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">LOCAL VERIFIED</code>
+            <span class="badge-desc">“Nexus 0.0.17 offline document and local editable-stem manifest verified.” This says nothing about a remote Audiotool project.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">NOT LIVE</code>
+            <span class="badge-desc">“Gemini has no configured key or live call; Audiotool has no verified OAuth or remote mutation.” Missing proof stays visible.</span>
+          </div>
+        </div>
+
+        <div class="flow-steps retry-decision-flow" aria-label="Decision path after an ambiguous provider attempt">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p>Provider outcome is ambiguous</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p>Read the reserved effect record</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3A</div>
+            <p>Saved success → reuse it</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">∨</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3B</div>
+            <p>No success → return unavailable</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Checkpoint drill</h2>
+        <p>Choose the response that protects truth, cost, and editability. Each scenario asks what you would actually say or do.</p>
+
+        <div class="quiz-container" id="quiz-module5">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="Exactly. The reservation record is the source of truth; reuse a saved success or return unavailable without risking a second charge."
+               data-explanation-wrong="Not quite. An ambiguous network result does not prove the provider did nothing, so an immediate retry can duplicate a paid effect.">
+            <h3 class="quiz-question">1. The network drops after a Gemini request may have left the server. What should the worker do next?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Retry immediately until Gemini answers.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Read the reserved effect; reuse success or report unavailable without repeating the call.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Delete the effect record and begin with a new key.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="Exactly. The meter reading is measured evidence; “crowded” is a model observation that should carry uncertainty."
+               data-explanation-wrong="Not quite. Useful model judgment is still judgment—keep it separate from values computed directly from the waveform.">
+            <h3 class="quiz-question">2. A meter reports a loudness value, while Gemini calls the chorus “crowded.” How should a revision note describe them?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Both are measured facts because software produced them.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Both are opinions because music is subjective.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>The loudness is measured; “crowded” is a model opinion with uncertainty.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="Exactly. This names the verified local artifact and the unverified remote boundary without underselling the useful stems."
+               data-explanation-wrong="Not quite. The local manifest is real, but OAuth and remote Audiotool mutation have not been verified, so a live-project claim would overreach. ">
+            <h3 class="quiz-question">3. A teammate asks whether the export now creates a fully editable Audiotool project. Which answer is accurate?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Local editable stems and the Nexus 0.0.17 manifest are verified; Audiotool OAuth and remote project mutation are not.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Yes—the word “editable” means every note and device is editable in Audiotool.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>No—the export is only a stereo mix with no separate parts.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

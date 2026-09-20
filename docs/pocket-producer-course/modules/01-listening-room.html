@@ -1,0 +1,294 @@
+<section class="module" id="module-1" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">01</span>
+      <h1 class="module-title">The Listening Room Journey</h1>
+      <p class="module-subtitle">Trace one musical direction from the listener to playable audio, and learn which layer owns each failure.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">One desk, many rooms behind the glass</h2>
+        <p>
+          The <span class="term" data-definition="React is the software library that builds the controls and changing views in the browser. When talking to an AI coding agent, call this the React frontend.">React</span>
+          <span class="term" data-definition="A user interface, or UI, is the part of the product a person sees and operates.">UI</span>
+          is the studio control desk: it accepts a direction, shows progress, and plays the result.
+        </p>
+        <p>The desk coordinates the work, but it does not compose, render, or store the music itself.</p>
+
+        <div class="pattern-cards listening-room-hero" aria-label="Listening Room studio metaphor">
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">🎛️</div>
+            <h3 class="pattern-title">Control desk</h3>
+            <p class="pattern-desc">The listener types a direction, watches status, and presses play.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🪟</div>
+            <h3 class="pattern-title">Studio glass</h3>
+            <p class="pattern-desc">A clean screen hides several specialist systems without pretending they are one machine.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">🎚️</div>
+            <h3 class="pattern-title">Machine rooms</h3>
+            <p class="pattern-desc">
+              An <span class="term" data-definition="An API is a defined doorway that lets one part of a product request work from another part.">API</span>,
+              a <span class="term" data-definition="A queue is a durable waiting line for work that can be handled later.">queue</span>,
+              and a <span class="term" data-definition="A worker is a background process that picks up accepted jobs and performs the expensive work.">worker</span>
+              do the heavy lifting.
+            </p>
+          </div>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">💡</span>
+          <div>
+            <h3>Key insight</h3>
+            <p>If the controls look right but production stalls, the visible desk may be healthy while a room behind the glass needs attention.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Follow the direction, step by step</h2>
+        <p>
+          The <span class="term" data-definition="Fastify is the web-server framework that receives browser requests and routes them to server-side code.">Fastify</span>
+          service accepts the request, while
+          <span class="term" data-definition="PostgreSQL is the database that durably stores product records and coordinates queued work.">PostgreSQL</span>
+          holds the baton between processes.
+        </p>
+
+        <div class="flow-animation" id="flow-module1-listening-room" data-steps='[
+          {"highlight":"flow-actor-m1-listener","label":"The listener submits a musical direction"},
+          {"highlight":"flow-actor-m1-web","label":"The React interface chooses generation or revision","packet":true,"from":"actor-m1-listener","to":"actor-m1-web"},
+          {"highlight":"flow-actor-m1-api","label":"The Fastify API validates and accepts the request","packet":true,"from":"actor-m1-web","to":"actor-m1-api"},
+          {"highlight":"flow-actor-m1-postgres","label":"PostgreSQL records a durable queued job","packet":true,"from":"actor-m1-api","to":"actor-m1-postgres"},
+          {"highlight":"flow-actor-m1-worker","label":"A worker claims the job and coordinates production","packet":true,"from":"actor-m1-postgres","to":"actor-m1-worker"},
+          {"highlight":"flow-actor-m1-storage","label":"Audio files and revision data are saved","packet":true,"from":"actor-m1-worker","to":"actor-m1-storage"},
+          {"highlight":"flow-actor-m1-player","label":"The browser player loads the selected preview","packet":true,"from":"actor-m1-storage","to":"actor-m1-player"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-actor-m1-listener">
+              <div class="flow-actor-icon" style="background: #d94f30">👂</div>
+              <span>Listener</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-web">
+              <div class="flow-actor-icon" style="background: #0f766e">🖥️</div>
+              <span>React UI</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-api">
+              <div class="flow-actor-icon" style="background: #7e22ce">🚪</div>
+              <span>Fastify API</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-postgres">
+              <div class="flow-actor-icon" style="background: #166534">🗄️</div>
+              <span>PostgreSQL queue</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-worker">
+              <div class="flow-actor-icon" style="background: #ca8a04">⚙️</div>
+              <span>Worker</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-storage">
+              <div class="flow-actor-icon" style="background: #166534">🎵</div>
+              <span>Audio + revision</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-player">
+              <div class="flow-actor-icon" style="background: #0f766e">▶️</div>
+              <span>Browser player</span>
+            </div>
+          </div>
+
+          <div class="flow-packet" id="flow-packet-m1-listening-room"></div>
+          <div class="flow-step-label" id="flow-label-m1-listening-room">Select Next Step to trace the direction</div>
+
+          <div class="flow-controls">
+            <button class="btn flow-next-btn" type="button">Next Step</button>
+            <button class="btn flow-reset-btn" type="button">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+
+        <aside class="callout callout-info">
+          <span class="callout-icon">🔎</span>
+          <div>
+            <h3>Debug the last successful handoff</h3>
+            <p>Find the last actor that behaved correctly, then inspect the next boundary instead of blaming the whole app.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The control desk chooses the request</h2>
+        <p>
+          This <span class="term" data-definition="An asynchronous function can pause while slower work finishes without freezing the whole page. Developers often shorten asynchronous to async.">asynchronous function</span>
+          decides whether the direction starts a fresh generation or revises the current version.
+        </p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code>  const submitDirection = async () =&gt; {
+    if (draft.trim().length &lt; 3) return
+    setBusy(true); setError(null)
+    try {
+      const id = await ensureProject()
+      const result = snapshot?.project.currentRevisionId
+        ? await api.revise(id, snapshot.project.currentRevisionId, draft)
+        : await api.generate(id, draft, snapshot?.assets[0]?.id)
+      setJob(await api.job(result.jobId))
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit direction") }</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Create the action that runs when the listener submits a direction.</p>
+              <p class="tl">Ignore directions too short to be useful.</p>
+              <p class="tl">Show a busy state and clear any old error.</p>
+              <p class="tl">Begin a protected attempt that can report failure cleanly.</p>
+              <p class="tl">Make sure there is a project, and wait for its identifier.</p>
+              <p class="tl">
+                If the current <span class="term" data-definition="A revision is an immutable saved version of a composition and its rendered results.">revision</span>
+                exists, request a revision; otherwise request a fresh generation.
+              </p>
+              <p class="tl">
+                Fetch the accepted <span class="term" data-definition="A job is a durable record of background work that was accepted and can be tracked independently of the browser.">job</span>
+                so the screen can display progress.
+              </p>
+              <p class="tl">If anything fails, show the clearest available message to the listener.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Meet the specialists</h2>
+        <p>Each actor has a narrow job, so the symptom tells you where to investigate first.</p>
+
+        <div class="pattern-cards" aria-label="Pocket Producer runtime actors">
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">🌐</div>
+            <h3 class="pattern-title">Web</h3>
+            <p class="pattern-desc">
+              The <span class="term" data-definition="A browser is the app, such as Chrome or Safari, that displays the web interface and plays audio.">browser</span>
+              gathers input, polls progress, and controls playback.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">🛂</div>
+            <h3 class="pattern-title">API</h3>
+            <p class="pattern-desc">The server doorway checks ownership and turns valid requests into durable work.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">🔧</div>
+            <h3 class="pattern-title">Worker</h3>
+            <p class="pattern-desc">The background specialist claims jobs, plans production, and renders results.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🎼</div>
+            <h3 class="pattern-title">Core</h3>
+            <p class="pattern-desc">
+              Shared domain rules protect the <span class="term" data-definition="The canonical composition is the single trusted musical plan from which previews, stems, and exports are derived.">canonical composition</span>
+              regardless of which actor calls them.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">🌲</div>
+            <h3 class="pattern-title">PostgreSQL</h3>
+            <p class="pattern-desc">The durable ledger stores projects, jobs, events, and immutable revisions.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #64748b">
+            <div class="pattern-icon" style="background: #64748b">🔌</div>
+            <h3 class="pattern-title">Providers</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="A provider is an outside service used for a specialized capability, such as AI planning or audio analysis.">provider</span>
+              supplies specialized intelligence while Pocket Producer keeps final authority.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Where would you look first?</h2>
+        <p>Use the symptom and the last successful handoff to choose the smallest useful investigation.</p>
+
+        <div class="quiz-container" id="quiz-module1">
+          <div class="quiz-question-block"
+               data-correct="m1-q1-browser"
+               data-explanation-right="Exactly. The request path is not involved when a loaded preview fails only at local playback, so start at the browser player and audio state."
+               data-explanation-wrong="Not quite. The preview already exists and loads, which means production and storage completed; focus on the final playback layer.">
+            <h3 class="quiz-question">1. A finished preview loads, but pressing play immediately flips back to paused with no new network request. Where should you inspect first?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m1-q1-api" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The Fastify request route</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q1-browser" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The browser audio player and its local state</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q1-worker" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The background production worker</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m1-q2-api"
+               data-explanation-right="Exactly. An immediate rejection before a job identifier exists points to request validation, access control, or another API boundary."
+               data-explanation-wrong="Not quite. No durable job was accepted, so a worker never had anything to claim; inspect the server request boundary.">
+            <h3 class="quiz-question">2. Submit returns an immediate validation error and never produces a job identifier. Which boundary deserves attention?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m1-q2-player" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The playback controls</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q2-api" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The API validation and ownership checks</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q2-render" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The final audio render</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m1-q3-worker"
+               data-explanation-right="Exactly. A durable running job with healthy status reads has passed the UI and API boundaries, so inspect worker progress and provider calls."
+               data-explanation-wrong="Not quite. Polling can read the accepted job, so the visible interface and request doorway are doing their part; trace the background execution.">
+            <h3 class="quiz-question">3. The job is accepted and status polling works, but the production stage stays unchanged while an audio service times out. What is the best first target?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m1-q3-css" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The visual styling of the progress bar</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q3-worker" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The worker stage and provider call</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q3-form" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The direction text field</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" type="button" onclick="checkQuiz('quiz-module1')">Check Answers</button>
+          <button class="quiz-reset-btn" type="button" onclick="resetQuiz('quiz-module1')">Try Again</button>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">📬</span>
+          <div>
+            <h3>Next: zoom into the middle</h3>
+            <p>The next module opens the durable job ledger and shows how leases prevent two workers from owning the same parcel.</p>
+          </div>
+        </aside>
+      </section>
+    </div>
+  </div>
+</section>

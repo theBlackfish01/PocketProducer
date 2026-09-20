@@ -1,0 +1,284 @@
+<section class="module" id="module-6" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">06</span>
+      <h1 class="module-title">Preflight, Not Vibes</h1>
+      <p class="module-subtitle">How layered tests, durable failure states, and explicit unknowns turn a polished Listening Room into trustworthy software.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Confidence comes from the whole checklist</h2>
+        <p>An aircraft does not pass preflight because its dashboard is pretty. Pocket Producer checks code shape, domain rules, persistence, browser journeys, provider evidence, and the device boundary as distinct layers.</p>
+
+        <div class="pattern-cards preflight-grid" aria-label="The quality preflight layers">
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">⌁</div>
+            <h3 class="pattern-title"><span class="term" data-definition="Type checking verifies that values are used in compatible ways before the app runs—for example, that code does not treat a song ID like an audio buffer.">Types</span> and <span class="term" data-definition="Linting is an automated review for suspicious or inconsistent code patterns. It catches many small mistakes before they become runtime bugs.">lint</span></h3>
+            <p class="pattern-desc">Catch malformed connections and suspicious code before launch.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🔒</div>
+            <h3 class="pattern-title">Domain invariants</h3>
+            <p class="pattern-desc">Prove rules such as ownership, locks, immutable revisions, and safe cost handling.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🗃</div>
+            <h3 class="pattern-title"><span class="term" data-definition="An integration test checks that multiple real pieces work together, such as job logic plus the database. It sits between a tiny unit test and a full browser journey.">Integration tests</span></h3>
+            <p class="pattern-desc">Exercise real persistence, claims, retries, and terminal failure states together.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🧭</div>
+            <h3 class="pattern-title"><span class="term" data-definition="An end-to-end test drives the product through its visible interface, like a user clicking Play and Compare, while checking the resulting behavior.">End-to-end journeys</span></h3>
+            <p class="pattern-desc">Drive playback, comparison, focus, and responsive behavior through the browser.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">⚡</div>
+            <h3 class="pattern-title">Live-provider proof</h3>
+            <p class="pattern-desc">Separate recorded live evidence from fixture responses and adapters that have never called out.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">📱</div>
+            <h3 class="pattern-title">Real-device check</h3>
+            <p class="pattern-desc">Confirm touch, speakers, browser media rules, and layout on physical hardware—not only a resized desktop.</p>
+          </article>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon" aria-hidden="true">✦</span>
+          <p><strong>Aha:</strong> every layer answers a different question. A green browser test cannot prove provider credentials, and a successful provider call cannot prove mobile playback.</p>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">A restarted worker needs a new boarding pass</h2>
+        <p>This test deliberately expires a <span class="term" data-definition="A lease is temporary permission for one worker to process a job. If the worker disappears, the lease expires so another worker can safely continue.">lease</span> and checks its <span class="term" data-definition="A fencing generation is a counter that increases with each new claim. The higher number proves which worker is current and blocks an older worker from committing late.">fencing generation</span>. The same <span class="term" data-definition="A job is a durable record of work the system intends to perform. Its state survives a worker restart, unlike an in-memory task.">job</span> is reclaimed, but the newer worker receives stronger authority.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · tests/integration/repository.test.ts</span>
+            <pre><code>  it("reclaims an expired lease with a new fencing generation", async () =&gt; {
+    await dispatchOutbox();
+    const firstClaim = await claimNextJob("worker-before-restart");
+    expect(firstClaim).not.toBeNull();
+    await getPool().query("UPDATE job SET lease_until=now()-interval '1 second' WHERE id=$1", [firstClaim?.id]);
+    const secondClaim = await claimNextJob("worker-after-restart");
+    expect(secondClaim?.id).toBe(firstClaim?.id);
+    expect(secondClaim?.leaseGeneration).toBe((firstClaim?.leaseGeneration ?? 0) + 1);
+    if (secondClaim) await failJob(secondClaim, "TEST_COMPLETE", "Expected integration-test terminal state");
+    expect((await jobSnapshot(ownerA, secondClaim?.id ?? "")).state).toBe("failed");</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Start a test whose promise is: expired work can be reclaimed with newer authority.</p>
+              <p class="tl">Dispatch the queued job, let the first worker claim it, and prove the claim exists.</p>
+              <p class="tl">Move the lease into the past—as if that worker stopped responding.</p>
+              <p class="tl">Let a worker after the restart claim the next available job.</p>
+              <p class="tl">It must be the same job, not a duplicate.</p>
+              <p class="tl">Its generation must be exactly one higher, so the old worker is fenced out.</p>
+              <p class="tl">Finish the scenario with an expected failure and read the durable snapshot.</p>
+              <p class="tl">The database must remember “failed,” even after the worker lifecycle changed.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="flow-steps lease-flow" aria-label="Lease recovery sequence">
+          <div class="flow-step"><div class="flow-step-num">G1</div><p>Worker A claims</p></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step"><div class="flow-step-num">⌛</div><p>Lease expires</p></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step"><div class="flow-step-num">G2</div><p>Worker B reclaims</p></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step"><div class="flow-step-num">✓</div><p>Durable state verified</p></div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Read the evidence labels before the green lights</h2>
+        <p>A test result is meaningful only when its environment is named. The current evidence separates fixture behavior, live-provider proof, emulation, and paths that remain unverified.</p>
+
+        <div class="pattern-cards evidence-board">
+          <div class="pattern-card evidence-column evidence-verified">
+            <h3>Evidence that exists</h3>
+            <div class="badge-list">
+              <div class="badge-item">
+                <strong>DATABASE · VERIFIED</strong>
+                <span class="badge-desc">The repository integration test proves expired-lease reclaim, a higher generation, and a durable terminal failure.</span>
+              </div>
+              <div class="badge-item">
+                <strong>BROWSER · FIXTURE MODE</strong>
+                <span class="badge-desc"><span class="term" data-definition="Fixture mode supplies controlled local test data instead of depending on a live outside service. It proves the product journey, not the provider connection.">Fixture</span> journeys exercise play, pause, compare, keep-current, and focus restoration.</span>
+              </div>
+              <div class="badge-item">
+                <strong>OPENAI · LIVE EVIDENCE</strong>
+                <span class="badge-desc">A live OpenAI producer path has recorded evidence; keep that claim separate from Gemini.</span>
+              </div>
+              <div class="badge-item">
+                <strong>MOBILE · EMULATED</strong>
+                <span class="badge-desc">Responsive behavior has been checked at an emulated mobile viewport, not on a physical phone.</span>
+              </div>
+              <div class="badge-item">
+                <strong>NEXUS · LOCAL VERIFIED</strong>
+                <span class="badge-desc">The Nexus 0.0.17 offline document and local editable-stem manifest are verified.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pattern-card evidence-column evidence-open">
+            <h3>Evidence still missing</h3>
+            <div class="badge-list">
+              <div class="badge-item">
+                <strong>REAL DEVICE · UNVERIFIED</strong>
+                <span class="badge-desc">Physical-phone touch, audio output, and browser media behavior still need a real-device check.</span>
+              </div>
+              <div class="badge-item">
+                <strong>GEMINI · NO KEY / NO LIVE CALL</strong>
+                <span class="badge-desc">The adapter is built, but there is no configured Gemini key and no live Gemini analysis.</span>
+              </div>
+              <div class="badge-item">
+                <strong>AUDIOTOOL · NOT REMOTE</strong>
+                <span class="badge-desc">OAuth and remote project mutation have not been verified.</span>
+              </div>
+              <div class="badge-item">
+                <strong>FFMPEG · ABSENT</strong>
+                <span class="badge-desc">FFmpeg is not installed, so FFmpeg-backed rendering or inspection must not be reported as tested.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Debug the journey from the window inward</h2>
+        <p>Start at the symptom the listener can see, then follow the same path the data takes. This keeps a stale screen from sending you straight to a provider that may never have been involved.</p>
+
+        <div class="flow-steps troubleshooting-flow" aria-label="Troubleshooting decision path">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <h3>Browser</h3>
+            <p>Is the click, media element, focus, or displayed state wrong?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <h3><span class="term" data-definition="An API is a defined way for software components to ask each other for data or actions. Here it is the boundary between the browser and the server.">API</span></h3>
+            <p>Did the request return the expected revision, status, and asset location?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <h3>Job events</h3>
+            <p>Which durable transition happened, and where did progress stop?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <h3>Worker + effects</h3>
+            <p>Was the lease current, the effect reserved, and any provider outcome recorded once?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <h3>Revision + audio</h3>
+            <p>Does the committed revision point to a real, playable audio asset?</p>
+          </div>
+        </div>
+
+        <div class="pattern-cards symptom-cards">
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🪟</div>
+            <h3 class="pattern-title">UI looks stale</h3>
+            <p class="pattern-desc">Compare the browser’s displayed state with the API response and job events before blaming the worker.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🔇</div>
+            <h3 class="pattern-title">Play toggles, audio is silent</h3>
+            <p class="pattern-desc">Inspect the revision’s asset URL, WAV availability, browser media errors, and the known absence of FFmpeg.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🔌</div>
+            <h3 class="pattern-title">Provider is unavailable</h3>
+            <p class="pattern-desc">Check configuration and the recorded effect state; never manufacture a “success” or casually repeat a paid call.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Preflight drill</h2>
+        <p>Diagnose from evidence, not from the most dramatic theory. Pick the next check that narrows the failure without inventing proof.</p>
+
+        <div class="quiz-container" id="quiz-module6">
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="Exactly. The API already has the newest revision, so compare it with the browser's local state and rendering before descending into worker internals."
+               data-explanation-wrong="Not quite. The newest revision is already reaching the API, so provider and database work are less likely than a browser-state mismatch. ">
+            <h3 class="quiz-question">1. The API returns the newest revision, but the Listening Room still shows the old title. Where should you look next?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Run the provider again to regenerate the song.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Change the database lease duration.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Inspect the browser’s state update and rendering against the API response.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="Exactly. The control changed state, so follow the playback path to the committed asset, its URL, and browser media errors."
+               data-explanation-wrong="Not quite. A working button does not prove the referenced audio exists or can play; inspect the revision-to-audio boundary first. ">
+            <h3 class="quiz-question">2. The Play button becomes Pause, but the speakers stay silent. What is the most useful next check?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Restyle the button so its active state is clearer.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Trace the revision’s audio asset URL, file availability, and browser media errors.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Assume Gemini rejected the mix and retry its critique.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="Exactly. This reports the configuration gap honestly and preserves the app's ability to continue without pretending analysis occurred."
+               data-explanation-wrong="Not quite. The adapter's existence is not evidence of a live call, and copying another provider's evidence would erase an important boundary. ">
+            <h3 class="quiz-question">3. A run requests Gemini analysis, but the environment has no Gemini key. What should the report say?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>The adapter is built, but Gemini is unavailable and no live analysis ran.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Gemini passed because the adapter code loaded successfully.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Use the live OpenAI producer evidence as proof that Gemini also worked.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module6')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module6')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

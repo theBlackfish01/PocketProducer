@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "baseRevisionId": "fixture-revision-01",
+  "baseRevisionHash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "intent": "Simplify the drums in Groove; preserve the melody.",
+  "scope": { "sectionIds": ["groove"], "trackIds": ["drums"] },
+  "protectedTrackIds": ["melody"],
+  "operations": [
+    {
+      "id": "remove-extra-hit",
+      "type": "replaceTrackEventsInRange",
+      "trackId": "drums",
+      "startTick": 7680,
+      "endTick": 30720,
+      "events": [
+        { "id": "d3", "type": "sample", "assetId": "fixture-tap", "startTick": 7680, "durationTicks": 768, "sourceStartFrame": 0, "sourceEndFrame": 24000, "gainDb": 0, "durationPolicy": "natural" },
+        { "id": "d5", "type": "sample", "assetId": "fixture-tap", "startTick": 9600, "durationTicks": 768, "sourceStartFrame": 0, "sourceEndFrame": 24000, "gainDb": -2, "durationPolicy": "natural" }
+      ]
+    }
+  ]
+}

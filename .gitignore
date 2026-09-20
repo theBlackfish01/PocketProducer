@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+playwright-report/
+test-results/
+.local/
+*.log
+*.tsbuildinfo
+apps/web/public/generated/
+

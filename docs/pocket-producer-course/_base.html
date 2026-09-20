@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pocket Producer: From Direction to Playable Music</title>
+
+  <!-- Google Fonts: Bricolage Grotesque · DM Sans · JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+
+  <!--
+    CUSTOMIZE PER COURSE — change only the three accent variables below.
+    Options:
+      vermillion  #D94F30 / #C4432A / #FDEEE9 / #E8836C  (default)
+      coral       #E06B56 / #C85A47 / #FDECEA / #E89585
+      teal        #2A7B9B / #1F6280 / #E4F2F7 / #5A9DB8
+      amber       #D4A843 / #BF9530 / #FDF5E0 / #E0C070
+      forest      #2D8B55 / #226B41 / #E8F5EE / #5AAD7A
+  -->
+  <style>
+    :root {
+      --color-accent:       #D94F30;
+      --color-accent-hover: #C4432A;
+      --color-accent-light: #FDEEE9;
+      --color-accent-muted: #E8836C;
+    }
+  </style>
+
+  <script src="main.js" defer></script>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">Pocket Producer: From Direction to Playable Music</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="module-1" data-tooltip="The Listening Room Journey" role="tab" aria-label="Module 1: The Listening Room Journey"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="API, Database, and Durable Jobs" role="tab" aria-label="Module 2: API, Database, and Durable Jobs"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="The Deep Agent Producer" role="tab" aria-label="Module 3: The Deep Agent Producer"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="Canonical Music and Rendering" role="tab" aria-label="Module 4: Canonical Music and Rendering"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="Gemini and Nexus Boundaries" role="tab" aria-label="Module 5: Gemini and Nexus Boundaries"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="Safety, Testing, and Debugging" role="tab" aria-label="Module 6: Safety, Testing, and Debugging"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+    <!-- modules/*.html content is assembled here by build.sh -->

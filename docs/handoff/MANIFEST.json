@@ -1,0 +1,181 @@
+{
+  "package": "Pocket Producer implementation handoff",
+  "preparedDate": "2026-09-20",
+  "revision": 3,
+  "algorithm": "sha256",
+  "excludes": [
+    "MANIFEST.json"
+  ],
+  "files": [
+    {
+      "path": "00-START-HERE.md",
+      "bytes": 7849,
+      "sha256": "c8bb17cc6e40de549c88b3ba1c1875d01c0366c47f082aae00190ab8fbd01d2d"
+    },
+    {
+      "path": "01-Product-and-scope.md",
+      "bytes": 7487,
+      "sha256": "d763dcc15a6b1de78d770e849ba33513eb6c528158107bf9e1e2424ed518c3cd"
+    },
+    {
+      "path": "02-Architecture-and-decisions.md",
+      "bytes": 11937,
+      "sha256": "e1294a6e94550f66df040cda3673b5a18788eba4f385efde5674a94469a3c4a9"
+    },
+    {
+      "path": "03-Nexus-and-audio-feasibility.md",
+      "bytes": 11122,
+      "sha256": "3c666ee4bf6230b0286c774d3d258f0593552671155f64bb9744da4a5d7001dd"
+    },
+    {
+      "path": "04-Listening-Room-UX.md",
+      "bytes": 14350,
+      "sha256": "c0bd48b56570aeca426b3a0f438b598d3f42fc0705b05187f95f12c3c8e747eb"
+    },
+    {
+      "path": "05-Domain-and-API-contracts.md",
+      "bytes": 9639,
+      "sha256": "9735fde066ac909a139f9815f4ee95a460c922a504677eaa129dcbbd83eae856"
+    },
+    {
+      "path": "06-Agent-and-music-pipeline.md",
+      "bytes": 11161,
+      "sha256": "15d2f149f7735b146d6bafa8e228a38a1e6e462e73e48df206403402b43182c5"
+    },
+    {
+      "path": "07-Implementation-phases.md",
+      "bytes": 16236,
+      "sha256": "8f51504f9c832624c97b395b2a4f323afe70ebaf5a1a0b65ec16f10224f1d7a7"
+    },
+    {
+      "path": "08-Testing-and-quality.md",
+      "bytes": 12156,
+      "sha256": "2cd9da9aed49bd6a7d9ed0201caf058536f50a80ba0e406a10aad41e1b2460d3"
+    },
+    {
+      "path": "09-Engineering-workflow.md",
+      "bytes": 7591,
+      "sha256": "9094d41d5c233d5a3d173d0cf737b715a7a4389af9c49e1e3c185d1be5c835ad"
+    },
+    {
+      "path": "10-Deployment-and-operations.md",
+      "bytes": 7678,
+      "sha256": "18a490baa3cfc96871f5b924915be5ff1750d8d9421e4d4e879595f85019f012"
+    },
+    {
+      "path": "11-User-inputs-and-autonomy.md",
+      "bytes": 7075,
+      "sha256": "a14c83bde6bbdc922bfb48f881e50f9a466127edd39a3094e0916f577ae6a14e"
+    },
+    {
+      "path": "12-Risks-and-reference-register.md",
+      "bytes": 8107,
+      "sha256": "ded2a424c1077e3ab5271b23a8d7104058fb011dc5c02b13fd921f03abebcb83"
+    },
+    {
+      "path": "13-Deep-Agents-models-and-candidate-tools.md",
+      "bytes": 14551,
+      "sha256": "4228ed907977d4f299f375189a8dc24d8bee559d9550e2c0e167de1ebc90e385"
+    },
+    {
+      "path": "14-Initial-build-milestone.md",
+      "bytes": 10861,
+      "sha256": "03337997339d1268f68eee1fbbcba3d8288fb3e7dc25282bd4ebadeacbdc7d95"
+    },
+    {
+      "path": "15-UI-library-and-component-system.md",
+      "bytes": 15438,
+      "sha256": "1928c483e65be8823a0a169ddd069fc03693b027aa0d824a1ce9b7eb37bb8d6d"
+    },
+    {
+      "path": "AGENT-START-PROMPT.md",
+      "bytes": 6686,
+      "sha256": "da06712750845dabf7cec5d0cae8c5c71796f66fe854311e4b97c9f988f6b042"
+    },
+    {
+      "path": "CURRENT-STATE.md",
+      "bytes": 3994,
+      "sha256": "83e59e92338cb6f663a6690115fdfad79c2c68f72175b77dfa3de379bbf36e0c"
+    },
+    {
+      "path": "PACKAGE-CHANGES.md",
+      "bytes": 2696,
+      "sha256": "932d8d9e2ac6b64d8bffc54b99e2066eb3a869be15c562c434d7594c87aa3b8f"
+    },
+    {
+      "path": "VALIDATION.md",
+      "bytes": 1913,
+      "sha256": "0a91268ebe4736839039ddd30d831270697325232e32a795d50499806adf38d0"
+    },
+    {
+      "path": "contracts/README.md",
+      "bytes": 1273,
+      "sha256": "fcfdb5dd1830eb8b66b9b19ea3942cd9702552d593fc6981b4e4a8a1990fda98"
+    },
+    {
+      "path": "contracts/composition.example.json",
+      "bytes": 2912,
+      "sha256": "c310c08ebced0c50bcb56d5439b6cfdfe1b82e1e80daa2bb4ab3b413843aa894"
+    },
+    {
+      "path": "contracts/revision-patch.example.json",
+      "bytes": 932,
+      "sha256": "b0d15f07f34700af41f1aa1d7ef11e7c5f3b0471706e60fa6d5c9dca93ddb1c9"
+    },
+    {
+      "path": "design/listening-room-desktop-mobile.png",
+      "bytes": 1367554,
+      "sha256": "f9b729cf5fcd7db5757d3b89e7df7770643a6d65d4e104f5ad721cf59aac5de9"
+    },
+    {
+      "path": "design/mockup-generation-prompt.md",
+      "bytes": 4425,
+      "sha256": "2d4c2ff90d76818d1861d28f8585e0c53999371b21081881608e27cf3038b7bb"
+    },
+    {
+      "path": "design/tokens.json",
+      "bytes": 2050,
+      "sha256": "6625e303ef3a39ec3297cb670d50f78d324795aaff0921d86750342de78ff685"
+    },
+    {
+      "path": "repo-templates/.env.example",
+      "bytes": 1438,
+      "sha256": "cb8f3937a7d90ae5833c8625713d2f1ab2b3f2e83d0d09d301c43b91d79ecc36"
+    },
+    {
+      "path": "repo-templates/ADR-template.md",
+      "bytes": 756,
+      "sha256": "c23765b1c263991e662758a1a53eefa7851f689a7b29e0bbd367bae28fa281ed"
+    },
+    {
+      "path": "repo-templates/AGENTS.md",
+      "bytes": 3634,
+      "sha256": "52d765074b6dbb0cfa22f2733901a29d95585a74567711a3630ebc67d76f1f16"
+    },
+    {
+      "path": "repo-templates/CLAUDE.md",
+      "bytes": 239,
+      "sha256": "81986ff14b6df8cf89d6caba6dda3dcafdc02257922efcbef463897a47250f92"
+    },
+    {
+      "path": "repo-templates/README.md",
+      "bytes": 950,
+      "sha256": "264339749d0a6726f961fc2c3c296e7a0f0cad61e5e60db1aa4e8146fcf30265"
+    },
+    {
+      "path": "repo-templates/STATUS.md",
+      "bytes": 1887,
+      "sha256": "927bf803eede412d29987404873672e1f1fca4d3342ea71cd06d045229fb9537"
+    },
+    {
+      "path": "repo-templates/pull-request-template.md",
+      "bytes": 596,
+      "sha256": "0fa205ebc41f7feeb7c0f6eafa00e16387b21c799b2a2311585aadab0d3dd3c5"
+    },
+    {
+      "path": "tools/validate-package.mjs",
+      "bytes": 10278,
+      "sha256": "6a0262fd779fdaea8b41ae760d8b2e5b3c58875806d5515e7a3edcd94f4780f3"
+    }
+  ]
+}

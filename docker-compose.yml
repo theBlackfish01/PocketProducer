@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: pocket_producer
+      POSTGRES_USER: pocket
+      POSTGRES_PASSWORD: pocket_local_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pocket -d pocket_producer"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - pocket_producer_pg:/var/lib/postgresql/data
+
+volumes:
+  pocket_producer_pg:
+

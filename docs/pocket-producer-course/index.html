@@ -1,0 +1,1754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pocket Producer: From Direction to Playable Music</title>
+
+  <!-- Google Fonts: Bricolage Grotesque · DM Sans · JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="styles.css">
+
+  <!--
+    CUSTOMIZE PER COURSE — change only the three accent variables below.
+    Options:
+      vermillion  #D94F30 / #C4432A / #FDEEE9 / #E8836C  (default)
+      coral       #E06B56 / #C85A47 / #FDECEA / #E89585
+      teal        #2A7B9B / #1F6280 / #E4F2F7 / #5A9DB8
+      amber       #D4A843 / #BF9530 / #FDF5E0 / #E0C070
+      forest      #2D8B55 / #226B41 / #E8F5EE / #5AAD7A
+  -->
+  <style>
+    :root {
+      --color-accent:       #D94F30;
+      --color-accent-hover: #C4432A;
+      --color-accent-light: #FDEEE9;
+      --color-accent-muted: #E8836C;
+    }
+  </style>
+
+  <script src="main.js" defer></script>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">Pocket Producer: From Direction to Playable Music</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="module-1" data-tooltip="The Listening Room Journey" role="tab" aria-label="Module 1: The Listening Room Journey"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="API, Database, and Durable Jobs" role="tab" aria-label="Module 2: API, Database, and Durable Jobs"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="The Deep Agent Producer" role="tab" aria-label="Module 3: The Deep Agent Producer"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="Canonical Music and Rendering" role="tab" aria-label="Module 4: Canonical Music and Rendering"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="Gemini and Nexus Boundaries" role="tab" aria-label="Module 5: Gemini and Nexus Boundaries"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="Safety, Testing, and Debugging" role="tab" aria-label="Module 6: Safety, Testing, and Debugging"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+    <!-- modules/*.html content is assembled here by build.sh -->
+<section class="module" id="module-1" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">01</span>
+      <h1 class="module-title">The Listening Room Journey</h1>
+      <p class="module-subtitle">Trace one musical direction from the listener to playable audio, and learn which layer owns each failure.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">One desk, many rooms behind the glass</h2>
+        <p>
+          The <span class="term" data-definition="React is the software library that builds the controls and changing views in the browser. When talking to an AI coding agent, call this the React frontend.">React</span>
+          <span class="term" data-definition="A user interface, or UI, is the part of the product a person sees and operates.">UI</span>
+          is the studio control desk: it accepts a direction, shows progress, and plays the result.
+        </p>
+        <p>The desk coordinates the work, but it does not compose, render, or store the music itself.</p>
+
+        <div class="pattern-cards listening-room-hero" aria-label="Listening Room studio metaphor">
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">🎛️</div>
+            <h3 class="pattern-title">Control desk</h3>
+            <p class="pattern-desc">The listener types a direction, watches status, and presses play.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🪟</div>
+            <h3 class="pattern-title">Studio glass</h3>
+            <p class="pattern-desc">A clean screen hides several specialist systems without pretending they are one machine.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">🎚️</div>
+            <h3 class="pattern-title">Machine rooms</h3>
+            <p class="pattern-desc">
+              An <span class="term" data-definition="An API is a defined doorway that lets one part of a product request work from another part.">API</span>,
+              a <span class="term" data-definition="A queue is a durable waiting line for work that can be handled later.">queue</span>,
+              and a <span class="term" data-definition="A worker is a background process that picks up accepted jobs and performs the expensive work.">worker</span>
+              do the heavy lifting.
+            </p>
+          </div>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">💡</span>
+          <div>
+            <h3>Key insight</h3>
+            <p>If the controls look right but production stalls, the visible desk may be healthy while a room behind the glass needs attention.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Follow the direction, step by step</h2>
+        <p>
+          The <span class="term" data-definition="Fastify is the web-server framework that receives browser requests and routes them to server-side code.">Fastify</span>
+          service accepts the request, while
+          <span class="term" data-definition="PostgreSQL is the database that durably stores product records and coordinates queued work.">PostgreSQL</span>
+          holds the baton between processes.
+        </p>
+
+        <div class="flow-animation" id="flow-module1-listening-room" data-steps='[
+          {"highlight":"flow-actor-m1-listener","label":"The listener submits a musical direction"},
+          {"highlight":"flow-actor-m1-web","label":"The React interface chooses generation or revision","packet":true,"from":"actor-m1-listener","to":"actor-m1-web"},
+          {"highlight":"flow-actor-m1-api","label":"The Fastify API validates and accepts the request","packet":true,"from":"actor-m1-web","to":"actor-m1-api"},
+          {"highlight":"flow-actor-m1-postgres","label":"PostgreSQL records a durable queued job","packet":true,"from":"actor-m1-api","to":"actor-m1-postgres"},
+          {"highlight":"flow-actor-m1-worker","label":"A worker claims the job and coordinates production","packet":true,"from":"actor-m1-postgres","to":"actor-m1-worker"},
+          {"highlight":"flow-actor-m1-storage","label":"Audio files and revision data are saved","packet":true,"from":"actor-m1-worker","to":"actor-m1-storage"},
+          {"highlight":"flow-actor-m1-player","label":"The browser player loads the selected preview","packet":true,"from":"actor-m1-storage","to":"actor-m1-player"}
+        ]'>
+          <div class="flow-actors">
+            <div class="flow-actor" id="flow-actor-m1-listener">
+              <div class="flow-actor-icon" style="background: #d94f30">👂</div>
+              <span>Listener</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-web">
+              <div class="flow-actor-icon" style="background: #0f766e">🖥️</div>
+              <span>React UI</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-api">
+              <div class="flow-actor-icon" style="background: #7e22ce">🚪</div>
+              <span>Fastify API</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-postgres">
+              <div class="flow-actor-icon" style="background: #166534">🗄️</div>
+              <span>PostgreSQL queue</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-worker">
+              <div class="flow-actor-icon" style="background: #ca8a04">⚙️</div>
+              <span>Worker</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-storage">
+              <div class="flow-actor-icon" style="background: #166534">🎵</div>
+              <span>Audio + revision</span>
+            </div>
+            <div class="flow-actor" id="flow-actor-m1-player">
+              <div class="flow-actor-icon" style="background: #0f766e">▶️</div>
+              <span>Browser player</span>
+            </div>
+          </div>
+
+          <div class="flow-packet" id="flow-packet-m1-listening-room"></div>
+          <div class="flow-step-label" id="flow-label-m1-listening-room">Select Next Step to trace the direction</div>
+
+          <div class="flow-controls">
+            <button class="btn flow-next-btn" type="button">Next Step</button>
+            <button class="btn flow-reset-btn" type="button">Restart</button>
+            <span class="flow-progress"></span>
+          </div>
+        </div>
+
+        <aside class="callout callout-info">
+          <span class="callout-icon">🔎</span>
+          <div>
+            <h3>Debug the last successful handoff</h3>
+            <p>Find the last actor that behaved correctly, then inspect the next boundary instead of blaming the whole app.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The control desk chooses the request</h2>
+        <p>
+          This <span class="term" data-definition="An asynchronous function can pause while slower work finishes without freezing the whole page. Developers often shorten asynchronous to async.">asynchronous function</span>
+          decides whether the direction starts a fresh generation or revises the current version.
+        </p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code>  const submitDirection = async () =&gt; {
+    if (draft.trim().length &lt; 3) return
+    setBusy(true); setError(null)
+    try {
+      const id = await ensureProject()
+      const result = snapshot?.project.currentRevisionId
+        ? await api.revise(id, snapshot.project.currentRevisionId, draft)
+        : await api.generate(id, draft, snapshot?.assets[0]?.id)
+      setJob(await api.job(result.jobId))
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit direction") }</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Create the action that runs when the listener submits a direction.</p>
+              <p class="tl">Ignore directions too short to be useful.</p>
+              <p class="tl">Show a busy state and clear any old error.</p>
+              <p class="tl">Begin a protected attempt that can report failure cleanly.</p>
+              <p class="tl">Make sure there is a project, and wait for its identifier.</p>
+              <p class="tl">
+                If the current <span class="term" data-definition="A revision is an immutable saved version of a composition and its rendered results.">revision</span>
+                exists, request a revision; otherwise request a fresh generation.
+              </p>
+              <p class="tl">
+                Fetch the accepted <span class="term" data-definition="A job is a durable record of background work that was accepted and can be tracked independently of the browser.">job</span>
+                so the screen can display progress.
+              </p>
+              <p class="tl">If anything fails, show the clearest available message to the listener.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Meet the specialists</h2>
+        <p>Each actor has a narrow job, so the symptom tells you where to investigate first.</p>
+
+        <div class="pattern-cards" aria-label="Pocket Producer runtime actors">
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">🌐</div>
+            <h3 class="pattern-title">Web</h3>
+            <p class="pattern-desc">
+              The <span class="term" data-definition="A browser is the app, such as Chrome or Safari, that displays the web interface and plays audio.">browser</span>
+              gathers input, polls progress, and controls playback.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">🛂</div>
+            <h3 class="pattern-title">API</h3>
+            <p class="pattern-desc">The server doorway checks ownership and turns valid requests into durable work.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">🔧</div>
+            <h3 class="pattern-title">Worker</h3>
+            <p class="pattern-desc">The background specialist claims jobs, plans production, and renders results.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🎼</div>
+            <h3 class="pattern-title">Core</h3>
+            <p class="pattern-desc">
+              Shared domain rules protect the <span class="term" data-definition="The canonical composition is the single trusted musical plan from which previews, stems, and exports are derived.">canonical composition</span>
+              regardless of which actor calls them.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">🌲</div>
+            <h3 class="pattern-title">PostgreSQL</h3>
+            <p class="pattern-desc">The durable ledger stores projects, jobs, events, and immutable revisions.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #64748b">
+            <div class="pattern-icon" style="background: #64748b">🔌</div>
+            <h3 class="pattern-title">Providers</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="A provider is an outside service used for a specialized capability, such as AI planning or audio analysis.">provider</span>
+              supplies specialized intelligence while Pocket Producer keeps final authority.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Where would you look first?</h2>
+        <p>Use the symptom and the last successful handoff to choose the smallest useful investigation.</p>
+
+        <div class="quiz-container" id="quiz-module1">
+          <div class="quiz-question-block"
+               data-correct="m1-q1-browser"
+               data-explanation-right="Exactly. The request path is not involved when a loaded preview fails only at local playback, so start at the browser player and audio state."
+               data-explanation-wrong="Not quite. The preview already exists and loads, which means production and storage completed; focus on the final playback layer.">
+            <h3 class="quiz-question">1. A finished preview loads, but pressing play immediately flips back to paused with no new network request. Where should you inspect first?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m1-q1-api" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The Fastify request route</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q1-browser" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The browser audio player and its local state</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q1-worker" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The background production worker</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m1-q2-api"
+               data-explanation-right="Exactly. An immediate rejection before a job identifier exists points to request validation, access control, or another API boundary."
+               data-explanation-wrong="Not quite. No durable job was accepted, so a worker never had anything to claim; inspect the server request boundary.">
+            <h3 class="quiz-question">2. Submit returns an immediate validation error and never produces a job identifier. Which boundary deserves attention?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m1-q2-player" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The playback controls</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q2-api" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The API validation and ownership checks</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q2-render" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The final audio render</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m1-q3-worker"
+               data-explanation-right="Exactly. A durable running job with healthy status reads has passed the UI and API boundaries, so inspect worker progress and provider calls."
+               data-explanation-wrong="Not quite. Polling can read the accepted job, so the visible interface and request doorway are doing their part; trace the background execution.">
+            <h3 class="quiz-question">3. The job is accepted and status polling works, but the production stage stays unchanged while an audio service times out. What is the best first target?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m1-q3-css" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The visual styling of the progress bar</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q3-worker" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The worker stage and provider call</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m1-q3-form" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>The direction text field</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" type="button" onclick="checkQuiz('quiz-module1')">Check Answers</button>
+          <button class="quiz-reset-btn" type="button" onclick="resetQuiz('quiz-module1')">Try Again</button>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">📬</span>
+          <div>
+            <h3>Next: zoom into the middle</h3>
+            <p>The next module opens the durable job ledger and shows how leases prevent two workers from owning the same parcel.</p>
+          </div>
+        </aside>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-2" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">02</span>
+      <h1 class="module-title">API, Database, and Durable Jobs</h1>
+      <p class="module-subtitle">See how accepted work survives a closed browser, a crashed worker, and a race to commit.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Accepted work travels like registered mail</h2>
+        <p>
+          Once the <span class="term" data-definition="An API is a defined doorway that accepts requests from another part of the product.">API</span>
+          accepts a <span class="term" data-definition="A durable job is a saved record of background work that survives browser exits and process crashes.">durable job</span>,
+          closing the <span class="term" data-definition="A browser is the app that displays the web interface; it does not own accepted background work.">browser</span>
+          does not cancel it.
+        </p>
+        <p>
+          <span class="term" data-definition="PostgreSQL is the database that stores lasting product state and coordinates job ownership.">PostgreSQL</span>
+          keeps the receipt, custody record, and expiry time.
+        </p>
+
+        <div class="pattern-cards registered-mail-flow" aria-label="Durable job registered-mail metaphor">
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">📨</div>
+            <h3 class="pattern-title">1 · Accepted</h3>
+            <p class="pattern-desc">The request receives a job record instead of waiting for the full production.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">🧾</div>
+            <h3 class="pattern-title">2 · Registered</h3>
+            <p class="pattern-desc">The database records who owns the work, its state, and its event history.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">🪪</div>
+            <h3 class="pattern-title">3 · Claimed</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="A worker is a background process that claims accepted jobs and performs their expensive steps.">worker</span>
+              receives a temporary custody pass.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🔐</div>
+            <h3 class="pattern-title">4 · Fenced</h3>
+            <p class="pattern-desc">The final write is allowed only if custody and cancellation checks still pass.</p>
+          </div>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">💡</span>
+          <div>
+            <h3>Key insight</h3>
+            <p>The worker performs the job, but PostgreSQL decides whether the worker still has permission to finish it.</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The ledger separates six kinds of truth</h2>
+        <p>Keeping these records distinct makes retries safe and tells the product exactly what happened.</p>
+
+        <div class="pattern-cards schema-cards" aria-label="Pocket Producer durable schema">
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">📁</div>
+            <h3 class="pattern-title">Project</h3>
+            <p class="pattern-desc">Names the current selected version and carries a version counter for coordinated updates.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">🎙️</div>
+            <h3 class="pattern-title">Asset</h3>
+            <p class="pattern-desc">
+              An <span class="term" data-definition="An asset is an uploaded sound or other source file owned by a project.">asset</span>
+              is source material, not a finished composition version.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">📋</div>
+            <h3 class="pattern-title">Job ledger</h3>
+            <p class="pattern-desc">
+              The job, <span class="term" data-definition="A job event is a numbered fact in the history of one job, such as accepted, progressed, or succeeded.">event</span>,
+              <span class="term" data-definition="An outbox is a database-backed delivery list that prevents a saved request from being lost between storage and background processing.">outbox</span>,
+              and <span class="term" data-definition="An external effect is a paid or remote action, tracked separately so a retry does not accidentally perform it twice.">external effect</span>
+              records answer different questions.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">🎼</div>
+            <h3 class="pattern-title">Revision</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="An immutable revision is a saved composition version that is never edited in place; a change creates another revision.">revision</span>
+              preserves the composition, render paths, measurements, and change summary.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">🔬</div>
+            <h3 class="pattern-title">Analysis</h3>
+            <p class="pattern-desc">
+              <span class="term" data-definition="Analysis is structured information measured or inferred from audio, such as loudness, timing, or musical features.">Analysis</span>
+              describes audio without becoming the audio itself.
+            </p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #0f766e">
+            <div class="pattern-icon" style="background: #0f766e">📦</div>
+            <h3 class="pattern-title">Export</h3>
+            <p class="pattern-desc">
+              An <span class="term" data-definition="An export is a packaged result prepared for another tool, with editability depending on whether it contains notes, clips, or audio stems.">export</span>
+              is a delivery artifact with explicit fidelity, not another project head.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Listen to the custody conversation</h2>
+        <p>
+          A <span class="term" data-definition="A lease is temporary permission for one worker to act on a job; it expires so another worker can recover abandoned work.">lease</span>
+          gives one worker time-limited custody, while a
+          <span class="term" data-definition="A heartbeat is a periodic signal that extends a valid lease while a worker is still making progress.">heartbeat</span>
+          proves it is still active.
+        </p>
+
+        <div class="chat-window" id="chat-module2-durable-job">
+          <div class="chat-messages">
+            <div class="chat-message" data-msg="0" data-sender="api" style="display:none">
+              <div class="chat-avatar" style="background: #7e22ce">API</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #7e22ce">API</span>
+                <p>PostgreSQL, save this accepted production job and its outbox delivery record.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="1" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>Recorded. The job survives even if the browser leaves now.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="2" data-sender="worker-a" style="display:none">
+              <div class="chat-avatar" style="background: #ca8a04">A</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #ca8a04">Worker A</span>
+                <p>May I claim the next delivered job?</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="3" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>Lease granted to Worker A for 45 seconds, generation 8.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="4" data-sender="worker-b" style="display:none">
+              <div class="chat-avatar" style="background: #b7791f">B</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #b7791f">Worker B</span>
+                <p>Can I claim that same job?</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="5" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>No. The row is skipped while Worker A holds a valid lease.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="6" data-sender="worker-a" style="display:none">
+              <div class="chat-avatar" style="background: #ca8a04">A</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #ca8a04">Worker A</span>
+                <p>Heartbeat: I am still working. Please extend my lease.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="7" data-sender="api" style="display:none">
+              <div class="chat-avatar" style="background: #7e22ce">API</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #7e22ce">API</span>
+                <p>The listener requested cancellation.</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="8" data-sender="worker-a" style="display:none">
+              <div class="chat-avatar" style="background: #ca8a04">A</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #ca8a04">Worker A</span>
+                <p>The render just finished. May I commit the revision?</p>
+              </div>
+            </div>
+            <div class="chat-message" data-msg="9" data-sender="postgres" style="display:none">
+              <div class="chat-avatar" style="background: #166534">PG</div>
+              <div class="chat-bubble">
+                <span class="chat-sender" style="color: #166534">PostgreSQL</span>
+                <p>Commit rejected. The cancellation fence closed before your final write.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="chat-typing" id="chat-module2-durable-job-typing" style="display:none">
+            <div class="chat-avatar" id="chat-module2-durable-job-typing-avatar">?</div>
+            <div class="chat-typing-dots">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
+
+          <div class="chat-controls">
+            <button class="btn chat-next-btn" type="button">Next Message</button>
+            <button class="btn chat-all-btn" type="button">Play All</button>
+            <button class="btn chat-reset-btn" type="button">Replay</button>
+            <span class="chat-progress"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">PostgreSQL grants and checks custody</h2>
+        <p>
+          The database claim uses a <span class="term" data-definition="A transaction is a set of database changes treated as one safe unit, so competing workers cannot see a half-finished decision.">transaction</span>
+          and a <span class="term" data-definition="A row lock temporarily reserves one database record while a decision is being made.">row lock</span>
+          to hand a job to exactly one worker.
+        </p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE</span>
+            <pre><code>export async function claimNextJob(workerId: string): Promise&lt;JobRecord | null&gt; {
+  const result = await getPool().query(
+    `WITH candidate AS (
+       SELECT id FROM job
+       WHERE (state='queued' OR (state='running' AND lease_until &lt; now()))
+         AND EXISTS (SELECT 1 FROM outbox WHERE outbox.job_id=job.id AND delivered_at IS NOT NULL)
+       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+     ) UPDATE job SET state='running',stage=CASE WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
+       lease_owner=$1,lease_generation=lease_generation+1,lease_until=now()+interval '45 seconds',attempts=attempts+1,updated_at=now()
+     WHERE id=(SELECT id FROM candidate)
+     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_generation,attempts,cancellation_requested_at`,
+    [workerId]</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Define a background claim that returns one job record, or nothing when no work is ready.</p>
+              <p class="tl">
+                Ask the shared database connection pool to run one <span class="term" data-definition="A SQL query is a structured instruction that asks a relational database to read or change records.">SQL query</span>.
+              </p>
+              <p class="tl">Start by finding one candidate job identifier.</p>
+              <p class="tl">A queued job is ready, and a running job becomes ready again only after its lease expires.</p>
+              <p class="tl">Require proof that the outbox delivery finished before any worker can claim the job.</p>
+              <p class="tl">Choose the oldest candidate, lock it, and skip any row already locked by another worker.</p>
+              <p class="tl">Mark the winner as running and choose the stage that matches its job kind.</p>
+              <p class="tl">Record the owner, advance the lease generation, set a 45-second expiry, and count the attempt.</p>
+              <p class="tl">Update only the chosen candidate and return everything the worker needs for safe execution.</p>
+              <p class="tl">Bind the requesting worker identifier into the query rather than mixing it into the SQL text.</p>
+            </div>
+          </div>
+        </div>
+
+        <h3 class="screen-subheading">Finishing work is a second permission check</h3>
+        <p>
+          A <span class="term" data-definition="A commit fence is a final set of checks that blocks a stale, cancelled, or no-longer-authorized worker from publishing results.">commit fence</span>
+          asks whether the same worker still owns the same lease generation before changing durable state.
+        </p>
+
+        <div class="pattern-cards commit-fence-cards" aria-label="Commit fence checks">
+          <div class="pattern-card" style="border-top: 3px solid #ca8a04">
+            <div class="pattern-icon" style="background: #ca8a04">1</div>
+            <h3 class="pattern-title">Lease generation</h3>
+            <p class="pattern-desc">Reject an old worker whose expired job has already been reclaimed with a newer generation.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">2</div>
+            <h3 class="pattern-title">Cancellation</h3>
+            <p class="pattern-desc">Reject a result when cancellation was recorded before the final write.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #166534">
+            <div class="pattern-icon" style="background: #166534">3</div>
+            <h3 class="pattern-title">Current state</h3>
+            <p class="pattern-desc">Require the job to remain running instead of trusting an outdated in-memory copy.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #7e22ce">
+            <div class="pattern-icon" style="background: #7e22ce">4</div>
+            <h3 class="pattern-title">Project head</h3>
+            <p class="pattern-desc">
+              A <span class="term" data-definition="The project head is the revision currently selected as the latest active version.">project head</span>
+              advances only when it still matches the version this job expected.
+            </p>
+          </div>
+        </div>
+
+        <div class="pattern-cards comparison-grid">
+          <div class="pattern-card comparison-card comparison-good">
+            <span class="comparison-icon">✓</span>
+            <h3>Valid but no longer latest</h3>
+            <p>Keep the immutable revision as a successful result, but do not silently replace a newer project head.</p>
+          </div>
+          <div class="pattern-card comparison-card comparison-bad">
+            <span class="comparison-icon">✕</span>
+            <h3>Invalid custody</h3>
+            <p>Reject the commit when the lease generation, running state, or cancellation check fails.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Debug the sorting center</h2>
+        <p>Choose the response that preserves evidence, avoids duplicate effects, and respects current ownership.</p>
+
+        <div class="quiz-container" id="quiz-module2">
+          <div class="quiz-question-block"
+               data-correct="m2-q1-idempotency"
+               data-explanation-right="Exactly. A duplicate revision key during retry is evidence that the earlier attempt may already have committed, so inspect the idempotency boundary before doing any external work again."
+               data-explanation-wrong="Not quite. Removing the constraint or inventing another result can hide a repeated commit and may repeat paid work; first determine what the prior attempt already completed.">
+            <h3 class="quiz-question">1. A retried job hits a duplicate key for its creator job when inserting a revision. What should you investigate first?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m2-q1-delete" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Delete the uniqueness rule so every retry can insert</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q1-idempotency" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Check whether the prior attempt already committed and reuse its recorded outcome</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q1-provider" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Call the paid provider again before reading the ledger</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m2-q2-expiry"
+               data-explanation-right="Exactly. Lease expiry is the recovery mechanism: another worker can reclaim the abandoned job with a newer generation and the old worker loses commit authority."
+               data-explanation-wrong="Not quite. Immediate double ownership risks duplicate effects, while marking success invents a result; let the recorded lease expire and reclaim safely.">
+            <h3 class="quiz-question">2. A worker crashes halfway through a running job and sends no more heartbeats. What is the safe recovery?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m2-q2-expiry" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Allow the lease to expire, then let another worker claim a newer generation</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q2-immediate" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Give a second worker the same live lease immediately</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q2-success" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Mark the job successful because some work probably finished</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="m2-q3-preserve"
+               data-explanation-right="Exactly. A valid result remains an immutable revision, but the head check protects the newer user choice from being replaced by a late completion."
+               data-explanation-wrong="Not quite. The worker still has valid custody, so the result can be preserved; the stale part is only its authority to become the selected project head.">
+            <h3 class="quiz-question">3. A worker still has a valid lease, but the listener selected a newer revision before it finished. How should the late result commit?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" type="button" data-value="m2-q3-overwrite" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Store it and overwrite the newer project head</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q3-discard" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Discard every trace of the completed result</span>
+              </button>
+              <button class="quiz-option" type="button" data-value="m2-q3-preserve" onclick="selectOption(this)">
+                <span class="quiz-option-radio"></span>
+                <span>Store the immutable revision, mark success, and leave the newer head selected</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" type="button" onclick="checkQuiz('quiz-module2')">Check Answers</button>
+          <button class="quiz-reset-btn" type="button" onclick="resetQuiz('quiz-module2')">Try Again</button>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon">🎛️</span>
+          <div>
+            <h3>Next: the producer inside the worker</h3>
+            <p>The next module follows the claimed job into the planning loop that proposes safe musical operations.</p>
+          </div>
+        </aside>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-3" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">03</span>
+      <h1 class="module-title">The Deep Agent Producer</h1>
+      <p class="module-subtitle">Creative direction enters a locked soundstage: the model may propose the shot plan, but application code still owns the theater.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">A director with a narrow call sheet</h2>
+        <p>A user’s direction becomes a compact <span class="term" data-definition="A validated plan is structured data checked against explicit rules before the application accepts it. Ask an AI coding agent to validate model output before using it.">validated arrangement plan</span>, not arbitrary code or a pile of raw notes. The <span class="term" data-definition="Deep Agents is the framework that hosts the producer model, its tools, files, permissions, and saved progress inside one controlled runtime.">Deep Agents framework</span> gives creativity a stage with marked boundaries.</p>
+
+        <div class="arch-diagram animate-in">
+          <div class="arch-zone arch-zone-browser">
+            <h4 class="arch-zone-label">Read-only production desk</h4>
+            <div class="arch-component" data-desc="The brief carries the listener's direction; runtime skill files carry the producer's reusable instructions. Both can be read, neither can be rewritten by the model." onclick="showArchDesc(this)">
+              <div class="arch-icon">📓</div>
+              <span>Brief + <span class="term" data-definition="A runtime skill file is a small instruction document mounted into the agent's temporary workspace so it can follow a repeatable method.">runtime skills</span></span>
+            </div>
+            <div class="arch-component" data-desc="This is the producer's one allowed tool. It reports the musical palettes the deterministic compiler actually supports." onclick="showArchDesc(this)">
+              <div class="arch-icon">🎨</div>
+              <span>One <span class="term" data-definition="A palette tool is a controlled function the model can call to learn which musical sound sets the application supports.">palette tool</span></span>
+            </div>
+          </div>
+
+          <div class="flow-arrow">→</div>
+
+          <div class="arch-zone arch-zone-external">
+            <h4 class="arch-zone-label">Bounded creative room</h4>
+            <div class="arch-component" data-desc="The OpenAI model chooses tempo, energy, density, contour, source role, and rationale. It proposes intent; it does not author timeline events." onclick="showArchDesc(this)">
+              <div class="arch-icon">🎬</div>
+              <span><span class="term" data-definition="An OpenAI model is the language model making the creative proposal from the supplied direction and constraints.">OpenAI model</span></span>
+            </div>
+            <div class="arch-component" data-desc="LangGraph uses a Postgres-backed checkpointer to preserve the agent run under the job's thread id, so progress is durable and attributable." onclick="showArchDesc(this)">
+              <div class="arch-icon">🧷</div>
+              <span><span class="term" data-definition="A checkpointer saves an agent run's state so work can resume consistently instead of starting from memory each time.">LangGraph checkpointer</span> + <span class="term" data-definition="Postgres is a relational database. Here it provides durable storage for the agent's checkpointed state.">Postgres</span></span>
+            </div>
+          </div>
+
+          <div class="flow-arrow">→</div>
+
+          <div class="arch-zone arch-zone-server">
+            <h4 class="arch-zone-label">Application-owned gate</h4>
+            <div class="arch-component" data-desc="The Zod schema rejects malformed or out-of-range proposals before they reach music code." onclick="showArchDesc(this)">
+              <div class="arch-icon">✅</div>
+              <span><span class="term" data-definition="A Zod schema is an executable checklist for data shape and limits. If the proposal breaks the checklist, validation fails.">Zod plan</span></span>
+            </div>
+            <div class="arch-component" data-desc="Deterministic application code converts the accepted plan into canonical musical events. The model cannot bypass this compiler." onclick="showArchDesc(this)">
+              <div class="arch-icon">⚙️</div>
+              <span><span class="term" data-definition="A compiler translates one structured representation into another. Here it turns high-level musical intent into exact canonical events.">Deterministic compiler</span></span>
+            </div>
+          </div>
+          <div class="arch-description" id="arch-desc-module3">Tap a component to read its job on the soundstage.</div>
+        </div>
+
+        <div class="badge-list animate-in">
+          <div class="badge-item">
+            <code class="badge-code">READ ONLY</code>
+            <span class="badge-desc">The model may read the brief, skills, and workspace; write operations are denied.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">NO RAW EVENTS</code>
+            <span class="badge-desc">The model describes musical intent; application code creates exact timeline events.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">ONE PALETTE CALL</code>
+            <span class="badge-desc">The supported choices are discovered once, keeping the planning pass compact.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">BOUNDED SPEND</code>
+            <span class="badge-desc">A <span class="term" data-definition="A spend limit caps how much paid model work one operation may consume. It keeps retries or critique loops from growing without control.">spend limit</span> keeps creative iteration inside the job budget.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The producer’s room, in real code</h2>
+        <p>The constructor connects the model, its single tool, its output contract, and its durable memory. The system prompt makes the boundary unusually explicit: propose a plan, never pretend to hear, and leave exact events to deterministic code.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/agent/producer.ts</span>
+            <pre><code>    const agent = createDeepAgent({
+      name: &quot;pocket-producer&quot;,
+      model,
+      tools: [paletteTool],
+      responseFormat: providerStrategy(arrangementPlanSchema),
+      checkpointer: await checkpoint(),
+      skills: [&quot;/skills/&quot;],
+      permissions: [
+        { operations: [&quot;read&quot;], paths: [&quot;/&quot;] },
+        { operations: [&quot;read&quot;], paths: [&quot;/skills/**&quot;, &quot;/workspace/**&quot;] },
+        { operations: [&quot;write&quot;], paths: [&quot;/**&quot;], mode: &quot;deny&quot; },
+        { operations: [&quot;read&quot;], paths: [&quot;/**&quot;], mode: &quot;deny&quot; }
+      ],
+      systemPrompt: &quot;You are Pocket Producer's main producer. Read /skills/arrange-short-instrumental/SKILL.md and /workspace/brief.md, call list_supported_palettes once, then immediately return one valid compact arrangement plan. Do not list the filesystem. Never claim to hear audio. Do not create raw timeline events; deterministic application code compiles the plan.&quot;
+    });
+    const agentInput = { messages: [{ role: &quot;user&quot;, content: &quot;Plan this supported instrumental now. Use the source when one is available.&quot; }], files: await runtimeFiles(input.direction, input.hasSource) };
+    const result = await agent.invoke(
+      agentInput as never,
+      { configurable: { thread_id: input.jobId }, recursionLimit: 24 }
+    );</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Create one named producer inside the Deep Agents framework.</p>
+              <p class="tl">Give it the selected model and exactly one controlled tool: the supported-palette lookup.</p>
+              <p class="tl">Require its answer to match the arrangement-plan schema, then attach saved run state from the checkpointer.</p>
+              <p class="tl">Mount the reusable skill instructions into its private <span class="term" data-definition="A runtime is the controlled environment where a program executes, including the files and tools it can access.">runtime</span>.</p>
+              <p class="tl">Allow reads only in the approved locations; explicitly deny writes and all other reads.</p>
+              <p class="tl">Tell the producer to read its instructions, inspect the supported palette once, and return a compact plan without inventing listening or timeline work.</p>
+              <p class="tl">Build the one user message plus the runtime files that describe this particular job.</p>
+              <p class="tl">Invoke the agent under the job’s <span class="term" data-definition="A thread ID is a stable label that ties saved agent state to one job, much like a claim number ties updates to one case.">thread ID</span>, with a <span class="term" data-definition="A recursion limit caps how many internal reasoning or tool steps an agent run may take before it must stop.">recursion limit</span> of 24.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The proposal has rails</h2>
+        <p>The model can be expressive inside eight named fields, but the <span class="term" data-definition="A domain contract states which business data is allowed and which rules it must satisfy before the rest of the system trusts it.">domain contract</span> decides what counts as usable. A beautiful answer outside those rails is still invalid.</p>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">⏱️</div>
+            <h4 class="pattern-title">Tempo has a lane</h4>
+            <p class="pattern-desc"><code>tempoBpm</code> must be a whole number from 78 through 112.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">〰️</div>
+            <h4 class="pattern-title">Contour is enumerable</h4>
+            <p class="pattern-desc">Melody shape must be <code>falling</code>, <code>rising</code>, or <code>wave</code>—not an invented label.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">🎚️</div>
+            <h4 class="pattern-title">Intensity is bounded</h4>
+            <p class="pattern-desc">Energy, drum density, and bass motion are numeric controls with explicit minimums and maximums.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🧾</div>
+            <h4 class="pattern-title">Reasoning stays compact</h4>
+            <p class="pattern-desc">The rationale must be present and no longer than 400 characters.</p>
+          </div>
+        </div>
+
+        <div class="callout callout-accent animate-in">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">Proposal is not authority</strong>
+            <p><span class="term" data-definition="Model output is the data produced by a language model. Treat it as untrusted input until deterministic application rules validate it.">Model output</span> becomes useful only after validation; the next module’s compiler—not the model—turns accepted intent into music.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Soundcheck: keep creativity inside the contract</h2>
+        <p>Choose the response that protects the architecture while keeping the product moving.</p>
+
+        <div class="quiz-container" id="quiz-module3">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="Exactly. Add a narrow tool that returns only the needed reference data; do not grant broad filesystem access."
+               data-explanation-wrong="Not quite. The producer needs a deliberately scoped capability, not broader authority or a prompt pretending the data exists.">
+            <div class="scenario-context">
+              <span class="scenario-label">Tool permission</span>
+              <p>A new feature needs the producer to look up one approved chord vocabulary. What is the safest extension?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Allow reads across the whole filesystem so the model can search for it.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Add one read-only tool that returns the approved chord vocabulary.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Tell the model in the prompt to assume the vocabulary is valid.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="Exactly. Schema failure means the proposal never crossed the application-owned gate, so no musical state should be committed."
+               data-explanation-wrong="Not quite. A plausible or partially valid answer is still untrusted; accepting or repairing it silently would move authority back into model output.">
+            <div class="scenario-context">
+              <span class="scenario-label">Schema failure</span>
+              <p>The model returns 126 BPM and an otherwise lovely plan. What should happen next?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Commit it because musical quality matters more than the numeric range.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Quietly clamp the tempo to 112 and claim the model returned a valid plan.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Reject the proposal before compilation and use the controlled retry or failure path.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="Exactly. The fallback must enter through the same schema and compiler, so provenance changes but safety and determinism do not."
+               data-explanation-wrong="Not quite. Bypassing validation or pretending a fallback came from the live model breaks trust and makes behavior harder to audit.">
+            <div class="scenario-context">
+              <span class="scenario-label">Fallback mode</span>
+              <p>The model provider is unavailable during a demo. How should a fixture plan enter the system?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Label it as fixture output, validate it with the same schema, then send it through the same compiler.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Insert raw timeline events directly so the fallback feels instant.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Present the fixture as a live model result to keep the experience seamless.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module3')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module3')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-4" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">04</span>
+      <h1 class="module-title">Canonical Music and Rendering</h1>
+      <p class="module-subtitle">The plan becomes a player-piano roll, then a printing press turns that exact roll into reproducible sound.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Intent first, waveform second</h2>
+        <p>The agent may say “88 BPM, restrained,” but deterministic application code decides every section, note, source, and sample. The <span class="term" data-definition="A canonical composition is the authoritative structured description of the music: tracks, sections, timing, sources, and events. Other artifacts are derived from it.">canonical composition</span> is editable intent; the rendered audio is a derived <span class="term" data-definition="An artifact is a file or result produced by a process. A preview WAV is an artifact of rendering the canonical composition.">artifact</span>.</p>
+
+        <div class="flow-steps animate-in">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p>Validated plan</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p><span class="term" data-definition="PPQ means pulses per quarter note: the number of timing slices in one beat. At 960 PPQ, the composition can place events with fine musical precision.">960-PPQ</span> composition</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <p>Track scheduling</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <p><span class="term" data-definition="A stem is the isolated audio for one musical part, such as drums, bass, or melody. Stems can be mixed together or exported separately.">Stems</span></p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <p>Master mix</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">6</div>
+            <p>Measurements + waveform</p>
+          </div>
+        </div>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">🎼</div>
+            <h4 class="pattern-title">Roll: editable truth</h4>
+            <p class="pattern-desc">Tracks and timed events can be inspected, revised, protected, or exported with honest editability.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">🖨️</div>
+            <h4 class="pattern-title">Press: deterministic render</h4>
+            <p class="pattern-desc"><span class="term" data-definition="Deterministic means the same accepted input and settings produce the same output, without a model improvising during the render.">Deterministic</span> code schedules and mixes the same roll the same way.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🔒</div>
+            <h4 class="pattern-title">Revision: protected history</h4>
+            <p class="pattern-desc"><span class="term" data-definition="An immutable revision is a saved version that is never altered in place. A new change creates a new revision, preserving accepted history.">Immutable revisions</span> keep earlier accepted music intact while a new version is created.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">A scoped edit, not a rewrite</h2>
+        <p>“Simplify the drums” targets hi-hats inside the Groove section only. The function clones the composition, removes every second matching hat, and returns both the new version and an exact count.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/music/compiler.ts</span>
+            <pre><code>export function simplifyDrums(base: Composition): { composition: Composition; removed: number } {
+  const groove = base.sections.find((section) =&gt; section.id === &quot;groove&quot;);
+  if (!groove) throw new Error(&quot;Composition has no Groove section&quot;);
+  let removed = 0;
+  const tracks = base.tracks.map((track) =&gt; {
+    if (track.id !== &quot;drums&quot;) return structuredClone(track);
+    let hatIndex = 0;
+    const events = track.events.filter((item) =&gt; {
+      const inScope = item.startTick &gt;= groove.startTick &amp;&amp; item.startTick &lt; groove.endTick;
+      if (!inScope || !item.assetId.includes(&quot;:hat&quot;)) return true;
+      hatIndex += 1;
+      const keep = hatIndex % 2 === 1;
+      if (!keep) removed += 1;
+      return keep;
+    });
+    return { ...structuredClone(track), events };
+  });
+  return { composition: { ...structuredClone(base), tracks }, removed };
+}</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Accept the base composition and promise to return a new composition plus the number of removed events.</p>
+              <p class="tl">Find the Groove section; stop with a clear error if the composition does not have one.</p>
+              <p class="tl">Start the removal count at zero, then visit every track.</p>
+              <p class="tl">For any track that is not drums, return a deep copy unchanged. <span class="term" data-definition="structuredClone makes a deep copy, including nested data, so later edits do not mutate the saved original by accident.">structuredClone</span> protects the base revision.</p>
+              <p class="tl">For the drum track, inspect each <span class="term" data-definition="An event is one timed musical instruction, such as playing a particular hi-hat sound at a particular tick.">event</span> and ask whether it falls inside the Groove’s start and end <span class="term" data-definition="A tick is one discrete unit on the composition's timing grid. With 960 PPQ, 960 ticks equal one quarter note.">ticks</span>.</p>
+              <p class="tl">Leave events outside the section—and non-hat sounds inside it—untouched.</p>
+              <p class="tl">Count only the in-scope hats, keeping the first, third, fifth, and so on while counting each removed alternate hat.</p>
+              <p class="tl">Return a cloned composition with the filtered drum events and the measured removal total.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">What changed—and what stayed sacred</h2>
+        <p>A small revision should have a visible blast radius. Here six Groove hats disappear while the exact melody stem is reused.</p>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">🥁</div>
+            <h4 class="pattern-title">Before · 12 Groove hats</h4>
+            <p class="pattern-desc" aria-label="Twelve hi-hat events">◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆ ◆</p>
+            <p class="pattern-desc">Every matching hat is examined in order.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">✂️</div>
+            <h4 class="pattern-title">After · 6 Groove hats</h4>
+            <p class="pattern-desc" aria-label="Six retained hi-hat events">◆ · ◆ · ◆ · ◆ · ◆ · ◆ ·</p>
+            <p class="pattern-desc">Six alternating hats are removed; events elsewhere remain untouched.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🛡️</div>
+            <h4 class="pattern-title">Melody · exact reuse</h4>
+            <p class="pattern-desc">The protected melody stem is reused byte-for-byte instead of being regenerated.</p>
+            <code class="badge-code">MELODY HASH = SAME</code>
+          </div>
+        </div>
+
+        <div class="callout callout-accent animate-in">
+          <div class="callout-icon">💡</div>
+          <div class="callout-content">
+            <strong class="callout-title">Protection can be proven</strong>
+            <p>A <span class="term" data-definition="A hash is a compact fingerprint calculated from data. Matching hashes provide strong evidence that two files or structures are exactly the same.">hash</span> turns “the melody sounds unchanged” into a checkable identity claim.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The printing press reports facts</h2>
+        <p>The renderer mixes sample values, manages peaks, writes <span class="term" data-definition="PCM, or pulse-code modulation, represents audio as a stream of numerical sample values. Those numbers are what the renderer calculates and writes.">PCM</span> into a <span class="term" data-definition="WAV is an audio file format that commonly stores uncompressed PCM samples plus information such as sample rate and channel count.">WAV</span>, and records measurements. It can prove levels and silence; it cannot truthfully declare the groove “soulful.”</p>
+
+        <div class="flow-steps animate-in">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p>Measure peak</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p>Apply safety gain</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <p>Shape samples</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <p>Build 240 waveform buckets</p>
+          </div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <p>Write <code>preview.wav</code></p>
+          </div>
+        </div>
+
+        <div class="pattern-cards stagger-children">
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-1)">
+            <div class="pattern-icon" style="background: var(--color-actor-1)">📈</div>
+            <h4 class="pattern-title">Peak + headroom</h4>
+            <p class="pattern-desc">Peak is the largest sample magnitude; <span class="term" data-definition="Headroom is the safety space between the loudest audio peak and the maximum level, reducing the risk of harsh clipping.">headroom</span> is the spare room before the maximum.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-2)">
+            <div class="pattern-icon" style="background: var(--color-actor-2)">📐</div>
+            <h4 class="pattern-title">RMS</h4>
+            <p class="pattern-desc"><span class="term" data-definition="RMS, or root mean square, summarizes the average energy of changing sample values and is useful as an objective loudness-related measurement.">RMS</span> summarizes signal energy from the accumulated squared sample values.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-3)">
+            <div class="pattern-icon" style="background: var(--color-actor-3)">▥</div>
+            <h4 class="pattern-title">Waveform buckets</h4>
+            <p class="pattern-desc">Two hundred forty compact peak values make a visual preview without shipping every audio sample to the interface.</p>
+          </div>
+          <div class="pattern-card animate-in" style="border-top: 3px solid var(--color-actor-5)">
+            <div class="pattern-icon" style="background: var(--color-actor-5)">🔍</div>
+            <h4 class="pattern-title">Measured, not imagined</h4>
+            <p class="pattern-desc">Peak, non-silent frames, duration, and hashes are facts; emotional judgments require a listener or an explicit analysis boundary.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Press check: revise without losing truth</h2>
+        <p>Choose the response that preserves editable intent, reproducibility, and honest evidence.</p>
+
+        <div class="quiz-container" id="quiz-module4">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="Exactly. Reuse the protected melody and apply the drum operation to a cloned composition, creating a new revision without rewriting accepted audio."
+               data-explanation-wrong="Not quite. A request about drums should not regenerate, mutate, or merely promise to preserve the accepted melody.">
+            <div class="scenario-context">
+              <span class="scenario-label">Protected melody</span>
+              <p>A listener locks the melody, then asks for fewer Groove hats. Which implementation respects that decision?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Regenerate every stem and ask the model to make the melody sound identical.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Clone the composition, filter only in-scope hats, and reuse the protected melody stem exactly.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Edit the accepted revision in place but keep a note saying the melody was protected.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="Exactly. A stable seed belongs with the canonical inputs and must be reused on retry; that makes external repetition reproducible and auditable."
+               data-explanation-wrong="Not quite. Fresh or time-based randomness makes a retry a different musical experiment, even when the user asked to repeat the same job.">
+            <div class="scenario-context">
+              <span class="scenario-label">Deterministic seeds</span>
+              <p>A source generator uses randomness, and a worker retries the same job. How should the seed behave?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Generate a fresh seed on every attempt so retries sound more creative.</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Use the current clock time because it is always unique.</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>Persist one seed with the canonical inputs and reuse it for every retry of that job.</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="Exactly. The renderer can support the numerical statement directly; the emotional claim needs human listening or a separately named analysis process."
+               data-explanation-wrong="Not quite. A waveform or hash cannot establish an emotional quality, while a peak value is directly computed from samples rather than guessed by a listener."
+            <div class="scenario-context">
+              <span class="scenario-label">Measured vs. subjective</span>
+              <p>A release note needs one claim backed directly by renderer output. Which claim is defensible?</p>
+            </div>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>“The measured peak remains at or below the renderer’s 0.92 safety target.”</span></button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>“The waveform proves the chorus feels more uplifting.”</span></button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)"><div class="quiz-option-radio"></div><span>“The matching file hash proves the melody sounds better.”</span></button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module4')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module4')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-5" style="background: var(--color-bg-warm)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">05</span>
+      <h1 class="module-title">Two Honest Borders</h1>
+      <p class="module-subtitle">How <span class="term" data-definition="Gemini is Google's family of AI models. Here it is used only as a bounded audio critic, not as the owner of the song.">Gemini</span> advice and <span class="term" data-definition="Nexus is the export document format used here to describe a project and its editable audio parts. It does not itself render sound or log in to Audiotool.">Nexus</span> export stay useful without claiming powers they do not have.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">The song can cross neither border—and still exist</h2>
+        <p>Pocket Producer can create music without either external <span class="term" data-definition="A provider is an outside service the app can ask to do specialized work. Treat it like a contractor: useful, but never the owner of the core record.">provider</span>. Each checkpoint has a narrow passport stamp, and an unavailable service is reported as unavailable.</p>
+
+        <div class="flow-steps integration-border-flow" aria-label="The two integration boundaries">
+          <div class="flow-step">
+            <div class="flow-step-num">♪</div>
+            <h3>Canonical composition</h3>
+            <p>The app-owned source of truth for sections, tracks, timing, and intent.</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step checkpoint-card">
+            <div class="flow-step-num">G</div>
+            <h3>Gemini checkpoint</h3>
+            <p>May inspect real <span class="term" data-definition="WAV is an uncompressed audio file format. It preserves the sound samples a critic or renderer needs without hiding them behind a streaming service.">WAV</span> bytes and offer observations; it cannot rewrite the composition.</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">↔</div>
+          <div class="flow-step checkpoint-card">
+            <div class="flow-step-num">N</div>
+            <h3>Nexus checkpoint</h3>
+            <p>May label local <span class="term" data-definition="A stem is one separately exported musical part, such as drums or bass. Stems let someone remix parts without receiving every original note and instrument setting.">stems</span> in a <span class="term" data-definition="A manifest is a structured packing list. It records what files belong to an export and what each one means.">manifest</span>; it does not render them or change a remote project.</p>
+          </div>
+        </div>
+
+        <div class="badge-list integration-status-ledger">
+          <div class="badge-item">
+            <code class="badge-code">GEMINI · BUILT / NOT LIVE</code>
+            <span class="badge-desc">The audio-analysis <span class="term" data-definition="An adapter is a small translator between the app's own rules and an outside service's interface. It lets the rest of the app stay stable if the provider changes.">adapter</span> is built, but no Gemini <span class="term" data-definition="An API key is a secret credential an app presents to a service. It must stay server-side and should never appear in course pages, logs, or browser code.">API key</span> is configured and no live call has run.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">NEXUS 0.0.17 · LOCAL VERIFIED</code>
+            <span class="badge-desc">The offline document and local editable-stem manifest are verified; <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">Audiotool OAuth</span> and <span class="term" data-definition="A remote mutation is a change sent to another service, such as creating or editing a project on Audiotool's servers.">remote mutation</span> are not.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">FFMPEG · ABSENT</code>
+            <span class="badge-desc"><span class="term" data-definition="FFmpeg is a command-line media tool commonly used to encode, decode, and inspect audio or video files.">FFmpeg</span> is not installed, so no FFmpeg-backed result should be implied.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Reserve the toll before paying it</h2>
+        <p>A Gemini attempt first reserves an <span class="term" data-definition="An idempotency key is a unique label for one intended side effect. Reusing it lets the system recognize a retry instead of charging for the same work twice.">idempotency key</span>. If the same attempt already exists, the code reuses a completed answer or returns an honest unavailable result rather than risking duplicate billing.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/providers/gemini.ts</span>
+            <pre><code>    const idempotencyKey = `gemini:${purpose}:${input.hash}:audio-critique-v1`;
+    const reserved = await getPool().query&lt;{ id: string }&gt;(
+      "INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider) VALUES($1,$2,$3,$4,'pending','gemini') ON CONFLICT(job_id,idempotency_key) DO NOTHING RETURNING id",
+      [input.jobId, purpose, idempotencyKey, canonicalHash({ hash: input.hash, purpose, measured })]
+    );
+    effectId = reserved.rows[0]?.id;
+    if (!effectId) {
+      const prior = await getPool().query&lt;{ state: string; output: { analysis?: AudioAnalysis } | null }&gt;("SELECT state,output FROM effect WHERE job_id=$1 AND idempotency_key=$2", [input.jobId, idempotencyKey]);
+      if (prior.rows[0]?.state === "succeeded" &amp;&amp; prior.rows[0].output?.analysis) return prior.rows[0].output.analysis;
+      return { status: "unavailable", assetHash: input.hash, model: config.GEMINI_MODEL, promptVersion: "audio-critique-v1", purpose, inspectedInterval: { start: 0, end: input.durationSeconds }, measured, observations: [], uncertainty: "A previous Gemini attempt did not complete; it was not repeated to avoid duplicate billing.", suggestedActions: [], repairAction: "none", usage: { promptTokens: 0, candidateTokens: 0, totalTokens: 0 } };
+    }
+    await getPool().query("UPDATE job SET estimated_cost_usd=estimated_cost_usd+$2 WHERE id=$1", [input.jobId, estimatedCallCost]);</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Name this one critique from its purpose, audio fingerprint, and prompt version.</p>
+              <p class="tl">Try to reserve one pending provider effect. A duplicate reservation is deliberately ignored.</p>
+              <p class="tl">Fingerprint the measured input too, so the record says exactly what was submitted.</p>
+              <p class="tl">Keep the new reservation’s ID—if there is one.</p>
+              <p class="tl">No new ID means this exact attempt was seen before, so look up its recorded outcome.</p>
+              <p class="tl">If that earlier attempt succeeded, return its saved analysis instead of calling Gemini again.</p>
+              <p class="tl">If it did not finish, say “unavailable” and explain why it was not repeated.</p>
+              <p class="tl">Only the newly reserved call adds its estimated cost to the job.</p>
+            </div>
+          </div>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon" aria-hidden="true">✦</span>
+          <p><strong>Aha:</strong> uncertainty is data, not permission to spend again. The safe result can be “we do not know, and we did not double-charge.”</p>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">An export is a ladder, not a magic portal</h2>
+        <p><span class="term" data-definition="Export fidelity describes how much editing freedom survives when music leaves one system for another. Higher fidelity preserves smaller, more meaningful musical pieces.">Fidelity</span> must be named precisely. The current verified Nexus path reaches editable stems locally, not a fully editable remote Audiotool project.</p>
+
+        <div class="flow-steps fidelity-ladder" aria-label="Export fidelity from most to least editable">
+          <article class="flow-step fidelity-rung">
+            <div class="pattern-icon">1</div>
+            <h3 class="pattern-title">Notes</h3>
+            <p class="pattern-desc">Individual musical events remain editable: pitch, length, timing, and instrument choices.</p>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">›</div>
+          <article class="flow-step fidelity-rung">
+            <div class="pattern-icon">2</div>
+            <h3 class="pattern-title">Audio clips</h3>
+            <p class="pattern-desc">Regions can move and trim, but their recorded sound is already fixed.</p>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">›</div>
+          <article class="flow-step fidelity-rung fidelity-rung-current">
+            <div class="pattern-icon">✓</div>
+            <h3 class="pattern-title">Editable stems</h3>
+            <p class="pattern-desc"><strong>Current local export.</strong> Drums, bass, and other parts stay separate for mixing.</p>
+          </article>
+          <div class="flow-arrow" aria-hidden="true">›</div>
+          <article class="flow-step fidelity-rung">
+            <div class="pattern-icon">4</div>
+            <h3 class="pattern-title">Stereo mix</h3>
+            <p class="pattern-desc">Everything is fused into one left-and-right audio file.</p>
+          </article>
+        </div>
+
+        <div class="pattern-cards boundary-cards">
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">📦</div>
+            <h3 class="pattern-title">What Nexus does</h3>
+            <p class="pattern-desc">Writes an offline document that maps composition metadata and local stem paths with an <code>editable-stem</code> label.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🚧</div>
+            <h3 class="pattern-title">What remains outside</h3>
+            <p class="pattern-desc">The render pipeline creates audio. Audiotool login and remote project creation still require unverified client configuration and OAuth.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Use the evidence label that fits</h2>
+        <p>A status sentence should say what artifact exists, where it exists, and which boundary has not been crossed. These notebook labels are safe language for reviews and handoffs.</p>
+
+        <div class="badge-list truth-language">
+          <div class="badge-item">
+            <code class="badge-code">MEASURED</code>
+            <span class="badge-desc">“The waveform measurement reports this value.” A measured fact comes from the audio bytes, not the model’s taste.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">MODEL OPINION</code>
+            <span class="badge-desc">“Gemini observed this, with stated uncertainty.” Advice may guide a revision but does not silently become fact.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">LOCAL VERIFIED</code>
+            <span class="badge-desc">“Nexus 0.0.17 offline document and local editable-stem manifest verified.” This says nothing about a remote Audiotool project.</span>
+          </div>
+          <div class="badge-item">
+            <code class="badge-code">NOT LIVE</code>
+            <span class="badge-desc">“Gemini has no configured key or live call; Audiotool has no verified OAuth or remote mutation.” Missing proof stays visible.</span>
+          </div>
+        </div>
+
+        <div class="flow-steps retry-decision-flow" aria-label="Decision path after an ambiguous provider attempt">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <p>Provider outcome is ambiguous</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <p>Read the reserved effect record</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3A</div>
+            <p>Saved success → reuse it</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">∨</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3B</div>
+            <p>No success → return unavailable</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Checkpoint drill</h2>
+        <p>Choose the response that protects truth, cost, and editability. Each scenario asks what you would actually say or do.</p>
+
+        <div class="quiz-container" id="quiz-module5">
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="Exactly. The reservation record is the source of truth; reuse a saved success or return unavailable without risking a second charge."
+               data-explanation-wrong="Not quite. An ambiguous network result does not prove the provider did nothing, so an immediate retry can duplicate a paid effect.">
+            <h3 class="quiz-question">1. The network drops after a Gemini request may have left the server. What should the worker do next?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Retry immediately until Gemini answers.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Read the reserved effect; reuse success or report unavailable without repeating the call.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Delete the effect record and begin with a new key.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="Exactly. The meter reading is measured evidence; “crowded” is a model observation that should carry uncertainty."
+               data-explanation-wrong="Not quite. Useful model judgment is still judgment—keep it separate from values computed directly from the waveform.">
+            <h3 class="quiz-question">2. A meter reports a loudness value, while Gemini calls the chorus “crowded.” How should a revision note describe them?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Both are measured facts because software produced them.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Both are opinions because music is subjective.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>The loudness is measured; “crowded” is a model opinion with uncertainty.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="Exactly. This names the verified local artifact and the unverified remote boundary without underselling the useful stems."
+               data-explanation-wrong="Not quite. The local manifest is real, but OAuth and remote Audiotool mutation have not been verified, so a live-project claim would overreach. ">
+            <h3 class="quiz-question">3. A teammate asks whether the export now creates a fully editable Audiotool project. Which answer is accurate?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Local editable stems and the Nexus 0.0.17 manifest are verified; Audiotool OAuth and remote project mutation are not.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Yes—the word “editable” means every note and device is editable in Audiotool.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>No—the export is only a stereo mix with no separate parts.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module5')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module5')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+<section class="module" id="module-6" style="background: var(--color-bg)">
+  <div class="module-content">
+    <header class="module-header animate-in">
+      <span class="module-number">06</span>
+      <h1 class="module-title">Preflight, Not Vibes</h1>
+      <p class="module-subtitle">How layered tests, durable failure states, and explicit unknowns turn a polished Listening Room into trustworthy software.</p>
+    </header>
+
+    <div class="module-body">
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Confidence comes from the whole checklist</h2>
+        <p>An aircraft does not pass preflight because its dashboard is pretty. Pocket Producer checks code shape, domain rules, persistence, browser journeys, provider evidence, and the device boundary as distinct layers.</p>
+
+        <div class="pattern-cards preflight-grid" aria-label="The quality preflight layers">
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">⌁</div>
+            <h3 class="pattern-title"><span class="term" data-definition="Type checking verifies that values are used in compatible ways before the app runs—for example, that code does not treat a song ID like an audio buffer.">Types</span> and <span class="term" data-definition="Linting is an automated review for suspicious or inconsistent code patterns. It catches many small mistakes before they become runtime bugs.">lint</span></h3>
+            <p class="pattern-desc">Catch malformed connections and suspicious code before launch.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🔒</div>
+            <h3 class="pattern-title">Domain invariants</h3>
+            <p class="pattern-desc">Prove rules such as ownership, locks, immutable revisions, and safe cost handling.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🗃</div>
+            <h3 class="pattern-title"><span class="term" data-definition="An integration test checks that multiple real pieces work together, such as job logic plus the database. It sits between a tiny unit test and a full browser journey.">Integration tests</span></h3>
+            <p class="pattern-desc">Exercise real persistence, claims, retries, and terminal failure states together.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🧭</div>
+            <h3 class="pattern-title"><span class="term" data-definition="An end-to-end test drives the product through its visible interface, like a user clicking Play and Compare, while checking the resulting behavior.">End-to-end journeys</span></h3>
+            <p class="pattern-desc">Drive playback, comparison, focus, and responsive behavior through the browser.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">⚡</div>
+            <h3 class="pattern-title">Live-provider proof</h3>
+            <p class="pattern-desc">Separate recorded live evidence from fixture responses and adapters that have never called out.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">📱</div>
+            <h3 class="pattern-title">Real-device check</h3>
+            <p class="pattern-desc">Confirm touch, speakers, browser media rules, and layout on physical hardware—not only a resized desktop.</p>
+          </article>
+        </div>
+
+        <aside class="callout callout-accent">
+          <span class="callout-icon" aria-hidden="true">✦</span>
+          <p><strong>Aha:</strong> every layer answers a different question. A green browser test cannot prove provider credentials, and a successful provider call cannot prove mobile playback.</p>
+        </aside>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">A restarted worker needs a new boarding pass</h2>
+        <p>This test deliberately expires a <span class="term" data-definition="A lease is temporary permission for one worker to process a job. If the worker disappears, the lease expires so another worker can safely continue.">lease</span> and checks its <span class="term" data-definition="A fencing generation is a counter that increases with each new claim. The higher number proves which worker is current and blocks an older worker from committing late.">fencing generation</span>. The same <span class="term" data-definition="A job is a durable record of work the system intends to perform. Its state survives a worker restart, unlike an in-memory task.">job</span> is reclaimed, but the newer worker receives stronger authority.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · tests/integration/repository.test.ts</span>
+            <pre><code>  it("reclaims an expired lease with a new fencing generation", async () =&gt; {
+    await dispatchOutbox();
+    const firstClaim = await claimNextJob("worker-before-restart");
+    expect(firstClaim).not.toBeNull();
+    await getPool().query("UPDATE job SET lease_until=now()-interval '1 second' WHERE id=$1", [firstClaim?.id]);
+    const secondClaim = await claimNextJob("worker-after-restart");
+    expect(secondClaim?.id).toBe(firstClaim?.id);
+    expect(secondClaim?.leaseGeneration).toBe((firstClaim?.leaseGeneration ?? 0) + 1);
+    if (secondClaim) await failJob(secondClaim, "TEST_COMPLETE", "Expected integration-test terminal state");
+    expect((await jobSnapshot(ownerA, secondClaim?.id ?? "")).state).toBe("failed");</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Start a test whose promise is: expired work can be reclaimed with newer authority.</p>
+              <p class="tl">Dispatch the queued job, let the first worker claim it, and prove the claim exists.</p>
+              <p class="tl">Move the lease into the past—as if that worker stopped responding.</p>
+              <p class="tl">Let a worker after the restart claim the next available job.</p>
+              <p class="tl">It must be the same job, not a duplicate.</p>
+              <p class="tl">Its generation must be exactly one higher, so the old worker is fenced out.</p>
+              <p class="tl">Finish the scenario with an expected failure and read the durable snapshot.</p>
+              <p class="tl">The database must remember “failed,” even after the worker lifecycle changed.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="flow-steps lease-flow" aria-label="Lease recovery sequence">
+          <div class="flow-step"><div class="flow-step-num">G1</div><p>Worker A claims</p></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step"><div class="flow-step-num">⌛</div><p>Lease expires</p></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step"><div class="flow-step-num">G2</div><p>Worker B reclaims</p></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step"><div class="flow-step-num">✓</div><p>Durable state verified</p></div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Read the evidence labels before the green lights</h2>
+        <p>A test result is meaningful only when its environment is named. The current evidence separates fixture behavior, live-provider proof, emulation, and paths that remain unverified.</p>
+
+        <div class="pattern-cards evidence-board">
+          <div class="pattern-card evidence-column evidence-verified">
+            <h3>Evidence that exists</h3>
+            <div class="badge-list">
+              <div class="badge-item">
+                <strong>DATABASE · VERIFIED</strong>
+                <span class="badge-desc">The repository integration test proves expired-lease reclaim, a higher generation, and a durable terminal failure.</span>
+              </div>
+              <div class="badge-item">
+                <strong>BROWSER · FIXTURE MODE</strong>
+                <span class="badge-desc"><span class="term" data-definition="Fixture mode supplies controlled local test data instead of depending on a live outside service. It proves the product journey, not the provider connection.">Fixture</span> journeys exercise play, pause, compare, keep-current, and focus restoration.</span>
+              </div>
+              <div class="badge-item">
+                <strong>OPENAI · LIVE EVIDENCE</strong>
+                <span class="badge-desc">A live OpenAI producer path has recorded evidence; keep that claim separate from Gemini.</span>
+              </div>
+              <div class="badge-item">
+                <strong>MOBILE · EMULATED</strong>
+                <span class="badge-desc">Responsive behavior has been checked at an emulated mobile viewport, not on a physical phone.</span>
+              </div>
+              <div class="badge-item">
+                <strong>NEXUS · LOCAL VERIFIED</strong>
+                <span class="badge-desc">The Nexus 0.0.17 offline document and local editable-stem manifest are verified.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="pattern-card evidence-column evidence-open">
+            <h3>Evidence still missing</h3>
+            <div class="badge-list">
+              <div class="badge-item">
+                <strong>REAL DEVICE · UNVERIFIED</strong>
+                <span class="badge-desc">Physical-phone touch, audio output, and browser media behavior still need a real-device check.</span>
+              </div>
+              <div class="badge-item">
+                <strong>GEMINI · NO KEY / NO LIVE CALL</strong>
+                <span class="badge-desc">The adapter is built, but there is no configured Gemini key and no live Gemini analysis.</span>
+              </div>
+              <div class="badge-item">
+                <strong>AUDIOTOOL · NOT REMOTE</strong>
+                <span class="badge-desc">OAuth and remote project mutation have not been verified.</span>
+              </div>
+              <div class="badge-item">
+                <strong>FFMPEG · ABSENT</strong>
+                <span class="badge-desc">FFmpeg is not installed, so FFmpeg-backed rendering or inspection must not be reported as tested.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Debug the journey from the window inward</h2>
+        <p>Start at the symptom the listener can see, then follow the same path the data takes. This keeps a stale screen from sending you straight to a provider that may never have been involved.</p>
+
+        <div class="flow-steps troubleshooting-flow" aria-label="Troubleshooting decision path">
+          <div class="flow-step">
+            <div class="flow-step-num">1</div>
+            <h3>Browser</h3>
+            <p>Is the click, media element, focus, or displayed state wrong?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">2</div>
+            <h3><span class="term" data-definition="An API is a defined way for software components to ask each other for data or actions. Here it is the boundary between the browser and the server.">API</span></h3>
+            <p>Did the request return the expected revision, status, and asset location?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">3</div>
+            <h3>Job events</h3>
+            <p>Which durable transition happened, and where did progress stop?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">4</div>
+            <h3>Worker + effects</h3>
+            <p>Was the lease current, the effect reserved, and any provider outcome recorded once?</p>
+          </div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-step">
+            <div class="flow-step-num">5</div>
+            <h3>Revision + audio</h3>
+            <p>Does the committed revision point to a real, playable audio asset?</p>
+          </div>
+        </div>
+
+        <div class="pattern-cards symptom-cards">
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🪟</div>
+            <h3 class="pattern-title">UI looks stale</h3>
+            <p class="pattern-desc">Compare the browser’s displayed state with the API response and job events before blaming the worker.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🔇</div>
+            <h3 class="pattern-title">Play toggles, audio is silent</h3>
+            <p class="pattern-desc">Inspect the revision’s asset URL, WAV availability, browser media errors, and the known absence of FFmpeg.</p>
+          </article>
+          <article class="pattern-card">
+            <div class="pattern-icon" aria-hidden="true">🔌</div>
+            <h3 class="pattern-title">Provider is unavailable</h3>
+            <p class="pattern-desc">Check configuration and the recorded effect state; never manufacture a “success” or casually repeat a paid call.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
+        <h2 class="screen-heading">Preflight drill</h2>
+        <p>Diagnose from evidence, not from the most dramatic theory. Pick the next check that narrows the failure without inventing proof.</p>
+
+        <div class="quiz-container" id="quiz-module6">
+          <div class="quiz-question-block"
+               data-correct="option-c"
+               data-explanation-right="Exactly. The API already has the newest revision, so compare it with the browser's local state and rendering before descending into worker internals."
+               data-explanation-wrong="Not quite. The newest revision is already reaching the API, so provider and database work are less likely than a browser-state mismatch. ">
+            <h3 class="quiz-question">1. The API returns the newest revision, but the Listening Room still shows the old title. Where should you look next?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Run the provider again to regenerate the song.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Change the database lease duration.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Inspect the browser’s state update and rendering against the API response.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-b"
+               data-explanation-right="Exactly. The control changed state, so follow the playback path to the committed asset, its URL, and browser media errors."
+               data-explanation-wrong="Not quite. A working button does not prove the referenced audio exists or can play; inspect the revision-to-audio boundary first. ">
+            <h3 class="quiz-question">2. The Play button becomes Pause, but the speakers stay silent. What is the most useful next check?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Restyle the button so its active state is clearer.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Trace the revision’s audio asset URL, file availability, and browser media errors.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Assume Gemini rejected the mix and retry its critique.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <div class="quiz-question-block"
+               data-correct="option-a"
+               data-explanation-right="Exactly. This reports the configuration gap honestly and preserves the app's ability to continue without pretending analysis occurred."
+               data-explanation-wrong="Not quite. The adapter's existence is not evidence of a live call, and copying another provider's evidence would erase an important boundary. ">
+            <h3 class="quiz-question">3. A run requests Gemini analysis, but the environment has no Gemini key. What should the report say?</h3>
+            <div class="quiz-options">
+              <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>The adapter is built, but Gemini is unavailable and no live analysis ran.</span>
+              </button>
+              <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Gemini passed because the adapter code loaded successfully.</span>
+              </button>
+              <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
+                <div class="quiz-option-radio"></div>
+                <span>Use the live OpenAI producer evidence as proof that Gemini also worked.</span>
+              </button>
+            </div>
+            <div class="quiz-feedback"></div>
+          </div>
+
+          <button class="quiz-check-btn" onclick="checkQuiz('quiz-module6')">Check Answers</button>
+          <button class="quiz-reset-btn" onclick="resetQuiz('quiz-module6')">Try Again</button>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+  </main>
+
+</body>
+</html>
+

@@ -1,0 +1,14 @@
+{
+  "name": "@pocket/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/worker.ts",
+    "start": "tsx src/worker.ts"
+  },
+  "dependencies": {
+    "@pocket/core": "workspace:*"
+  }
+}
+
