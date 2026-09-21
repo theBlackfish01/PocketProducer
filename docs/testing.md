@@ -1,70 +1,49 @@
 # Verification record
 
-Updated 2026-09-21. Windows, Node 22.14, pnpm 11.19, PostgreSQL 17.6 in Docker and Playwright Chromium.
+Updated 2026-09-21. Windows, Node 22.14, pnpm 11.19, PostgreSQL 17.6 in Docker, Playwright Chromium.
 
 ## Isolation contract
 
-Ordinary tests force `APP_ENV=test`, a database whose name ends in `_test`, `.local/test-audio`, `FIXTURE_MODE=true`, and empty OpenAI/Gemini environment values. Configuration refuses the normal development database/audio root or non-fixture test execution. Mock provider tests use the real transactional effect ledger but never construct a network client.
+Normal tests set `APP_ENV=test`, require a database name ending in `_test`, refuse the normal development asset root, require `FIXTURE_MODE=true`, blank all provider keys in child services, and set provider budgets to zero for browser runs. `tests/fixtures/fixture-provider-guard.ts` starts with nonsecret placeholder keys and replaces global `fetch` with a transport that throws; OpenAI must choose the labeled deterministic fallback, Gemini must return unavailable, and dispatch count must remain zero.
 
-`pnpm test:e2e:prepare` truncates only the dedicated test database, then recreates the deterministic owned WAV/demo. It never touches the development database.
+Integration and browser preparation delete only `dev-loopback` resources in the caller-supplied disposable database and test asset directories. They do not truncate the development database or seed the demo as a substitute for a required journey. Browser services own explicit ports, refuse existing listeners and terminate through test-only loopback shutdown endpoints.
 
-## Latest automated results
+## Current results
 
-| Command | Result | Coverage highlights |
+| Command | Result | Main evidence |
 | --- | --- | --- |
-| `pnpm lint` | pass | Strict typed ESLint, no warnings. |
+| `pnpm lint` | pass | Strict ESLint, no warnings. |
 | `pnpm typecheck` | pass | All TypeScript project references. |
-| `pnpm test` | 5 files / 14 tests pass | Canonical arrangement, energy/export contract, deterministic render, malformed WAVs, bounded recorder cleanup, Gemini unavailable, forced repair success/failure, OAuth denial/state branches, refresh persistence failure and Nexus mapping/mock resume. |
-| `pnpm test:integration` | 1 file / 8 tests pass | Owner/project idempotency, queued/running cancellation, lease recovery/fencing, DB-time stale commit rejection, expected-head race, identical composition reuse, encrypted Audiotool session, Gemini ledger/cache/malformed/timeout/budget. |
-| `pnpm test:e2e` | 2 Chromium tests pass | Source audition, labeled seek/volume, real Play/Pause, unsupported revision rejection, real durable revision, A/B audition, Keep current, explicit restore, dialog/sheet focus return, phone focused composer, reduced motion. |
-| `pnpm build` | pass | Production web bundle plus all TypeScript projects. Audiotool is lazy-loaded at connection time. |
-| `pnpm verify:demo` | pass | Two immutable 44.636 s playable WAVs, distinct preview hashes, six scoped hat removals, byte-identical protected melody stems and four editable Nexus parts. |
+| `pnpm test` | 7 files / 28 tests pass | Fixture isolation, composition/source lineage, renderer/WAV validation, recorder lifecycle, OpenAI bounds, Gemini failure/accounting, Nexus timing/recovery/token persistence. |
+| `pnpm test:integration` | 1 file / 17 tests pass | Expiry/retry/cancel/lease fencing, actual process kill/restart, two contenders, command replay, ownership, analysis history, effect concurrency/finalization, export uncertainty and populated migration upgrade. |
+| `pnpm test:e2e` | 2 tests pass in 27 s | Fresh project/upload/generation, lost acknowledgement and reload, actual playback, supported/unsupported revision, compare/focus/restore, disabled export, needs-attention, project scoping, 390×844 reduced motion. |
+| `pnpm build` | pass | Production Vite bundle and strict TypeScript. |
 
-Playwright’s Windows service teardown can leave the parent command waiting after both tests report `ok`; no service ports remain open. The tests themselves passed. This is tracked as harness cleanup, not a product failure.
+## Maintained high-risk probes
 
-## Required behavioral evidence
+- Database time settles queued and running deadline expiry once; stale generation/attempt writes cannot change a newer owner.
+- A real worker child is killed. A restarted worker recovers its lease, two real contenders race, only one owns the job, and cancellation/death produces no revision.
+- Same-key terminal replay resolves the original command after restore and leaves provider effect count unchanged; payload mismatch remains a conflict.
+- Provider finalization is idempotent. Concurrent reservations share one lock, cached success does not dispatch, late observed usage updates the ledger without allowing stale application commits, and TypeError/fetch failures remain uncertain.
+- Source attachment is not audible use. `none`, percussion, texture and silent texture paths are checked from compiled references.
+- Analysis results are keyed by hash/purpose/model/prompt/interval and associated immutably with more than one revision.
+- Nexus readback verifies 88/108 BPM Config, 960→3840 tick conversion, 245,760 ticks for a 16-bar body, the render tail, routing and four enabled tracks. Resume/cancel/timeout/token-rotation tests use installed SDK-backed shapes.
+- Recorder tests cover late permission, construction/source/processor/connect/resume failures, automatic wall-clock and byte caps, repeated stop/discard and cleanup.
 
-- Queued cancel is immediately terminal and emits one cancellation event. Running cancel settles through the current attempt; stale attempts cannot append progress or overwrite terminal state.
-- Expired leases are reclaimed with a new generation/attempt. Old attempts fail writes.
-- Successful Gemini mock output is cached and billed once. A timeout becomes `uncertain` and a second request is withheld. Malformed schema degrades to `failed`; a job at its cost ceiling never dispatches the mock.
-- Source descriptors contain asset identity, measured facts, bounded observations and uncertainty; producer workspace text treats them as untrusted data.
-- Preview critique is keyed to the exact WAV hash. A repaired candidate reruns deterministic signal/melody checks and is stored as `uncritiqued` when the one-pass Gemini budget is exhausted.
-- A forced repair render failure returns the earlier composition/render unchanged.
-- Four-stem offline Nexus validation creates four audio tracks and regions. Mock live adapter resumes the known drums sample, uploads three remaining stems, inserts all four and stops the synced document.
-- Audio DTOs expose URLs/peaks and provenance, never server storage paths.
+## Visual and audio evidence
 
-## Visual evidence
+The final browser run writes ignored evidence under `.local/evidence/repair-20260921-1500/`:
 
-Playwright writes current representative images to ignored local evidence:
+- `listening-room-completed.png` — current rendered version, arrangement sections and disabled local Nexus handoff;
+- `listening-room-desktop.png` — empty destination/draft isolation after switching rooms;
+- `listening-room-mobile.png` — 390×844 empty state and composer.
 
-- `.local/evidence/listening-room-desktop.png`
-- `.local/evidence/listening-room-mobile.png`
+Desktop and mobile captures were visually inspected. The mobile capture preserves the ivory/forest/burnt-orange hierarchy, fits long title/status content without horizontal overflow, keeps the composer visible, and returns focus from the session sheet. This is emulation, not a physical-device microphone/keyboard claim.
 
-The final pass must inspect both files, not merely assert their existence. Desktop and 390×844 emulation are not substitutes for physical iOS/Android keyboard/safe-area verification.
+Fresh previews and stems are decoded during unit/integration/E2E tests; tests assert real signal, 48 kHz stereo preview output, distinct revision hashes and byte-identical protected melody stems. Exact local evidence hashes are run-specific and are not treated as a public fixture identity.
 
-Both final captures were visually inspected on 2026-09-21. The desktop image is free of transient dialog overlays; the mobile image preserves the selected ivory/forest/orange Listening Room hierarchy and keeps the core listen/revise/compare controls reachable.
+## Live providers
 
-The current revision audio is the ignored local artifact whose SHA-256 is `8db8389af5e66634ea8fec21b1a0fa275e4984eb82b9d9c74ab8346463641894`; decoded evidence is 44.636375 seconds, 48 kHz stereo, peak 0.452606 and RMS 0.057934. The original preview hash is `0a6e89a88036655f23b4574bcbba182147c377797ed20cc298d1311016ccbeeb`.
+Normal CI does not run live scripts. The integrated retained evidence includes successful OpenAI production and US$0.294040 recorded OpenAI actual cost. The latest targeted Gemini command attempted exactly two analysis steps and produced no response/request telemetry; both effects are terminal uncertain with unknown cost and cannot replay automatically. Successful live Gemini source/preview analysis therefore remains unverified.
 
-## Live-provider evidence
-
-The configured models are `gpt-6-astra` and `gemini-3-flash-preview`. `pnpm budget:status` reports US$0.294040 recorded OpenAI actual cost and US$0 Gemini cost against a US$5 overall / US$0.25 job cap.
-
-The integrated live runner dispatched once after explicit approval. It created one source-backed revision, spent US$0.067380 on successful OpenAI calls and proved reload did not create another effect. Both Gemini calls returned empty structured text and became terminal `failed` effects. The root cause was the former 512-token `maxOutputTokens`: Gemini 3 uses this ceiling for thinking plus answer tokens, so thinking can consume it before JSON output. The adapter now uses `minimal` thinking, a 2,048-token ceiling and accounts for thought tokens on both successful and invalid responses.
-
-`pnpm test:gemini-live` is ready for a separately approved recovery proof. It:
-
-1. reuses the existing owned source, generated preview and canonical revision;
-2. makes only source-analysis and preview-critique Gemini calls under a new job/effect identity;
-3. invokes neither OpenAI nor the renderer;
-4. records typed analyses, exact hashes, thought-token usage and reconciled cost;
-5. settles by reusing the existing immutable revision and will not automatically retry a terminal failure.
-
-It will not retry a terminal failed/uncertain marked run automatically.
-
-## Not yet verified
-
-- Successful live Gemini source/preview responses after the bounded-thinking repair (new explicit approval pending).
-- Live Audiotool OAuth, upload grant and Studio editability (registration/client ID and consent pending).
-- Physical phone/notched-device behavior.
-- Non-WAV decoding; intentionally unsupported.
+Live Audiotool OAuth/export, physical phones, Firefox/WebKit and non-WAV decoding remain unverified. See `docs/STATUS.md` for the exact ledger and blockers.

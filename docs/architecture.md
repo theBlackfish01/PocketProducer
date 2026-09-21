@@ -2,31 +2,35 @@
 
 ## Runtime shape
 
-The browser talks only to the loopback Fastify API. The API validates ownership and writes PostgreSQL jobs plus an outbox row. An independent worker dispatches the outbox, claims jobs with `FOR UPDATE SKIP LOCKED`, a 45-second lease and monotonically increasing fencing generation, then commits a revision only while that lease and cancellation fence remain valid.
+Pocket Producer remains a modular monolith with three local processes: React/Vite Listening Room, loopback Fastify API, and a PostgreSQL-backed worker. PostgreSQL owns canonical state, jobs, outbox, ordered events, provider effects, immutable revisions, analysis associations and export checkpoints. Private audio is stored below the configured server-only asset root and is returned only through owner-scoped byte-range routes.
 
-PostgreSQL owns users, projects, assets, jobs, ordered job events, effects, immutable revisions, audio analyses and export records. Private audio lives under `.local/audio/<owner>/<project>/`; database rows hold absolute server-only paths. The API resolves audio only after an owner-scoped lookup and supports byte ranges for rendered previews.
+An accepted command captures stable normalized client input plus the current head once. Reusing owner/project/kind/idempotency key resolves that original command before new-work preconditions. A durable browser receipt can recover the job after an acknowledgement is lost without resubmitting.
 
-## Creative path
+Workers claim with `SKIP LOCKED`, database time, lease generation and attempt UUID. Heartbeats distinguish cancellation, deadline expiry, lease loss and monitor failure. A stale attempt may record late provider usage but cannot append progress, select a revision or commit/export application state. Queue time counts toward the absolute job deadline. Expired queued/running jobs settle once; transient retries are capped.
 
-1. Deep Agents 1.14 on LangGraph reads versioned runtime skills and a per-job brief from a scoped virtual workspace.
-2. `gpt-6-astra` returns a Zod-validated high-level arrangement plan. The graph cannot write arbitrary files or raw timeline events.
-3. Deterministic application code compiles the plan into canonical 960-PPQ composition data.
-4. The server renderer schedules owned source WAVs and the Sunroom synthesis/sample palette into 48 kHz stereo PCM, isolated stems and precomputed waveform peaks.
-5. Measured duration, peak, RMS and non-silent ratio remain separate from any Gemini opinion.
-6. The worker commits a new immutable revision transactionally and advances the project head only when the expected head still matches.
+## Creative and agent boundary
 
-The first failed live graph attempt is retained as a failed effect and its checkpoint token usage was reconciled. External effects move through explicit reserved/dispatched/terminal states under a transactional shared budget lock. Gemini and Audiotool do not repeat an ambiguous prior effect simply to hide a failure.
+1. Gemini may analyze an owned source into typed, uncertain descriptors; measured audio facts remain separate.
+2. Deep Agents 1.14 on LangGraph reads a scoped virtual workspace containing the direction, supported palette skill and typed descriptor. The OpenAI model proposes only the bounded arrangement plan.
+3. A conservative message/framing token bound and model price table reserve the real request before dispatch. SDK retries are disabled. Persisted successful effect output is reusable; dispatch without persisted output is explicitly uncertain, not exactly-once billing.
+4. Deterministic application code validates and compiles the plan into canonical 960-PPQ composition data. Attached, selected, referenced and audibly used source identities are distinct.
+5. The renderer produces a 48 kHz stereo preview, four stems, waveform peaks and measured signal facts. Optional preview critique may request the one supported repair. Zero critique passes means no preview Gemini call; one original plus one repair is the maximum.
+6. Revision composition/audio/required analysis associations commit atomically. Head selection is a compare-and-swap; stale valid work remains immutable but unselected.
 
 ## Revision contract
 
-The milestone revision is intentionally narrow. `simplifyDrums` removes alternating hi-hat events only inside the Groove section. The worker hashes the complete melody track before and after, reuses the exact melody stem path, renders a new preview, and stores both versions. Selecting a previous version changes only `project.current_revision_id`; it never deletes history.
+The supported revision removes alternating hi-hat events only inside Groove. It hashes the protected melody structure, reuses the exact melody stem artifact, rerenders, rechecks signal/protection and commits a child revision. A failed repair preserves the prior valid candidate. Restore changes only the selected project head.
 
-## Security boundary
+## Analysis and effect history
 
-This build binds API, web and PostgreSQL ports to loopback. Development ownership is one seeded local subject. API startup is refused when `DEV_LOCAL_AUTH` is false, and production startup is refused while local auth is enabled; a real production identity layer is a later milestone. Uploads are size-limited, decoded as bounded mono/stereo PCM16 or Float32 WAV, stored by hash, and never exposed by raw filesystem path.
+Analysis identity is `(owner, project, audio hash, provider, model, purpose, prompt version, interval, status)`. `audio_analysis_revision` provides immutable many-to-many history, so reuse never moves an old association. Measured duration/peak/RMS/non-silent ratio are never presented as model opinion.
 
-## Integration boundaries
+Provider effects use attempt-bound `reserved → dispatched → succeeded|failed|uncertain` transitions under an advisory budget lock and integer micro-USD accounting. Successful output cannot be overwritten; repeated finalization adds no duplicate charge; unknown post-dispatch liabilities retain reservation value. Total model calls, input bounds, repair/critique limits and job deadline are enforced.
 
-- **Gemini:** the adapter sends real WAV bytes when configured, requests structured JSON, stores usage and keeps subjective observations separate from measurements. Two purposes are implemented: source analysis and preview critique. One deterministic drum-repair pass is the ceiling.
-- **Nexus/Audiotool:** the SDK is not a renderer. `nexus-stem-v2` validates a four-track offline document, while the live boundary implements browser PKCE, encrypted owner-bound worker tokens, refresh persistence, project/upload checkpoints, bounded readiness polling, synchronized insertion and a real `dawUrl`. Remote mutation stays disabled until app registration and explicit user consent; see `docs/nexus-integration.md`.
-- **FFmpeg:** absent and not required for the WAV milestone. WAV remains the honest supported format until another bounded decoder is configured and tested.
+## Nexus boundary
+
+Nexus is an export SDK, not the renderer. Mapping `nexus-stem-v3` converts canonical 960-PPQ ticks to Nexus 3840 ticks, sets real Config tempo/signature/duration, maps the musical body plus one-second audio tail and inserts four routed full-length regions. Project creation, each upload, arrangement insertion and completion have durable step identity and uncertainty fences across jobs. See `docs/nexus-integration.md`.
+
+## Security and deployment boundary
+
+The milestone binds services to loopback and uses one explicit development owner. Test mode refuses production data/asset roots and real providers. Production refuses development-local auth. Secrets remain server-side and out of frontend bundles/logs. Public identity, managed object storage, deployment and submission are later milestones.

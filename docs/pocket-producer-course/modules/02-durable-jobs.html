@@ -222,27 +222,23 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE</span>
-            <pre><code>    const active = await client.query&lt;{ state: string; cancellation_requested_at: Date | null; deadline_at: Date }&gt;(
-      `UPDATE job SET stage=COALESCE($5,stage),updated_at=now()
-       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND lease_until&gt;now() AND deadline_at&gt;now()
-       RETURNING state,cancellation_requested_at,deadline_at`,
-      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, stage ?? null]
+            <pre><code>    const control = await attemptControlCode(client, job, true);
+    if (control) throw new JobControlError(control, controlMessage(control));
+    await client.query(
+      "UPDATE job SET stage=COALESCE($2,stage),updated_at=now() WHERE id=$1",
+      [job.id, stage ?? null]
     );
-    const row = active.rows[0];
-    if (!row) throw new JobControlError("LEASE_LOST", "Worker lease or deadline rejected progress");
-    if (row.cancellation_requested_at || row.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation requested");
-    if (row.state !== "running") throw new JobControlError("LEASE_LOST", "Job is no longer running");
     await insertJobEvent(client, job.id, eventType, payload);</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
-              <p class="tl">Ask PostgreSQL to append progress only while every custody field still matches this worker.</p>
-              <p class="tl">Match the job, worker, lease generation, and unique attempt ID.</p>
-              <p class="tl">Use database time to require both a live lease and an unexpired absolute deadline.</p>
-              <p class="tl">If nothing matched, classify the in-memory worker as stale.</p>
-              <p class="tl">Treat a cancellation request as a separate terminal path, not ordinary progress.</p>
-              <p class="tl">Require the durable state to remain <code>running</code>.</p>
+              <p class="tl">Lock the job row and compare its worker, lease generation, and unique attempt ID.</p>
+              <p class="tl">Return <code>CANCELLED</code> when cancellation won the race.</p>
+              <p class="tl">Return <code>DEADLINE_EXCEEDED</code> when the absolute job deadline expired.</p>
+              <p class="tl">Return <code>LEASE_LOST</code> only when this attempt no longer owns a live running lease.</p>
+              <p class="tl">The monitor separately uses <code>MONITOR_UNAVAILABLE</code> if PostgreSQL cannot be consulted.</p>
+              <p class="tl">Update progress only after the typed control check passes.</p>
               <p class="tl">Only then allocate and append the next ordered job event.</p>
             </div>
           </div>

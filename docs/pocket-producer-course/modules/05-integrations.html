@@ -34,11 +34,11 @@
         <div class="badge-list integration-status-ledger">
           <div class="badge-item">
             <code class="badge-code" style="flex: 0 0 auto">GEMINI</code>
-            <span class="badge-desc">The key is configured and two approved audio requests reached Gemini. Both returned empty structured text because the former output ceiling was consumed by thinking. Their effects are terminal failures, not invented successes.</span>
+            <span class="badge-desc">The key is configured, but successful audio analysis is not live-verified. Two earlier calls returned unusable empty structured output; a later two-step identity ended after dispatch with transport errors, no request ID, and zero provider telemetry. Ambiguous effects retain unknown-cost liability and are not replayed.</span>
           </div>
           <div class="badge-item">
             <code class="badge-code" style="flex: 0 0 auto">NEXUS</code>
-            <span class="badge-desc">Four-track offline mapping, resumed mock uploads, project edits, stop/cleanup, browser <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">OAuth</span> branches, and encrypted token rotation are verified. A real remote mutation still needs an Audiotool client ID and consent.</span>
+            <span class="badge-desc">The v3 map converts 960 PPQ to 3840 PPQ, sets tempo/signature/duration, preserves the musical body plus tail, and reads back four enabled routed tracks. Per-step mock recovery, stop/cleanup, browser <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">OAuth</span> branches, and serialized encrypted token rotation are verified. A real remote mutation still needs an Audiotool client ID and consent.</span>
           </div>
           <div class="badge-item">
             <code class="badge-code" style="flex: 0 0 auto">WAV</code>
@@ -100,6 +100,35 @@
       </section>
 
       <section class="screen animate-in">
+        <h2 class="screen-heading">Convert the clock once, then read it back</h2>
+        <p>The canonical song uses 960 pulses per quarter note; Nexus uses 3840. The adapter owns that four-to-one conversion, derives region length from decoded WAV duration, and keeps the musical body distinct from the explicit render tail.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/nexus/adapter.ts</span>
+            <pre><code>const musicalBodyNexusTicks =
+  canonicalTicksToNexus(composition.durationTicks)
+const audioDurationNexusTicks = Math.round(
+  secondsToTicks(decoded.durationSeconds, composition.tempoBpm)
+)
+transaction.update(config.fields.tempoBpm, manifest.tempoBpm)
+transaction.update(config.fields.signatureNumerator, 4)
+transaction.update(config.fields.signatureDenominator, 4)
+transaction.update(config.fields.durationTicks, manifest.projectDurationNexusTicks)</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Translate composition positions from 960 PPQ to Nexus’s 3840 PPQ exactly once.</p>
+              <p class="tl">Measure the actual decoded stem, so its one-second tail is not silently discarded.</p>
+              <p class="tl">Write tempo, 4/4 signature, and the longest complete stem into the Nexus Config.</p>
+              <p class="tl">Read the validated document back and require four enabled tracks, four routed regions, and exact timing.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
         <h2 class="screen-heading">An export is a ladder, not a magic portal</h2>
         <p><span class="term" data-definition="Export fidelity describes how much editing freedom survives when music leaves one system for another. Higher fidelity preserves smaller, more meaningful musical pieces.">Fidelity</span> must be named precisely. Pocket Producer now has a complete four-stem remote adapter, but only its offline and mock execution are verified until real Audiotool authorization exists.</p>
 
@@ -158,11 +187,11 @@
           </div>
           <div class="badge-item">
             <code class="badge-code">LOCAL VERIFIED</code>
-            <span class="badge-desc">“Nexus 0.0.17 four-track mapping and resumable mock export verified.” This still says nothing about a real remote Audiotool project.</span>
+            <span class="badge-desc">“Nexus 0.0.17 v3 timing, routing, and per-step recovery verified offline.” This still says nothing about a real remote Audiotool project.</span>
           </div>
           <div class="badge-item">
             <code class="badge-code">LIVE FAILURE</code>
-            <span class="badge-desc">“Gemini was called and returned no usable structured analysis; the bounded-thinking fix is offline verified and its targeted live retest is pending.” Failed evidence is not the same as no evidence.</span>
+            <span class="badge-desc">“Gemini produced no successful analysis; the latest two calls ended after dispatch without provider telemetry and remain uncertain/unknown-cost.” Failed or uncertain evidence is not success and must not be silently replayed.</span>
           </div>
         </div>
 
@@ -246,7 +275,7 @@
             <div class="quiz-options">
               <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
-                <span>The four-stem mapping, PKCE flow, encrypted session, and resumable mock export are verified; live Audiotool consent and remote editability are not.</span>
+                <span>The v3 four-stem timing/readback, PKCE flow, encrypted session, and per-step mock recovery are verified; live Audiotool consent and remote editability are not.</span>
               </button>
               <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>

@@ -1,6 +1,6 @@
 # Pocket Producer architecture course
 
-Content is current through the 2026-09-21 application repair milestone (`010969f`). The six modules now cover the Listening Room's durable browser idempotency, worker attempt fencing, the bounded Deep Agent, candidate-preserving audio repair, live Gemini failure evidence and the resumable Nexus/Audiotool boundary.
+Content is current through the 2026-09-21 F1–F8/A1–A6 repair pass applied after runtime `010969f` and course commit `25913b9`. The six modules cover project-safe browser receipts, worker attempt fencing and restart recovery, the bounded Deep Agent, candidate-preserving audio repair, conservative provider accounting, and the Nexus v3 timing/recovery boundary.
 
 Open `index.html` directly, or serve this directory from the repository root:
 

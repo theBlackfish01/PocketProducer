@@ -1,27 +1,36 @@
 # Nexus / Audiotool integration contract
 
-Pinned SDK: `@audiotool/nexus@0.0.17`. This boundary creates an editable remote project; it is not an audio renderer.
+Pinned SDK: `@audiotool/nexus@0.0.17`. Nexus creates an editable project from already-rendered stems; it is not a standalone renderer.
 
-## Operation map
+## Time and fidelity
 
-| Product operation | Pinned SDK surface | Scope evidence | Implemented state |
-| --- | --- | --- | --- |
-| Browser OAuth + callback | `audiotool({ clientId, redirectUrl, scope })` | SDK browser-auth example uses `project:write` | Implemented. SDK owns PKCE/state; callback route is `/auth/audiotool/callback`. |
-| Browser → worker session | authenticated `exportTokens()` → `createServerAuth()` | Authentication types explicitly document token handoff | Implemented. Origin checked, owner-bound AES-256-GCM persistence, tokens redacted, refresh callback persists rotation. |
-| Create project | `client.projects.createProject({ project: { displayName } })` | Covered by documented `project:write` example | Implemented behind resumable effect; live unverified. |
-| Upload stems | `client.samples.upload({ file, displayName, bpm, kind, visibility, tags }, signal)` | No separate scope declaration found in installed types; `project:write` is the only documented example | Implemented; exact live grant remains to verify. |
-| Upload completion | await `uploaded`, then bounded await `ready` | SDK types distinguish byte safety from transcoding readiness | Implemented with bounded timeout/error handling and per-track checkpoints. |
-| Arrange clips | `client.open(project)`, `start()`, `modify(t => t.insertSample(...))`, `stop()` | Project document mutation under the documented project scope | Implemented. Each full-length stem starts at tick 0 with canonical BPM/duration ticks. |
-| Studio URL | `SyncedDocument.dawUrl` | Explicit SDK property | Persisted only after a completed live export; never fabricated. |
+- Pocket Producer remains canonical at 960 PPQ. The adapter converts every exported timeline value with Nexus `Ticks.Beat=3840`.
+- A 16-bar 4/4 body is 61,440 canonical ticks and 245,760 Nexus ticks. At 88 BPM it is 43.636 seconds.
+- Config is updated to the canonical BPM, 4/4 signature and full project duration.
+- Each decoded stem is checked for sample rate, channel count and body-plus-tail duration. The region begins at zero and spans the actual audio duration. The one-second render tail is preserved and recorded separately from the musical body; it is not stretched to another bar grid.
+- Drums, bass, melody and texture become four enabled/routed audio tracks. A texture stem may be intentionally silent. Users can trim, move, process and mix these audio stems; notes inside them are not individually editable. Local preview mastering can differ from a raw stem sum.
 
-## Fidelity and recovery
+`validateOfflineNexusMapping` reads Config and regions back from a validated SDK document. Tests cover 88 and 108 BPM, exact converted ticks/seconds, four routes, the tail, a silent texture and a production-shaped UUID. Local-only sample resource names are kept below the SDK's 60-byte field limit.
 
-- Manifest `nexus-stem-v2` carries PPQ 960, tempo, timeline duration, section boundaries and decoded channel/rate/duration facts.
-- Drums, bass, melody and texture become four audio tracks/regions. Users can trim, move, process and mix stems; notes inside rendered stems are not editable.
-- Project name and each ready sample name are checkpointed in `project_export.remote_project_id` / `remote_effects`. A restarted attempt resumes known uploads.
-- Provider effects use `reserved/dispatched/succeeded/failed/uncertain`. An ambiguous create/upload is not automatically replayed.
-- States remain distinct: `disabled`, `awaiting_authorization`, `exporting`, `failed`, `uncertain`, `completed`.
+## Durable operation
 
-## Offline evidence
+Operation identity is owner + revision + provider + `nexus-stem-v3`. `project_export` serializes that identity across HTTP retries/jobs; `project_export_step` and the checkpoint distinguish `never_dispatched`, `in_flight`, `succeeded`, `failed` and `uncertain` for project creation, each upload, arrangement insertion and completion.
 
-The adapter creates a validated offline Nexus document with four `audioTrack` and four `audioRegion` entities. Mock contract tests cover a resumed upload, remaining uploads, ready polling, four insertions and document shutdown. This proves the current type/operation mapping, not remote service authorization or Studio behavior.
+- Known project/sample IDs are persisted as soon as trustworthy and reused after restart.
+- Completed arrangement replay returns the existing Studio URL with no mutation.
+- A lost create/upload/modify response is uncertain. A new default export cannot bypass it or create another project.
+- Cancellation/deadline is checked before every step. The whole operation shares the remaining job deadline. A dispatched SDK mutation cannot be rolled back; abort stops later steps and preserves uncertainty.
+- Stop/token-persistence reporting after confirmed insertion cannot replace terminal success. Token writes are serialized so an older refresh cannot overwrite a newer expiry; persistence failures remain visible.
+
+## SDK surface and authorization
+
+| Operation | SDK surface | Status |
+| --- | --- | --- |
+| OAuth/PKCE | `audiotool({ clientId, redirectUrl, scope })` | Browser branches tested; live consent pending. |
+| Owner-bound session | `exportTokens()` → `createServerAuth()` | AES-256-GCM local persistence and refresh callback tested. |
+| Project | `projects.createProject` | Typed, checkpointed, mock verified. |
+| Stem upload | `samples.upload`, await `uploaded` then `ready` | Typed, checkpointed, readiness/timeout tested. SDK supports `unlisted`; private visibility is not claimed. |
+| Arrangement | `open/start/modify(insertSample)/stop` | Offline SDK and transport-boundary tests verify mapping/replay/uncertainty. |
+| Studio URL | `SyncedDocument.dawUrl` | Persisted only after known completion; never fabricated. |
+
+The installed examples identify `project:write`; no separate sample-upload scope declaration was found in the installed package. `AUDIOTOOL_CLIENT_ID` is absent, so live OAuth, grant sufficiency, remote privacy and Studio editability remain unverified. No remote export was attempted in this repair.

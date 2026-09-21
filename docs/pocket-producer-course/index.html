@@ -569,27 +569,23 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE</span>
-            <pre><code>    const active = await client.query&lt;{ state: string; cancellation_requested_at: Date | null; deadline_at: Date }&gt;(
-      `UPDATE job SET stage=COALESCE($5,stage),updated_at=now()
-       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND lease_until&gt;now() AND deadline_at&gt;now()
-       RETURNING state,cancellation_requested_at,deadline_at`,
-      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, stage ?? null]
+            <pre><code>    const control = await attemptControlCode(client, job, true);
+    if (control) throw new JobControlError(control, controlMessage(control));
+    await client.query(
+      "UPDATE job SET stage=COALESCE($2,stage),updated_at=now() WHERE id=$1",
+      [job.id, stage ?? null]
     );
-    const row = active.rows[0];
-    if (!row) throw new JobControlError("LEASE_LOST", "Worker lease or deadline rejected progress");
-    if (row.cancellation_requested_at || row.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation requested");
-    if (row.state !== "running") throw new JobControlError("LEASE_LOST", "Job is no longer running");
     await insertJobEvent(client, job.id, eventType, payload);</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
-              <p class="tl">Ask PostgreSQL to append progress only while every custody field still matches this worker.</p>
-              <p class="tl">Match the job, worker, lease generation, and unique attempt ID.</p>
-              <p class="tl">Use database time to require both a live lease and an unexpired absolute deadline.</p>
-              <p class="tl">If nothing matched, classify the in-memory worker as stale.</p>
-              <p class="tl">Treat a cancellation request as a separate terminal path, not ordinary progress.</p>
-              <p class="tl">Require the durable state to remain <code>running</code>.</p>
+              <p class="tl">Lock the job row and compare its worker, lease generation, and unique attempt ID.</p>
+              <p class="tl">Return <code>CANCELLED</code> when cancellation won the race.</p>
+              <p class="tl">Return <code>DEADLINE_EXCEEDED</code> when the absolute job deadline expired.</p>
+              <p class="tl">Return <code>LEASE_LOST</code> only when this attempt no longer owns a live running lease.</p>
+              <p class="tl">The monitor separately uses <code>MONITOR_UNAVAILABLE</code> if PostgreSQL cannot be consulted.</p>
+              <p class="tl">Update progress only after the typed control check passes.</p>
               <p class="tl">Only then allocate and append the next ordered job event.</p>
             </div>
           </div>
@@ -1256,11 +1252,11 @@
         <div class="badge-list integration-status-ledger">
           <div class="badge-item">
             <code class="badge-code" style="flex: 0 0 auto">GEMINI</code>
-            <span class="badge-desc">The key is configured and two approved audio requests reached Gemini. Both returned empty structured text because the former output ceiling was consumed by thinking. Their effects are terminal failures, not invented successes.</span>
+            <span class="badge-desc">The key is configured, but successful audio analysis is not live-verified. Two earlier calls returned unusable empty structured output; a later two-step identity ended after dispatch with transport errors, no request ID, and zero provider telemetry. Ambiguous effects retain unknown-cost liability and are not replayed.</span>
           </div>
           <div class="badge-item">
             <code class="badge-code" style="flex: 0 0 auto">NEXUS</code>
-            <span class="badge-desc">Four-track offline mapping, resumed mock uploads, project edits, stop/cleanup, browser <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">OAuth</span> branches, and encrypted token rotation are verified. A real remote mutation still needs an Audiotool client ID and consent.</span>
+            <span class="badge-desc">The v3 map converts 960 PPQ to 3840 PPQ, sets tempo/signature/duration, preserves the musical body plus tail, and reads back four enabled routed tracks. Per-step mock recovery, stop/cleanup, browser <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">OAuth</span> branches, and serialized encrypted token rotation are verified. A real remote mutation still needs an Audiotool client ID and consent.</span>
           </div>
           <div class="badge-item">
             <code class="badge-code" style="flex: 0 0 auto">WAV</code>
@@ -1322,6 +1318,35 @@
       </section>
 
       <section class="screen animate-in">
+        <h2 class="screen-heading">Convert the clock once, then read it back</h2>
+        <p>The canonical song uses 960 pulses per quarter note; Nexus uses 3840. The adapter owns that four-to-one conversion, derives region length from decoded WAV duration, and keeps the musical body distinct from the explicit render tail.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/nexus/adapter.ts</span>
+            <pre><code>const musicalBodyNexusTicks =
+  canonicalTicksToNexus(composition.durationTicks)
+const audioDurationNexusTicks = Math.round(
+  secondsToTicks(decoded.durationSeconds, composition.tempoBpm)
+)
+transaction.update(config.fields.tempoBpm, manifest.tempoBpm)
+transaction.update(config.fields.signatureNumerator, 4)
+transaction.update(config.fields.signatureDenominator, 4)
+transaction.update(config.fields.durationTicks, manifest.projectDurationNexusTicks)</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Translate composition positions from 960 PPQ to Nexus’s 3840 PPQ exactly once.</p>
+              <p class="tl">Measure the actual decoded stem, so its one-second tail is not silently discarded.</p>
+              <p class="tl">Write tempo, 4/4 signature, and the longest complete stem into the Nexus Config.</p>
+              <p class="tl">Read the validated document back and require four enabled tracks, four routed regions, and exact timing.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
         <h2 class="screen-heading">An export is a ladder, not a magic portal</h2>
         <p><span class="term" data-definition="Export fidelity describes how much editing freedom survives when music leaves one system for another. Higher fidelity preserves smaller, more meaningful musical pieces.">Fidelity</span> must be named precisely. Pocket Producer now has a complete four-stem remote adapter, but only its offline and mock execution are verified until real Audiotool authorization exists.</p>
 
@@ -1380,11 +1405,11 @@
           </div>
           <div class="badge-item">
             <code class="badge-code">LOCAL VERIFIED</code>
-            <span class="badge-desc">“Nexus 0.0.17 four-track mapping and resumable mock export verified.” This still says nothing about a real remote Audiotool project.</span>
+            <span class="badge-desc">“Nexus 0.0.17 v3 timing, routing, and per-step recovery verified offline.” This still says nothing about a real remote Audiotool project.</span>
           </div>
           <div class="badge-item">
             <code class="badge-code">LIVE FAILURE</code>
-            <span class="badge-desc">“Gemini was called and returned no usable structured analysis; the bounded-thinking fix is offline verified and its targeted live retest is pending.” Failed evidence is not the same as no evidence.</span>
+            <span class="badge-desc">“Gemini produced no successful analysis; the latest two calls ended after dispatch without provider telemetry and remain uncertain/unknown-cost.” Failed or uncertain evidence is not success and must not be silently replayed.</span>
           </div>
         </div>
 
@@ -1468,7 +1493,7 @@
             <div class="quiz-options">
               <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
-                <span>The four-stem mapping, PKCE flow, encrypted session, and resumable mock export are verified; live Audiotool consent and remote editability are not.</span>
+                <span>The v3 four-stem timing/readback, PKCE flow, encrypted session, and per-step mock recovery are verified; live Audiotool consent and remote editability are not.</span>
               </button>
               <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
@@ -1595,11 +1620,11 @@
             <div class="badge-list">
               <div class="badge-item">
                 <strong>DATABASE · VERIFIED</strong>
-                <span class="badge-desc">Eight PostgreSQL integration scenarios cover ownership, cancellation settlement, lease recovery, stale-write fencing, expected-head races, revision reuse, encrypted sessions, and provider accounting.</span>
+                <span class="badge-desc">Seventeen PostgreSQL integration scenarios cover ownership, duplicate commands, cancellation/deadline settlement, real-process worker recovery, contending claims, stale-write fencing, analysis truth, durable export steps, migrations, and provider accounting.</span>
               </div>
               <div class="badge-item">
                 <strong>BROWSER · FIXTURE MODE</strong>
-                <span class="badge-desc">Two <span class="term" data-definition="Fixture mode supplies controlled local test data instead of depending on a live outside service. It proves the product journey, not the provider connection.">fixture</span> journeys exercise source audition, real Play/Pause, durable revision, compare, restore, focus return, contrast, and 390×844 reduced motion.</span>
+                <span class="badge-desc">Two fresh-project <span class="term" data-definition="Fixture mode supplies controlled local test data instead of depending on a live outside service. It proves the product journey, not the provider connection.">fixture</span> journeys exercise upload, lost acknowledgement recovery, reload, real Play/Pause, revision, compare, restore, offline export, project switching, stale-response rejection, per-project drafts, and 390×844 reduced motion.</span>
               </div>
               <div class="badge-item">
                 <strong>OPENAI · LIVE EVIDENCE</strong>
@@ -1607,7 +1632,7 @@
               </div>
               <div class="badge-item">
                 <strong>GEMINI · LIVE FAILURE EVIDENCE</strong>
-                <span class="badge-desc">Two calls reached Gemini and returned empty structured text under the old 512-token ceiling. Both effects are terminal failures and were not replayed.</span>
+                <span class="badge-desc">Two old calls returned unusable empty output. The later two-step diagnostic ended after dispatch with transport errors and no provider telemetry; those effects are uncertain/unknown-cost and were not replayed.</span>
               </div>
               <div class="badge-item">
                 <strong>MOBILE · EMULATED</strong>
@@ -1628,16 +1653,16 @@
                 <span class="badge-desc">Physical-phone touch, audio output, and browser media behavior still need a real-device check.</span>
               </div>
               <div class="badge-item">
-                <strong>GEMINI · FIXED PATH NOT YET LIVE</strong>
-                <span class="badge-desc">Minimal thinking, a 2,048-token ceiling, and thought-token accounting pass offline tests; the two-call Gemini-only recovery proof still needs separate approval.</span>
+                <strong>GEMINI · SUCCESS NOT YET LIVE</strong>
+                <span class="badge-desc">Minimal thinking, a 2,048-token ceiling, thought-token accounting, and transport uncertainty pass offline tests; connectivity diagnosis and a newly authorized identity are required before another bounded proof.</span>
               </div>
               <div class="badge-item">
                 <strong>AUDIOTOOL · NOT REMOTE</strong>
                 <span class="badge-desc">OAuth and remote project mutation have not been verified.</span>
               </div>
               <div class="badge-item">
-                <strong>PLAYWRIGHT · WINDOWS CLEANUP</strong>
-                <span class="badge-desc">Both browser tests report <code>ok</code>, but the parent Playwright command can wait during Windows service teardown after all local ports have closed.</span>
+                <strong>PLAYWRIGHT · CLEAN SHUTDOWN</strong>
+                <span class="badge-desc">The test-only API, worker, and web shutdown endpoints are restricted to test mode; the fresh browser suite now exits cleanly after its two journeys.</span>
               </div>
             </div>
           </div>
@@ -1750,13 +1775,13 @@
 
           <div class="quiz-question-block"
                data-correct="option-a"
-               data-explanation-right="Exactly. Preserve the failed effects, fix the bounded-output cause, and use a separately approved new identity for a targeted proof rather than rewriting history or silently replaying."
-               data-explanation-wrong="Not quite. A live failure must remain visible, and its effect identity must not be reused as if it were a fresh, safely repeatable call. ">
-            <h3 class="quiz-question">3. Gemini returned empty JSON after its thinking consumed the output ceiling. What is the honest recovery?</h3>
+               data-explanation-right="Exactly. Preserve failed and uncertain effects, hold their unknown liability, diagnose connectivity, and use an explicitly authorized new identity rather than rewriting history or silently replaying."
+               data-explanation-wrong="Not quite. An after-dispatch transport failure must remain visible, and its effect identity must not be reused as if it were a fresh, safely repeatable call. ">
+            <h3 class="quiz-question">3. Gemini has no successful result and the latest transport ended after dispatch without telemetry. What is the honest recovery?</h3>
             <div class="quiz-options">
               <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
-                <span>Keep the terminal failures, fix the bounded-thinking configuration, and require approval for a new targeted verification identity.</span>
+                <span>Keep the failed/uncertain effects, hold unknown liability, diagnose connectivity, and require explicit authorization for a genuinely new identity.</span>
               </button>
               <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>

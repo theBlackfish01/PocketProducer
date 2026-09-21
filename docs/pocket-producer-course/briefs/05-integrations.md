@@ -36,21 +36,22 @@ File: `packages/core/src/providers/gemini.ts` (`analyzePreview`)
     costMicrousd = tokenCostMicrousd("gemini", config.GEMINI_MODEL, { inputTokens: usage.promptTokens, outputTokens });
 ```
 
-File: `packages/core/src/nexus/adapter.ts` (`exportManifestToAudiotool`)
+File: `packages/core/src/nexus/adapter.ts` (`writeNexusManifest`)
 ```ts
-  if (!projectId) {
-    const created = await bounded(input.client.projects.createProject({ project: { displayName: input.title.slice(0, 120) } }), timeoutMs, "Audiotool project creation");
-    if (created instanceof Error) throw created;
-    projectId = created.project?.name;
-    if (!projectId) throw new Error("Audiotool project creation returned no project name");
-    await input.checkpoint?.({ remoteProjectId: projectId, uploadedSamples });
-  }
+const musicalBodyNexusTicks = canonicalTicksToNexus(input.composition.durationTicks);
+const audioDurationNexusTicks = Math.round(secondsToTicks(decoded.durationSeconds, input.composition.tempoBpm));
+const projectDurationNexusTicks = Math.max(...parts.map((part) => part.audioDurationNexusTicks));
+
+transaction.update(config.fields.tempoBpm, manifest.tempoBpm);
+transaction.update(config.fields.signatureNumerator, 4);
+transaction.update(config.fields.signatureDenominator, 4);
+transaction.update(config.fields.durationTicks, manifest.projectDurationNexusTicks);
 ```
 
 ### Current Evidence
-- Gemini key/model are configured. The first approved source and preview calls reached Gemini but returned empty structured text because the old 512-token ceiling was consumed by Gemini 3 thinking. Terminal failed effects remain preserved.
-- The fix uses `minimal` thinking, 2,048 output tokens, and thought-token accounting; offline regression tests pass. A separate two-call targeted live proof remains approval-gated.
-- Nexus 0.0.17 offline four-track mapping, browser PKCE branches, encrypted owner-bound sessions, refresh persistence, resumed sample upload, region insertion, and document cleanup are mock/offline verified.
+- Gemini key/model are configured. The first approved source and preview calls returned unusable empty structured output. A later targeted identity attempted the same two stages but ended after dispatch with transport `TypeError`, zero provider telemetry, and no request ID. All ambiguous zero-telemetry effects retain unknown-cost liability and are never replayed automatically.
+- The fix uses `minimal` thinking, 2,048 output tokens, thought-token accounting, and conservative transport classification; offline regression tests pass. Successful live Gemini analysis remains unverified.
+- Nexus 0.0.17 offline four-track mapping converts canonical 960 PPQ to Nexus 3840 PPQ, preserves the musical body plus explicit render tail, sets tempo/signature/duration, and reads back four enabled routed tracks. Browser PKCE, encrypted owner-bound sessions, serialized refresh persistence, per-step recovery, and document cleanup are mock/offline verified.
 - Live Audiotool authorization and remote Studio editability remain unverified because `AUDIOTOOL_CLIENT_ID` is absent.
 
 ### Interactive Elements

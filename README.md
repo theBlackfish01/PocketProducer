@@ -2,7 +2,7 @@
 
 Pocket Producer is a loopback-first Listening Room for turning a source sound or written direction into a short instrumental, listening to real rendered audio, asking for a protected revision, comparing immutable versions, and preparing an editable-stem Nexus handoff.
 
-This first milestone is deliberately local. It does not deploy publicly and it does not represent Gemini or Audiotool as connected when credentials are absent.
+This first milestone is deliberately local. It does not deploy publicly and it does not represent Gemini or Audiotool as live-verified merely because credentials are configured.
 
 ## Run it
 
@@ -38,7 +38,7 @@ pnpm budget:status
 
 `pnpm test:live` is the opt-in integrated source-Gemini → OpenAI Deep Agent → render → preview-Gemini verification. It sends an owned synthetic WAV and generated preview to external providers and can incur bounded usage; run it only with explicit approval. The ordinary suite clears provider keys and is fully offline.
 
-`pnpm test:gemini-live` is a separately approval-gated recovery check. It reuses the integrated run's source, preview and canonical revision, makes only the two Gemini audio calls, and settles by reusing the existing revision; it does not invoke OpenAI or render again.
+`pnpm test:gemini-live` is a separately authorized, two-call diagnostic. The retained 2026-09-21 identity is terminal after both transports failed without provider telemetry and is deliberately not replayable. Diagnose connectivity and use a genuinely new authorized identity before any future run; it does not invoke OpenAI or render again.
 
 ## What is implemented
 
@@ -48,7 +48,7 @@ pnpm budget:status
 - Canonical tick composition, 48 kHz deterministic WAV renderer, per-part stems, measured audio facts and private content-addressed storage.
 - Protected drum simplification, canonical melody and artifact checks, immutable history, A/B audition and explicit restore.
 - Gemini source/preview adapter with structured critique, usage capture, one-repair ceiling and an honest unavailable state.
-- Nexus validated four-track mapping, browser PKCE/callback, encrypted owner-bound worker session and resumable four-stem export adapter. Live mutation remains blocked on app registration/OAuth; see [docs/USER-SETUP.md](docs/USER-SETUP.md).
+- Nexus v3 four-track mapping with explicit 960→3840 PPQ conversion, browser PKCE/callback, encrypted owner-bound worker sessions, and durable per-step recovery. Live mutation remains blocked on app registration/OAuth; see [docs/USER-SETUP.md](docs/USER-SETUP.md).
 
 See [docs/STATUS.md](docs/STATUS.md), [docs/architecture.md](docs/architecture.md), [docs/design-system.md](docs/design-system.md), and [docs/testing.md](docs/testing.md).
 

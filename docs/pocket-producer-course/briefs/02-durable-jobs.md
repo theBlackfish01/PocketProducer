@@ -27,18 +27,16 @@ export async function claimNextJob(workerId: string): Promise<JobRecord | null> 
 
 File: packages/core/src/db/repository.ts (`appendAttemptEvent`)
 ```ts
-    const active = await client.query<{ state: string; cancellation_requested_at: Date | null; deadline_at: Date }>(
-      `UPDATE job SET stage=COALESCE($5,stage),updated_at=now()
-       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND lease_until>now() AND deadline_at>now()
-       RETURNING state,cancellation_requested_at,deadline_at`,
-      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, stage ?? null]
+    const control = await attemptControlCode(client, job, true);
+    if (control) throw new JobControlError(control, controlMessage(control));
+    await client.query(
+      "UPDATE job SET stage=COALESCE($2,stage),updated_at=now() WHERE id=$1",
+      [job.id, stage ?? null]
     );
-    const row = active.rows[0];
-    if (!row) throw new JobControlError("LEASE_LOST", "Worker lease or deadline rejected progress");
-    if (row.cancellation_requested_at || row.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation requested");
-    if (row.state !== "running") throw new JobControlError("LEASE_LOST", "Job is no longer running");
     await insertJobEvent(client, job.id, eventType, payload);
 ```
+
+`attemptControlCode` identifies `CANCELLED`, `DEADLINE_EXCEEDED`, and `LEASE_LOST` separately. The worker's lease monitor reports `MONITOR_UNAVAILABLE` when PostgreSQL cannot be consulted, so an infrastructure failure is not mislabeled as a stale worker.
 
 File: packages/core/src/db/repository.ts (`commitRevision` fence)
 ```ts
