@@ -46,12 +46,21 @@ export async function reserveProviderEffect(input: {
     await client.query("BEGIN");
     await lockBudget(client);
     await assertAttempt(client, input.job);
-    const prior = await client.query<{ id: string; state: EffectState; output: unknown }>(
-      "SELECT id,state,output FROM effect WHERE job_id=$1 AND idempotency_key=$2 FOR UPDATE",
+    const prior = await client.query<{ id: string; state: EffectState; output: unknown; input_hash: string; attempt_id: string | null }>(
+      "SELECT id,state,output,input_hash,attempt_id FROM effect WHERE job_id=$1 AND idempotency_key=$2 FOR UPDATE",
       [input.job.id, input.idempotencyKey]
     );
     const existing = prior.rows[0];
     if (existing) {
+      if (existing.input_hash !== input.inputHash) throw new Error("PROVIDER_EFFECT_INPUT_MISMATCH");
+      if (existing.state === "reserved") {
+        await client.query(
+          "UPDATE effect SET attempt_id=$2,lease_generation=$3,updated_at=now() WHERE id=$1",
+          [existing.id, input.job.attemptId, input.job.leaseGeneration]
+        );
+        await client.query("COMMIT");
+        return { id: existing.id, state: "reserved", created: true };
+      }
       await client.query("COMMIT");
       return { id: existing.id, state: existing.state, created: false, cachedOutput: existing.state === "succeeded" ? existing.output : undefined };
     }
@@ -75,9 +84,9 @@ export async function reserveProviderEffect(input: {
       throw new Error("MODEL_BUDGET_EXCEEDED");
     }
     const inserted = await client.query<{ id: string }>(
-      `INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd)
-       VALUES($1,$2,$3,$4,'reserved',$5,$6,$7,$8) RETURNING id`,
-      [input.job.id, input.step, input.idempotencyKey, input.inputHash, input.provider, input.model, input.promptVersion, input.reservationMicrousd]
+      `INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd,attempt_id,lease_generation)
+       VALUES($1,$2,$3,$4,'reserved',$5,$6,$7,$8,$9,$10) RETURNING id`,
+      [input.job.id, input.step, input.idempotencyKey, input.inputHash, input.provider, input.model, input.promptVersion, input.reservationMicrousd, input.job.attemptId, input.job.leaseGeneration]
     );
     const id = inserted.rows[0]?.id;
     if (!id) throw new Error("Unable to reserve provider effect");
@@ -100,7 +109,10 @@ export async function markEffectDispatched(effectId: string, job: JobRecord): Pr
   try {
     await client.query("BEGIN");
     await assertAttempt(client, job);
-    const result = await client.query("UPDATE effect SET state='dispatched',dispatched_at=now(),updated_at=now() WHERE id=$1 AND job_id=$2 AND state='reserved'", [effectId, job.id]);
+    const result = await client.query(
+      "UPDATE effect SET state='dispatched',dispatched_at=now(),updated_at=now() WHERE id=$1 AND job_id=$2 AND state='reserved' AND attempt_id=$3 AND lease_generation=$4",
+      [effectId, job.id, job.attemptId, job.leaseGeneration]
+    );
     if (result.rowCount !== 1) throw new Error("Provider effect could not enter dispatched state");
     await client.query("COMMIT");
   } catch (error) {
@@ -116,8 +128,22 @@ export async function completeProviderEffect(input: { effectId: string; job: Job
   try {
     await client.query("BEGIN");
     await lockBudget(client);
-    const effect = await client.query<{ reservation_microusd: string }>("SELECT reservation_microusd::text FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE", [input.effectId, input.job.id]);
-    const reservation = Number(effect.rows[0]?.reservation_microusd ?? 0);
+    const effect = await client.query<{ reservation_microusd: string; actual_cost_microusd: string; state: EffectState; attempt_id: string | null }>(
+      "SELECT reservation_microusd::text,actual_cost_microusd::text,state,attempt_id FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE",
+      [input.effectId, input.job.id]
+    );
+    const row = effect.rows[0];
+    if (!row || row.attempt_id !== input.job.attemptId) throw new Error("Provider effect attempt identity mismatch");
+    if (row.state === "succeeded") {
+      await client.query("COMMIT");
+      return "succeeded";
+    }
+    if (row.state === "failed" || row.state === "uncertain") {
+      await client.query("COMMIT");
+      return "uncertain";
+    }
+    const reservation = Number(row.reservation_microusd);
+    const priorActual = Number(row.actual_cost_microusd);
     const active = await client.query(
       `SELECT 1 FROM job WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4
        AND state='running' AND cancellation_requested_at IS NULL AND lease_until>now() AND deadline_at>now() FOR UPDATE`,
@@ -125,7 +151,7 @@ export async function completeProviderEffect(input: { effectId: string; job: Job
     );
     const state: "succeeded" | "uncertain" = active.rowCount === 1 ? "succeeded" : "uncertain";
     await client.query(
-      "UPDATE effect SET state=$2,output=$3,provider_request_id=COALESCE($4,provider_request_id),actual_cost_microusd=$5::bigint,cost_usd=($5::bigint)::numeric/1000000,completed_at=now(),updated_at=now() WHERE id=$1",
+      "UPDATE effect SET state=$2,output=$3,provider_request_id=COALESCE($4,provider_request_id),actual_cost_microusd=$5::bigint,cost_usd=($5::bigint)::numeric/1000000,cost_status='observed',completed_at=now(),updated_at=now() WHERE id=$1",
       [input.effectId, state, input.output, input.providerRequestId ?? null, input.actualCostMicrousd]
     );
     await client.query(
@@ -133,7 +159,7 @@ export async function completeProviderEffect(input: { effectId: string; job: Job
          actual_cost_microusd=actual_cost_microusd+$3,
          estimated_cost_usd=GREATEST(0,estimated_cost_microusd-$2)::numeric/1000000,
          actual_cost_usd=(actual_cost_microusd+$3)::numeric/1000000 WHERE id=$1`,
-      [input.job.id, reservation, input.actualCostMicrousd]
+      [input.job.id, state === "succeeded" ? reservation : 0, input.actualCostMicrousd - priorActual]
     );
     await client.query("COMMIT");
     return state;
@@ -150,18 +176,35 @@ export async function failProviderEffect(input: { effectId: string; job: JobReco
   try {
     await client.query("BEGIN");
     await lockBudget(client);
-    const effect = await client.query<{ reservation_microusd: string }>("SELECT reservation_microusd::text FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE", [input.effectId, input.job.id]);
-    const reservation = Number(effect.rows[0]?.reservation_microusd ?? 0);
-    const actual = input.actualCostMicrousd ?? 0;
+    const effect = await client.query<{ reservation_microusd: string; actual_cost_microusd: string; state: EffectState; attempt_id: string | null }>(
+      "SELECT reservation_microusd::text,actual_cost_microusd::text,state,attempt_id FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE",
+      [input.effectId, input.job.id]
+    );
+    const row = effect.rows[0];
+    if (!row || row.attempt_id !== input.job.attemptId) throw new Error("Provider effect attempt identity mismatch");
+    if (row.state === "succeeded" || row.state === "failed" || row.state === "uncertain") {
+      await client.query("COMMIT");
+      return;
+    }
+    const reservation = Number(row.reservation_microusd);
+    const priorActual = Number(row.actual_cost_microusd);
+    const actual = input.actualCostMicrousd ?? priorActual;
+    const costStatus = input.actualCostMicrousd === undefined && input.uncertain ? "unknown" : "observed";
     await client.query(
-      "UPDATE effect SET state=$2,output=$3,actual_cost_microusd=$4::bigint,cost_usd=($4::bigint)::numeric/1000000,completed_at=now(),updated_at=now() WHERE id=$1",
-      [input.effectId, input.uncertain ? "uncertain" : "failed", { errorClass: input.errorClass, ...(input.safeDetails ?? {}) }, actual]
+      "UPDATE effect SET state=$2,output=$3,actual_cost_microusd=$4::bigint,cost_usd=($4::bigint)::numeric/1000000,cost_status=$5,completed_at=now(),updated_at=now() WHERE id=$1",
+      [input.effectId, input.uncertain ? "uncertain" : "failed", { errorClass: input.errorClass, ...(input.safeDetails ?? {}) }, actual, costStatus]
     );
     if (!input.uncertain) {
       await client.query(
         `UPDATE job SET estimated_cost_microusd=GREATEST(0,estimated_cost_microusd-$2),actual_cost_microusd=actual_cost_microusd+$3,
          estimated_cost_usd=GREATEST(0,estimated_cost_microusd-$2)::numeric/1000000,actual_cost_usd=(actual_cost_microusd+$3)::numeric/1000000 WHERE id=$1`,
-        [input.job.id, reservation, actual]
+        [input.job.id, reservation, actual - priorActual]
+      );
+    } else if (actual !== priorActual) {
+      await client.query(
+        `UPDATE job SET actual_cost_microusd=actual_cost_microusd+$2,
+         actual_cost_usd=(actual_cost_microusd+$2)::numeric/1000000 WHERE id=$1`,
+        [input.job.id, actual - priorActual]
       );
     }
     await client.query("COMMIT");

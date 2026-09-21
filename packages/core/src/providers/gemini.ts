@@ -21,6 +21,11 @@ const critiqueSchema = z.object({
   repairAction: z.enum(["none", "simplify-drums"])
 });
 
+function isAmbiguousTransportFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  return error instanceof Error && /timeout|abort|network|fetch|ENOTFOUND|ECONN|socket|TLS|UND_ERR/i.test(`${error.name} ${error.message}`);
+}
+
 export interface GeminiGenerateClient {
   generateContent(input: Parameters<GoogleGenAI["models"]["generateContent"]>[0]): ReturnType<GoogleGenAI["models"]["generateContent"]>;
 }
@@ -85,6 +90,9 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
   const config = getConfig();
   const key = config.GEMINI_API_KEY ?? config.GOOGLE_API_KEY;
   const purpose = input.purpose ?? "preview-critique";
+  if (config.FIXTURE_MODE && !input.client) {
+    return emptyAnalysis(input, "unavailable", "Gemini dispatch is disabled by fixture mode.", null);
+  }
   if (!key && !input.client) return emptyAnalysis(input, "unavailable", "Gemini audio analysis is not configured.", null);
   if (!input.job) throw new Error("Configured Gemini execution requires an active budgeted job context");
   const bytes = await readFile(input.path);
@@ -146,6 +154,7 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
   let costMicrousd = 0;
   let finishReason: string | undefined;
   let responseTextLength = 0;
+  let providerResponseObserved = false;
   try {
     const response = await client.generateContent({
       model: config.GEMINI_MODEL,
@@ -159,6 +168,7 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
         httpOptions: { timeout: Math.min(60_000, Math.max(1_000, new Date(input.job.deadlineAt).getTime() - Date.now())) }
       }
     });
+    providerResponseObserved = true;
     const text = response.text ?? "";
     responseTextLength = text.length;
     finishReason = response.candidates?.[0]?.finishReason;
@@ -203,13 +213,13 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
     if (state !== "succeeded") return emptyAnalysis(input, "unavailable", "Gemini responded after the active worker attempt lost ownership; the result was not attached.", config.GEMINI_MODEL);
     return analysis;
   } catch (error) {
-    const uncertain = error instanceof Error && /timeout|abort|network|ECONN|socket/i.test(`${error.name} ${error.message}`);
+    const uncertain = isAmbiguousTransportFailure(error);
     await failProviderEffect({
       effectId: reservation.id,
       job: input.job,
       errorClass: error instanceof Error ? error.name : "UnknownError",
       uncertain,
-      actualCostMicrousd: costMicrousd,
+      ...(providerResponseObserved ? { actualCostMicrousd: costMicrousd } : {}),
       safeDetails: { finishReason: finishReason ?? null, responseTextLength, promptTokens: usage.promptTokens, candidateTokens: usage.candidateTokens, thoughtsTokens: usage.thoughtsTokens }
     });
     return emptyAnalysis(

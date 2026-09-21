@@ -96,3 +96,28 @@ export function validateComposition(value: unknown): Composition {
   return compositionSchema.parse(value);
 }
 
+export interface CompositionSourceLineage {
+  attachedSourceAssetIds: string[];
+  referencedSourceAssetIds: string[];
+}
+
+/**
+ * Schema v1 called attached source IDs `sourceAssetIds`. Keep that field stable so
+ * historical hashes remain immutable; actual compiled use is derived from audible
+ * event references instead of attachment alone.
+ */
+export function compositionSourceLineage(composition: Composition): CompositionSourceLineage {
+  const referenced = new Set<string>();
+  for (const track of composition.tracks) {
+    if (track.gainDb <= -48) continue;
+    for (const event of track.events) {
+      if (event.gainDb <= -48 || !event.assetId.startsWith("source:")) continue;
+      const assetId = event.assetId.slice("source:".length);
+      if (assetId) referenced.add(assetId);
+    }
+  }
+  return {
+    attachedSourceAssetIds: [...composition.sourceAssetIds],
+    referencedSourceAssetIds: [...referenced].sort()
+  };
+}

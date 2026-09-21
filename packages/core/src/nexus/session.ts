@@ -82,9 +82,25 @@ export async function deleteAudiotoolSession(ownerId: string): Promise<void> {
 
 export function createAudiotoolTokenRefreshHandler(ownerId: string, userName: string, persist: typeof saveAudiotoolSession = saveAudiotoolSession): { onTokenRefresh(tokens: AudiotoolTokenData): void; awaitPersistence(): Promise<void> } {
   let pending = Promise.resolve();
+  let latestExpiresAt = 0;
+  let persistenceError: unknown;
   return {
-    onTokenRefresh(tokens) { pending = persist(ownerId, userName, tokens); },
-    awaitPersistence() { return pending; }
+    onTokenRefresh(tokens) {
+      if (tokens.expiresAt < latestExpiresAt) return;
+      latestExpiresAt = tokens.expiresAt;
+      pending = pending.catch(() => undefined).then(async () => {
+        try {
+          await persist(ownerId, userName, tokens);
+          persistenceError = undefined;
+        } catch (error) {
+          persistenceError = error;
+        }
+      });
+    },
+    async awaitPersistence() {
+      await pending;
+      if (persistenceError) throw persistenceError instanceof Error ? persistenceError : new Error("Audiotool token persistence failed with a non-Error rejection");
+    }
   };
 }
 
@@ -92,17 +108,12 @@ export async function createAudiotoolServerClient(ownerId: string, clientId: str
   const session = await loadAudiotoolSession(ownerId);
   if (!session) return null;
   const [nexusModule, nodeModule] = await Promise.all([import("@audiotool/nexus"), import("@audiotool/nexus/node")]);
-  const nexus = nexusModule as unknown as {
-    createServerAuth(options: AudiotoolTokenData & { clientId: string; onTokenRefresh(tokens: AudiotoolTokenData): void }): unknown;
-    createAudiotoolClient(options: { auth: unknown; transport: unknown; wasm: unknown }): Promise<unknown>;
-  };
-  const node = nodeModule as unknown as { createNodeTransport(): unknown; createDiskWasmLoader(): unknown };
   const refresh = createAudiotoolTokenRefreshHandler(ownerId, session.userName);
-  const auth = nexus.createServerAuth({
+  const auth = nexusModule.createServerAuth({
     ...session.tokens,
     clientId,
     onTokenRefresh: refresh.onTokenRefresh
   });
-  const client = await nexus.createAudiotoolClient({ auth, transport: node.createNodeTransport(), wasm: node.createDiskWasmLoader() });
-  return { client: client as AudiotoolExportClient, awaitTokenPersistence: refresh.awaitPersistence };
+  const client: AudiotoolExportClient = await nexusModule.createAudiotoolClient({ auth, transport: nodeModule.createNodeTransport(), wasm: nodeModule.createDiskWasmLoader() });
+  return { client, awaitTokenPersistence: refresh.awaitPersistence };
 }

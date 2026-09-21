@@ -27,9 +27,12 @@ const configSchema = z.object({
   FIXTURE_MODE: booleanString.default(false),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(1).default(1),
   JOB_LEASE_SECONDS: z.coerce.number().int().min(3).max(300).default(45),
-  MAX_MODEL_CALLS_PER_JOB: z.coerce.number().int().min(1).max(12).default(4),
-  MAX_RENDER_ATTEMPTS_PER_JOB: z.coerce.number().int().min(1).max(3).default(2),
-  MAX_AUDIO_CRITIQUE_PASSES: z.coerce.number().int().min(0).max(2).default(1),
+  MAX_MODEL_CALLS_PER_JOB: z.coerce.number().int().min(0).max(12).default(4),
+  MAX_OPENAI_INPUT_TOKENS: z.coerce.number().int().min(1_000).max(128_000).default(16_000),
+  // This milestone implements one original render plus at most one repair and
+  // one critique of the original candidate. Reject unsupported higher values.
+  MAX_RENDER_ATTEMPTS_PER_JOB: z.coerce.number().int().min(1).max(2).default(2),
+  MAX_AUDIO_CRITIQUE_PASSES: z.coerce.number().int().min(0).max(1).default(1),
   MAX_JOB_SECONDS: z.coerce.number().int().min(10).max(900).default(300),
   MAX_UPLOAD_BYTES: z.coerce.number().int().min(1_024).max(104_857_600).default(20_971_520),
   MAX_SOURCE_SECONDS: z.coerce.number().int().min(1).max(300).default(300),
@@ -60,9 +63,10 @@ export function getConfig(): AppConfig {
 }
 
 export function providerAvailability(config = getConfig()) {
+  const externalProvidersEnabled = !config.FIXTURE_MODE;
   return {
-    openai: Boolean(config.OPENAI_API_KEY),
-    gemini: Boolean(config.GEMINI_API_KEY ?? config.GOOGLE_API_KEY),
-    audiotool: Boolean(config.AUDIOTOOL_CLIENT_ID)
+    openai: externalProvidersEnabled && Boolean(config.OPENAI_API_KEY),
+    gemini: externalProvidersEnabled && Boolean(config.GEMINI_API_KEY ?? config.GOOGLE_API_KEY),
+    audiotool: externalProvidersEnabled && Boolean(config.AUDIOTOOL_CLIENT_ID)
   } as const;
 }

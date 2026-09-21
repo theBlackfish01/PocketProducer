@@ -37,6 +37,7 @@ export interface SourceDescriptor {
   measured: { durationSeconds: number; peak: number; rms: number; nonSilentRatio: number };
   observations: string[];
   uncertainty: string;
+  suggestedRole: "percussion" | "texture" | "none" | null;
 }
 
 function checkpoint(): Promise<PostgresSaver> {
@@ -63,7 +64,8 @@ async function runtimeFiles(direction: string, source?: SourceDescriptor) {
       status: source.status,
       measured: source.measured,
       observations: source.observations.slice(0, 4).map((item) => item.slice(0, 300)),
-      uncertainty: source.uncertainty.slice(0, 300)
+      uncertainty: source.uncertainty.slice(0, 300),
+      suggestedRole: source.suggestedRole
     } : null)}\n\`\`\`\n`,
     mimeType: "text/markdown",
     created_at: created,
@@ -76,14 +78,19 @@ export function deterministicPlan(direction: string, hasSource: boolean, source?
   const lower = direction.toLowerCase();
   const energetic = /energy|driv|punch|upbeat/.test(lower);
   const sparse = /sparse|restrained|minimal|space|warm/.test(lower);
+  const sentence = direction.trim().split(/[.!?]/)[0]?.trim() || "New listening room";
+  const clipped = sentence.slice(0, 63);
+  const wordBoundary = clipped.lastIndexOf(" ");
+  const title = sentence.length <= 64 ? sentence : `${(wordBoundary >= 32 ? clipped.slice(0, wordBoundary) : clipped).trimEnd()}…`;
   return {
-    title: direction.trim().split(/[.!?]/)[0]?.slice(0, 64) || "New listening room",
+    title,
     tempoBpm: energetic ? 108 : sparse ? 88 : 96,
     energy: energetic ? 0.78 : sparse ? 0.38 : 0.58,
     drumDensity: energetic ? 0.92 : sparse ? 0.48 : 0.7,
     bassMotion: /moving bass|active bass/.test(lower) ? 0.8 : 0.42,
     melodyContour: /rise|lift/.test(lower) ? "rising" : /fall|settle/.test(lower) ? "falling" : "wave",
-    sourceRole: hasSource ? (/drum|percuss|rhythm/.test(`${lower} ${source?.observations.join(" ").toLowerCase() ?? ""}`) ? "percussion" : "texture") : "none",
+    sourceRole: !hasSource ? "none" : source?.suggestedRole ??
+      (/drum|percuss|rhythm/.test(`${lower} ${source?.observations.join(" ").toLowerCase() ?? ""}`) ? "percussion" : "texture"),
     rationale: "Deterministic provider fallback constrained to the Sunroom palette."
   };
 }
@@ -137,7 +144,6 @@ function usageFromLlmResult(result: LLMResult): { inputTokens: number; outputTok
 class AccountedOpenAICalls extends BaseCallbackHandler {
   name = "pocket-producer-accounting";
   private readonly effects = new Map<string, string>();
-  private callIndex = 0;
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   costMicrousd = 0;
 
@@ -145,17 +151,18 @@ class AccountedOpenAICalls extends BaseCallbackHandler {
     super({ raiseError: true, _awaitHandler: true });
   }
 
-  override async handleChatModelStart(_llm: Serialized, _messages: BaseMessage[][], runId: string): Promise<void> {
-    this.callIndex += 1;
+  override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
+    const request = boundOpenAiRequest(messages);
+    const messageHash = canonicalHash(request.normalizedMessages);
     const reservation = await reserveProviderEffect({
       job: this.job,
       provider: "openai",
       step: "producer-model-call",
-      idempotencyKey: `producer:${this.operationHash}:call:${this.callIndex}`,
-      inputHash: canonicalHash({ operationHash: this.operationHash, callIndex: this.callIndex }),
+      idempotencyKey: `producer:${this.operationHash}:call:${messageHash}`,
+      inputHash: canonicalHash({ operationHash: this.operationHash, messageHash, inputTokenBound: request.inputTokenBound, outputTokenBound: request.outputTokenBound }),
       model: this.model,
       promptVersion: "deep-producer-v2",
-      reservationMicrousd: 85_000
+      reservationMicrousd: tokenCostMicrousd("openai", this.model, { inputTokens: request.inputTokenBound, outputTokens: request.outputTokenBound })
     });
     if (!reservation.created) throw new Error(`OPENAI_EFFECT_${reservation.state.toUpperCase()}`);
     await markEffectDispatched(reservation.id, this.job);
@@ -184,6 +191,31 @@ class AccountedOpenAICalls extends BaseCallbackHandler {
       uncertain: /timeout|abort|network|ECONN|socket/i.test(`${error.name} ${error.message}`)
     });
   }
+}
+
+export function boundOpenAiRequest(messages: BaseMessage[][]): {
+  normalizedMessages: unknown;
+  inputTokenBound: number;
+  outputTokenBound: number;
+} {
+  const normalizedMessages = messages.map((batch) => batch.map((message) => ({
+    type: message.type,
+    content: message.content,
+    name: message.name,
+    additionalKwargs: message.additional_kwargs
+  })));
+  const serialized = JSON.stringify(normalizedMessages);
+  // The callback sees the complete graph message payload. The fixed allowance covers
+  // Responses/tool framing and the bounded palette/structured-response schemas.
+  // UTF-8 bytes are a conservative tokenizer-independent upper bound for the
+  // selected text-only request. This intentionally admits less than an
+  // approximate chars/4 estimate rather than risking an under-reservation.
+  const inputTokenBound = Buffer.byteLength(serialized, "utf8") + 768;
+  const configuredLimit = getConfig().MAX_OPENAI_INPUT_TOKENS;
+  if (inputTokenBound > configuredLimit) {
+    throw new Error(`OPENAI_INPUT_LIMIT_EXCEEDED:${inputTokenBound}:${configuredLimit}`);
+  }
+  return { normalizedMessages, inputTokenBound, outputTokenBound: 900 };
 }
 
 const producerResultSchema = z.object({

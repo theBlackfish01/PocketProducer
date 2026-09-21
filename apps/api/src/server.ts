@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import {
   audiotoolSessionStatus, cancelJob, createJob, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  insertAsset, jobSnapshot, listProjects, listRevisions, providerAvailability, requireProject, saveAudiotoolSession, selectRevision, storeImmutableAudio
+  findCommandJob, insertAsset, jobSnapshot, listProjects, listRevisions, providerAvailability, requireProject, saveAudiotoolSession, selectRevision, storeImmutableAudio
 } from "@pocket/core";
 
 const config = getConfig();
@@ -115,7 +115,6 @@ app.post("/api/v1/projects/:projectId/generations", async (request, reply) => {
 
 app.post("/api/v1/projects/:projectId/revisions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  const project = await requireProject(ownerId, projectId);
   const body = z.object({
     direction: z.string().trim().min(3).max(1_000),
     baseRevisionId: idSchema,
@@ -126,7 +125,6 @@ app.post("/api/v1/projects/:projectId/revisions", async (request, reply) => {
   if (!/drum/i.test(body.direction) || !/simpl|less|space|restrain/i.test(body.direction)) {
     throw Object.assign(new Error("This version supports only simplifying drums in Groove while protecting the melody"), { statusCode: 422 });
   }
-  if (project.currentRevisionId !== body.expectedHeadRevisionId) throw Object.assign(new Error("Current version changed; refresh before revising"), { statusCode: 409 });
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createJob({ ownerId, projectId, kind: "revision", idempotencyKey, request: body, baseRevisionId: body.baseRevisionId, expectedHeadRevisionId: body.expectedHeadRevisionId });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
@@ -135,6 +133,26 @@ app.post("/api/v1/projects/:projectId/revisions", async (request, reply) => {
 app.get("/api/v1/jobs/:jobId", async (request) => {
   const { jobId } = z.object({ jobId: idSchema }).parse(request.params);
   return jobSnapshot(ownerId, jobId);
+});
+
+app.get("/api/v1/projects/:projectId/commands/:operation/:idempotencyKey", async (request) => {
+  const params = z.object({
+    projectId: idSchema,
+    operation: z.enum(["generation", "revision", "export"]),
+    idempotencyKey: z.string().min(8).max(160)
+  }).parse(request.params);
+  await requireProject(ownerId, params.projectId);
+  return { job: await findCommandJob(ownerId, params.projectId, params.operation, params.idempotencyKey) };
+});
+
+app.post("/api/v1/jobs/:jobId/reconcile", async (request) => {
+  const { jobId } = z.object({ jobId: idSchema }).parse(request.params);
+  const job = await jobSnapshot(ownerId, jobId);
+  const result = await getPool().query(
+    "SELECT state,remote_url,error_message FROM project_export WHERE owner_id=$1 AND job_id=$2",
+    [ownerId, jobId]
+  );
+  return { job, export: result.rows[0] ?? null };
 });
 
 app.post("/api/v1/jobs/:jobId/cancel", async (request, reply) => {
@@ -191,5 +209,12 @@ app.get("/api/v1/exports/:revisionId", async (request) => {
   const result = await getPool().query("SELECT id,state,fidelity,remote_url,error_message,updated_at FROM project_export WHERE owner_id=$1 AND revision_id=$2", [ownerId, revisionId]);
   return { export: result.rows[0] ?? null };
 });
+
+if (config.APP_ENV === "test") {
+  app.post("/api/v1/test/shutdown", async (_request, reply) => {
+    await reply.status(202).send({ status: "stopping" });
+    setImmediate(() => { void app.close().finally(() => process.exit(0)); });
+  });
+}
 
 await app.listen({ host: "127.0.0.1", port: config.API_PORT });

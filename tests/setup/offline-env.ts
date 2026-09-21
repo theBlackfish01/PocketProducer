@@ -7,12 +7,14 @@ if (!new URL(testDatabaseUrl).pathname.slice(1).endsWith("_test")) {
 Object.assign(process.env, {
   APP_ENV: "test",
   DATABASE_URL: testDatabaseUrl,
-  OBJECT_STORAGE_LOCAL_ROOT: ".local/test-audio",
+  OBJECT_STORAGE_LOCAL_ROOT: process.env.TEST_OBJECT_STORAGE_LOCAL_ROOT ?? ".local/test-audio",
   FIXTURE_MODE: "true",
   DEV_LOCAL_AUTH: "true",
   OPENAI_API_KEY: "",
   GEMINI_API_KEY: "",
   GOOGLE_API_KEY: "",
+  JOB_LEASE_SECONDS: "3",
+  MAX_AUDIO_CRITIQUE_PASSES: "0",
   // Keys stay cleared and fixture mode remains mandatory. These ceilings only
   // let injected provider mocks exercise the real transactional ledger.
   INITIAL_BUILD_API_BUDGET_USD: "5",
