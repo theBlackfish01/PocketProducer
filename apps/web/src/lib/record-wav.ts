@@ -11,25 +11,79 @@ function encodeMono(samples: Float32Array, sampleRate: number): Blob {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-export interface RecordingSession { stop(): Promise<File>; discard(): void }
+export interface RecordingSession {
+  readonly maxSeconds: number
+  stop(): Promise<File>
+  discard(): void
+}
 
-export async function startWavRecording(): Promise<RecordingSession> {
+export interface RecordingOptions { maxSeconds?: number; maxBytes?: number }
+
+export async function startWavRecording(options: RecordingOptions = {}): Promise<RecordingSession> {
+  const maxSeconds = Math.min(60, Math.max(1, options.maxSeconds ?? 30))
+  const maxBytes = Math.min(10 * 1024 * 1024, Math.max(46, options.maxBytes ?? 5 * 1024 * 1024))
   const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false } });
-  const context = new AudioContext();
-  const source = context.createMediaStreamSource(stream);
-  // ScriptProcessor remains the compatibility fallback until the AudioWorklet asset is served separately.
-  // eslint-disable-next-line @typescript-eslint/no-deprecated
-  const processor = context.createScriptProcessor(4096, 1, 1);
+  let context: AudioContext
+  let source: MediaStreamAudioSourceNode
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- bounded compatibility path until the AudioWorklet asset is served
+  let processor: ScriptProcessorNode
+  try {
+    context = new AudioContext();
+    source = context.createMediaStreamSource(stream);
+    // ScriptProcessor remains the compatibility fallback until the AudioWorklet asset is served separately.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    processor = context.createScriptProcessor(4096, 1, 1);
+  } catch (error) {
+    stream.getTracks().forEach((track) => track.stop())
+    throw error
+  }
   const chunks: Float32Array[] = [];
+  const maxFrames = Math.min(Math.floor(context.sampleRate * maxSeconds), Math.floor((maxBytes - 44) / 2))
+  let capturedFrames = 0
+  let captureStop: Promise<void> | null = null
+  let discarded = false
+  let completedFile: Promise<File> | null = null
+
+  const stopCapture = () => {
+    if (captureStop) return captureStop
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- bounded compatibility path until the AudioWorklet asset is served
+    processor.onaudioprocess = null
+    try { processor.disconnect() } catch { /* already disconnected */ }
+    try { source.disconnect() } catch { /* already disconnected */ }
+    stream.getTracks().forEach((track) => track.stop())
+    captureStop = context.close().catch(() => undefined)
+    return captureStop
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-deprecated
-  processor.onaudioprocess = (event) => chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+  processor.onaudioprocess = (event) => {
+    if (discarded || capturedFrames >= maxFrames) return
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- see the bounded ScriptProcessor compatibility note above
+    const input = event.inputBuffer.getChannelData(0)
+    const remaining = maxFrames - capturedFrames
+    const chunk = new Float32Array(input.subarray(0, Math.min(input.length, remaining)))
+    chunks.push(chunk)
+    capturedFrames += chunk.length
+    if (capturedFrames >= maxFrames) void stopCapture()
+  };
   source.connect(processor); processor.connect(context.destination);
-  const finish = async (use: boolean) => {
-    processor.disconnect(); source.disconnect(); stream.getTracks().forEach((track) => track.stop()); await context.close();
-    if (!use) return null;
-    const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0); const samples = new Float32Array(length); let offset = 0;
+  if (context.state === "suspended") {
+    try { await context.resume() }
+    catch (error) { await stopCapture(); throw error }
+  }
+
+  const finish = async () => {
+    await stopCapture()
+    if (discarded) throw new Error("Recording was discarded")
+    if (capturedFrames === 0) throw new Error("No audio was captured")
+    const samples = new Float32Array(capturedFrames); let offset = 0;
     for (const chunk of chunks) { samples.set(chunk, offset); offset += chunk.length; }
+    chunks.length = 0
     return new File([encodeMono(samples, context.sampleRate)], `recording-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`, { type: "audio/wav" });
   };
-  return { stop: async () => { const file = await finish(true); if (!file) throw new Error("Recording unavailable"); return file; }, discard: () => { void finish(false); } };
+  return {
+    maxSeconds,
+    stop: () => { completedFile ??= finish(); return completedFile },
+    discard: () => { discarded = true; chunks.length = 0; void stopCapture() }
+  };
 }

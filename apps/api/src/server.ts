@@ -5,8 +5,8 @@ import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
 import {
-  cancelJob, createJob, createProject, decodeWav, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  insertAsset, jobSnapshot, listProjects, listRevisions, providerAvailability, requireProject, selectRevision, storeImmutableAudio
+  audiotoolSessionStatus, cancelJob, createJob, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
+  insertAsset, jobSnapshot, listProjects, listRevisions, providerAvailability, requireProject, saveAudiotoolSession, selectRevision, storeImmutableAudio
 } from "@pocket/core";
 
 const config = getConfig();
@@ -27,16 +27,47 @@ app.setErrorHandler((error: unknown, request, reply) => {
   void reply.status(statusCode).send({ code: statusCode === 500 ? "INTERNAL_ERROR" : "INVALID_REQUEST", message: statusCode === 500 ? "The request could not be completed." : message, requestId: request.id, retryable: statusCode >= 500 });
 });
 
-app.get("/api/v1/status", () => ({
-  status: "ok",
-  environment: config.APP_ENV,
-  authMode: "loopback-development",
-  providers: providerAvailability(config),
-  uploadFormats: ["audio/wav"],
-  ffmpeg: false,
-  renderer: "deterministic-wav-v1",
-  nexus: { sdk: "0.0.17", liveExport: Boolean(config.AUDIOTOOL_CLIENT_ID) }
-}));
+app.get("/api/v1/status", async () => {
+  const session = await audiotoolSessionStatus(ownerId);
+  return {
+    status: "ok",
+    environment: config.APP_ENV,
+    authMode: "loopback-development",
+    providers: providerAvailability(config),
+    capabilities: {
+      producer: "openai-deep-agent-with-fixture-fallback",
+      audioAnalysis: providerAvailability(config).gemini ? "configured" : "unavailable",
+      audiotoolExport: !config.AUDIOTOOL_CLIENT_ID ? "unconfigured" : session.connected ? "authorized-not-live-verified" : "awaiting-user-authorization"
+    },
+    uploadFormats: ["audio/wav"],
+    ffmpeg: false,
+    renderer: "deterministic-wav-v1",
+    nexus: {
+      sdk: "0.0.17",
+      liveExportVerified: false,
+      connection: !config.AUDIOTOOL_CLIENT_ID ? "unconfigured" : session.connected ? "authorized" : "awaiting-authorization",
+      oauth: config.AUDIOTOOL_CLIENT_ID ? { clientId: config.AUDIOTOOL_CLIENT_ID, redirectUrl: config.AUDIOTOOL_REDIRECT_URL, scope: config.AUDIOTOOL_SCOPES } : null,
+      session
+    }
+  };
+});
+
+app.post("/api/v1/integrations/audiotool/session", async (request, reply) => {
+  if (!config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool app registration is not configured"), { statusCode: 409 });
+  if (request.headers.origin !== config.APP_ORIGIN) throw Object.assign(new Error("Audiotool session handoff requires the configured loopback origin"), { statusCode: 403 });
+  const body = z.object({
+    userName: z.string().trim().min(1).max(160),
+    tokens: z.object({ accessToken: z.string().min(16).max(16_384), refreshToken: z.string().min(16).max(16_384), expiresAt: z.number().int().positive() })
+  }).parse(request.body);
+  await saveAudiotoolSession(ownerId, body.userName, body.tokens);
+  return reply.status(204).send();
+});
+
+app.delete("/api/v1/integrations/audiotool/session", async (request, reply) => {
+  if (request.headers.origin !== config.APP_ORIGIN) throw Object.assign(new Error("Audiotool disconnect requires the configured loopback origin"), { statusCode: 403 });
+  await deleteAudiotoolSession(ownerId);
+  return reply.status(204).send();
+});
 
 app.get("/api/v1/projects", async () => ({ projects: await listProjects(ownerId) }));
 
@@ -55,8 +86,9 @@ app.post("/api/v1/projects/:projectId/assets", async (request, reply) => {
   await requireProject(ownerId, projectId);
   const part = await request.file();
   if (!part) throw Object.assign(new Error("Attach one WAV file"), { statusCode: 422 });
+  if (!new Set(["audio/wav", "audio/x-wav", "audio/wave"]).has(part.mimetype)) throw Object.assign(new Error("Only WAV uploads are supported in this milestone"), { statusCode: 415 });
   const buffer = await part.toBuffer();
-  const decoded = decodeWav(buffer);
+  const decoded = decodeWav(buffer, { maxDurationSeconds: config.MAX_SOURCE_SECONDS });
   const stored = await storeImmutableAudio(ownerId, projectId, buffer);
   const id = await insertAsset({ ownerId, projectId, name: part.filename.slice(0, 160), hash: stored.hash, path: stored.path, durationSeconds: decoded.durationSeconds, sampleRate: decoded.sampleRate, channels: decoded.channels.length, provenance: "User supplied in the loopback development session" });
   return reply.status(201).send({ asset: { id, name: part.filename, durationSeconds: decoded.durationSeconds, sampleRate: decoded.sampleRate, channels: decoded.channels.length, readiness: "ready" } });
@@ -84,7 +116,16 @@ app.post("/api/v1/projects/:projectId/generations", async (request, reply) => {
 app.post("/api/v1/projects/:projectId/revisions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   const project = await requireProject(ownerId, projectId);
-  const body = z.object({ direction: z.string().trim().min(3).max(1_000), baseRevisionId: idSchema, expectedHeadRevisionId: idSchema, protectedTrackIds: z.array(z.string()).default(["melody"]) }).parse(request.body);
+  const body = z.object({
+    direction: z.string().trim().min(3).max(1_000),
+    baseRevisionId: idSchema,
+    expectedHeadRevisionId: idSchema,
+    protectedTrackIds: z.tuple([z.literal("melody")]).default(["melody"]),
+    sectionId: z.literal("groove").default("groove")
+  }).parse(request.body);
+  if (!/drum/i.test(body.direction) || !/simpl|less|space|restrain/i.test(body.direction)) {
+    throw Object.assign(new Error("This version supports only simplifying drums in Groove while protecting the melody"), { statusCode: 422 });
+  }
   if (project.currentRevisionId !== body.expectedHeadRevisionId) throw Object.assign(new Error("Current version changed; refresh before revising"), { statusCode: 409 });
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createJob({ ownerId, projectId, kind: "revision", idempotencyKey, request: body, baseRevisionId: body.baseRevisionId, expectedHeadRevisionId: body.expectedHeadRevisionId });
@@ -99,7 +140,8 @@ app.get("/api/v1/jobs/:jobId", async (request) => {
 app.post("/api/v1/jobs/:jobId/cancel", async (request, reply) => {
   const { jobId } = z.object({ jobId: idSchema }).parse(request.params);
   await cancelJob(ownerId, jobId);
-  return reply.status(202).send({ jobId, cancellationRequested: true });
+  const snapshot = await jobSnapshot(ownerId, jobId);
+  return reply.status(snapshot.state === "cancelled" ? 200 : 202).send({ jobId, state: snapshot.state });
 });
 
 app.get("/api/v1/projects/:projectId/versions", async (request) => {

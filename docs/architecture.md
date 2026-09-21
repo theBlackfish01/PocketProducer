@@ -15,7 +15,7 @@ PostgreSQL owns users, projects, assets, jobs, ordered job events, effects, immu
 5. Measured duration, peak, RMS and non-silent ratio remain separate from any Gemini opinion.
 6. The worker commits a new immutable revision transactionally and advances the project head only when the expected head still matches.
 
-The first failed live graph attempt is retained as a failed effect and its checkpoint token usage was reconciled. External effects use job-scoped idempotency keys; Gemini will not repeat an ambiguous prior effect simply to hide a failure.
+The first failed live graph attempt is retained as a failed effect and its checkpoint token usage was reconciled. External effects move through explicit reserved/dispatched/terminal states under a transactional shared budget lock. Gemini and Audiotool do not repeat an ambiguous prior effect simply to hide a failure.
 
 ## Revision contract
 
@@ -28,5 +28,5 @@ This build binds API, web and PostgreSQL ports to loopback. Development ownershi
 ## Integration boundaries
 
 - **Gemini:** the adapter sends real WAV bytes when configured, requests structured JSON, stores usage and keeps subjective observations separate from measurements. Two purposes are implemented: source analysis and preview critique. One deterministic drum-repair pass is the ceiling.
-- **Nexus/Audiotool:** the installed node SDK can create an offline document but is not an established standalone renderer. Export currently maps tempo, sections and four editable stems into `nexus-stem-v1`; live project creation is not claimed.
-- **FFmpeg:** absent. WAV is the honest supported upload format until a local executable is configured and tested.
+- **Nexus/Audiotool:** the SDK is not a renderer. `nexus-stem-v2` validates a four-track offline document, while the live boundary implements browser PKCE, encrypted owner-bound worker tokens, refresh persistence, project/upload checkpoints, bounded readiness polling, synchronized insertion and a real `dawUrl`. Remote mutation stays disabled until app registration and explicit user consent; see `docs/nexus-integration.md`.
+- **FFmpeg:** absent and not required for the WAV milestone. WAV remains the honest supported format until another bounded decoder is configured and tested.

@@ -23,13 +23,13 @@ The cover art is generated with CSS shapes and grain, so no unlicensed visual as
 
 The generated Slider wrapper was intentionally amended to forward the consumer's accessible name to the actual native range input emitted by Base UI. This was found by inspecting the finished DOM; the browser snapshot now exposes “Seek through the current version” and “Playback volume”.
 
-Music-specific composition lives above primitives: `AudioPlayer`, source pills/tray, arrangement sections, the direction composer and version comparison. wavesurfer.js receives the same `HTMLAudioElement` used by the transport and has interaction disabled, avoiding competing playback clocks.
+Music-specific composition lives above primitives: `AudioPlayer`, source pills/tray, arrangement sections, the direction composer and version comparison. wavesurfer.js receives the same `HTMLAudioElement` used by the transport and has interaction disabled, avoiding competing playback clocks. Playback identity is explicit (`source` or immutable `revision` plus ID); source and A/B audition cannot silently leave the transport pointing at the wrong bytes.
 
 ## Responsive and accessibility behavior
 
 At tablet width the left session rail becomes a Base UI sheet. Below 700px the player stacks, the section strip scrolls horizontally, the composer stays in document flow, and bottom padding includes `env(safe-area-inset-bottom)`. Reduced-motion media queries collapse animation and transition durations to `0.01ms`.
 
-Verified behaviors and evidence are in `docs/testing.md`: WCAG A/AA automated audit, keyboard-opened sheet and dialog, focus return, named seek controls, A/B selection, mobile focused-input visibility and desktop/mobile screenshots.
+Verified behaviors and evidence are in `docs/testing.md`: computed 4.5:1 text/action contrast assertions, keyboard-opened sheet and dialog, focus return, named source/version seek controls, A/B selection and restore, reduced-motion emulation, mobile focused-input visibility and desktop/mobile screenshots. Physical-device verification remains separate.
 
 ## Upgrade procedure
 

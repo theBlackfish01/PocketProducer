@@ -46,6 +46,6 @@ const evidence = {
   analyses: analysisResult.rows,
   nexus: { state: exportResult.rows[0]?.state ?? "missing", editableParts: exportResult.rows[0]?.fidelity.parts?.length ?? 0 }
 };
-if (!evidence.currentIsProtectedRevision || !evidence.immutableChain || evidence.nexus.state !== "needs_auth" || evidence.nexus.editableParts !== 4) throw new Error("Demo state did not meet the milestone evidence checks");
+if (!evidence.currentIsProtectedRevision || !evidence.immutableChain || evidence.nexus.state !== "awaiting_authorization" || evidence.nexus.editableParts !== 4) throw new Error("Demo state did not meet the milestone evidence checks");
 process.stdout.write(`${JSON.stringify(evidence, null, 2)}\n`);
 await closePool();

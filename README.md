@@ -31,11 +31,11 @@ pnpm test:integration
 pnpm test:e2e
 pnpm build
 pnpm test:live
-pnpm exec tsx scripts/verify-demo.ts
-pnpm exec tsx scripts/audit-usage.ts
+pnpm verify:demo
+pnpm budget:status
 ```
 
-`pnpm test:live` makes a bounded paid OpenAI Deep Agent call. The ordinary test suite uses fixtures and does not require provider keys.
+`pnpm test:live` is the opt-in integrated source-Gemini → OpenAI Deep Agent → render → preview-Gemini verification. It sends an owned synthetic WAV and generated preview to external providers and can incur bounded usage; run it only with explicit approval. The ordinary suite clears provider keys and is fully offline.
 
 ## What is implemented
 
@@ -45,7 +45,7 @@ pnpm exec tsx scripts/audit-usage.ts
 - Canonical tick composition, 48 kHz deterministic WAV renderer, per-part stems, measured audio facts and private content-addressed storage.
 - Protected drum simplification, canonical melody and artifact checks, immutable history, A/B audition and explicit restore.
 - Gemini source/preview adapter with structured critique, usage capture, one-repair ceiling and an honest unavailable state.
-- Nexus node-adapter probe and a four-part editable-stem manifest. Live Audiotool mutation remains blocked on app registration/OAuth.
+- Nexus validated four-track mapping, browser PKCE/callback, encrypted owner-bound worker session and resumable four-stem export adapter. Live mutation remains blocked on app registration/OAuth; see [docs/USER-SETUP.md](docs/USER-SETUP.md).
 
 See [docs/STATUS.md](docs/STATUS.md), [docs/architecture.md](docs/architecture.md), [docs/design-system.md](docs/design-system.md), and [docs/testing.md](docs/testing.md).
 

@@ -93,7 +93,18 @@ export interface RenderResult {
   waveformPeaks: number[];
 }
 
-export async function renderComposition(composition: Composition, outputDirectory: string, assets: RenderAsset[]): Promise<RenderResult> {
+export interface RenderOptions {
+  signal?: AbortSignal;
+  checkpoint?: () => Promise<void>;
+}
+
+async function renderCheckpoint(options: RenderOptions): Promise<void> {
+  if (options.signal?.aborted) throw Object.assign(new Error("Rendering aborted"), { code: "CANCELLED" });
+  await options.checkpoint?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+export async function renderComposition(composition: Composition, outputDirectory: string, assets: RenderAsset[], options: RenderOptions = {}): Promise<RenderResult> {
   const secondsPerTick = 60 / composition.tempoBpm / composition.ppq;
   const durationSeconds = composition.durationTicks * secondsPerTick + composition.tailSeconds;
   const frames = Math.ceil(durationSeconds * SAMPLE_RATE);
@@ -104,6 +115,7 @@ export async function renderComposition(composition: Composition, outputDirector
 
   await mkdir(outputDirectory, { recursive: true });
   for (const track of composition.tracks) {
+    await renderCheckpoint(options);
     const left = new Float32Array(frames);
     const right = new Float32Array(frames);
     for (const item of track.events) {
@@ -133,33 +145,44 @@ export async function renderComposition(composition: Composition, outputDirector
         left[startFrame + i] = (left[startFrame + i] ?? 0) + (sample[i] ?? 0) * leftGain * fade;
         right[startFrame + i] = (right[startFrame + i] ?? 0) + (sample[i] ?? 0) * rightGain * fade;
       }
+      if (item.startTick % (composition.ppq * 4) === 0) await renderCheckpoint(options);
     }
     const stemPath = join(outputDirectory, `${track.id}.wav`);
     await writeFile(stemPath, encodeWav(left, right, SAMPLE_RATE));
     stems[track.id] = stemPath;
-    for (let i = 0; i < frames; i += 1) {
-      masterLeft[i] = (masterLeft[i] ?? 0) + (left[i] ?? 0);
-      masterRight[i] = (masterRight[i] ?? 0) + (right[i] ?? 0);
+    for (let start = 0; start < frames; start += 131_072) {
+      const end = Math.min(frames, start + 131_072);
+      for (let i = start; i < end; i += 1) {
+        masterLeft[i] = (masterLeft[i] ?? 0) + (left[i] ?? 0);
+        masterRight[i] = (masterRight[i] ?? 0) + (right[i] ?? 0);
+      }
+      await renderCheckpoint(options);
     }
   }
 
   let peak = 0;
   let squareSum = 0;
   let nonSilent = 0;
-  for (let i = 0; i < frames; i += 1) {
-    peak = Math.max(peak, Math.abs(masterLeft[i] ?? 0), Math.abs(masterRight[i] ?? 0));
+  for (let start = 0; start < frames; start += 131_072) {
+    const end = Math.min(frames, start + 131_072);
+    for (let i = start; i < end; i += 1) peak = Math.max(peak, Math.abs(masterLeft[i] ?? 0), Math.abs(masterRight[i] ?? 0));
+    await renderCheckpoint(options);
   }
   const safety = peak > 0.92 ? 0.92 / peak : 1;
   const buckets = 240;
   const waveformPeaks = Array.from({ length: buckets }, () => 0);
-  for (let i = 0; i < frames; i += 1) {
-    masterLeft[i] = Math.tanh((masterLeft[i] ?? 0) * safety);
-    masterRight[i] = Math.tanh((masterRight[i] ?? 0) * safety);
-    const value = Math.max(Math.abs(masterLeft[i] ?? 0), Math.abs(masterRight[i] ?? 0));
-    squareSum += value * value;
-    if (value > 0.0005) nonSilent += 1;
-    const bucket = Math.min(buckets - 1, Math.floor(i / frames * buckets));
-    waveformPeaks[bucket] = Math.max(waveformPeaks[bucket] ?? 0, value);
+  for (let start = 0; start < frames; start += 131_072) {
+    const end = Math.min(frames, start + 131_072);
+    for (let i = start; i < end; i += 1) {
+      masterLeft[i] = Math.tanh((masterLeft[i] ?? 0) * safety);
+      masterRight[i] = Math.tanh((masterRight[i] ?? 0) * safety);
+      const value = Math.max(Math.abs(masterLeft[i] ?? 0), Math.abs(masterRight[i] ?? 0));
+      squareSum += value * value;
+      if (value > 0.0005) nonSilent += 1;
+      const bucket = Math.min(buckets - 1, Math.floor(i / frames * buckets));
+      waveformPeaks[bucket] = Math.max(waveformPeaks[bucket] ?? 0, value);
+    }
+    await renderCheckpoint(options);
   }
   const previewPath = join(outputDirectory, "preview.wav");
   await mkdir(dirname(previewPath), { recursive: true });
@@ -176,4 +199,3 @@ export async function renderComposition(composition: Composition, outputDirector
     waveformPeaks
   };
 }
-

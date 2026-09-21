@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": { ".": "./src/worker.ts" },
   "scripts": {
     "dev": "tsx watch src/worker.ts",
     "start": "tsx src/worker.ts"
@@ -11,4 +12,3 @@
     "@pocket/core": "workspace:*"
   }
 }
-

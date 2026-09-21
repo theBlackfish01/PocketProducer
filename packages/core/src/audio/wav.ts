@@ -13,13 +13,15 @@ export interface AudioMeasurements {
 }
 
 function assertRange(buffer: Buffer, offset: number, bytes: number): void {
-  if (offset < 0 || offset + bytes > buffer.length) throw new Error("Malformed WAV chunk bounds");
+  if (offset < 0 || bytes < 0 || offset + bytes > buffer.length) throw Object.assign(new Error("Malformed WAV chunk bounds"), { statusCode: 422, code: "MALFORMED_WAV" });
 }
 
-export function decodeWav(buffer: Buffer): DecodedWav {
+export function decodeWav(buffer: Buffer, limits: { maxDurationSeconds?: number; maxSampleRate?: number } = {}): DecodedWav {
   if (buffer.length < 44 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
-    throw new Error("Only RIFF/WAVE audio is accepted until FFmpeg is configured");
+    throw Object.assign(new Error("Only RIFF/WAVE audio is accepted until FFmpeg is configured"), { statusCode: 415, code: "UNSUPPORTED_AUDIO_FORMAT" });
   }
+  const declaredRiffSize = buffer.readUInt32LE(4) + 8;
+  if (declaredRiffSize > buffer.length) throw Object.assign(new Error("WAV RIFF length exceeds the uploaded bytes"), { statusCode: 422, code: "MALFORMED_WAV" });
   let offset = 12;
   let format = 0;
   let channels = 0;
@@ -33,6 +35,7 @@ export function decodeWav(buffer: Buffer): DecodedWav {
     const body = offset + 8;
     assertRange(buffer, body, size);
     if (id === "fmt ") {
+      if (size < 16) throw Object.assign(new Error("WAV format chunk is too short"), { statusCode: 422, code: "MALFORMED_WAV" });
       format = buffer.readUInt16LE(body);
       channels = buffer.readUInt16LE(body + 2);
       sampleRate = buffer.readUInt32LE(body + 4);
@@ -44,18 +47,23 @@ export function decodeWav(buffer: Buffer): DecodedWav {
     }
     offset = body + size + (size % 2);
   }
-  if (![1, 3].includes(format) || ![1, 2].includes(channels) || sampleRate < 8_000 || sampleRate > 192_000 || dataOffset < 0) {
-    throw new Error("Unsupported WAV format; use mono/stereo PCM16 or Float32 WAV");
+  if (![1, 3].includes(format) || ![1, 2].includes(channels) || sampleRate < 8_000 || sampleRate > (limits.maxSampleRate ?? 192_000) || dataOffset < 0) {
+    throw Object.assign(new Error("Unsupported WAV format; use mono/stereo PCM16 or Float32 WAV at 8–192 kHz"), { statusCode: 415, code: "UNSUPPORTED_WAV_ENCODING" });
   }
-  if ((format === 1 && bits !== 16) || (format === 3 && bits !== 32)) throw new Error("Unsupported WAV bit depth");
+  if ((format === 1 && bits !== 16) || (format === 3 && bits !== 32)) throw Object.assign(new Error("Unsupported WAV bit depth"), { statusCode: 415, code: "UNSUPPORTED_WAV_ENCODING" });
   const bytesPerSample = bits / 8;
+  const blockAlign = bytesPerSample * channels;
+  if (dataLength % blockAlign !== 0) throw Object.assign(new Error("WAV data is not aligned to complete sample frames"), { statusCode: 422, code: "MALFORMED_WAV" });
   const frames = Math.floor(dataLength / (bytesPerSample * channels));
-  if (frames <= 0 || frames > sampleRate * 300) throw new Error("WAV is empty or exceeds five minutes");
+  const maxDurationSeconds = limits.maxDurationSeconds ?? 300;
+  if (frames <= 0 || frames > sampleRate * maxDurationSeconds) throw Object.assign(new Error(`WAV is empty or exceeds ${maxDurationSeconds} seconds`), { statusCode: 422, code: "WAV_DURATION_OUT_OF_RANGE" });
   const result = Array.from({ length: channels }, () => new Float32Array(frames));
   for (let frame = 0; frame < frames; frame += 1) {
     for (let channel = 0; channel < channels; channel += 1) {
       const position = dataOffset + (frame * channels + channel) * bytesPerSample;
-      result[channel]![frame] = format === 1 ? buffer.readInt16LE(position) / 32_768 : buffer.readFloatLE(position);
+      const value = format === 1 ? buffer.readInt16LE(position) / 32_768 : buffer.readFloatLE(position);
+      if (!Number.isFinite(value)) throw Object.assign(new Error("Float32 WAV contains a non-finite sample"), { statusCode: 422, code: "NON_FINITE_WAV_SAMPLE" });
+      result[channel]![frame] = value;
     }
   }
   return { sampleRate, channels: result, frames, durationSeconds: frames / sampleRate };

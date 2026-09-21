@@ -1,40 +1,68 @@
 # Verification record
 
-Updated 2026-09-20. Commands were run on Windows with Node 22.14, pnpm 11.19, PostgreSQL 17.6 in Docker, Chrome and Playwright Chromium 1243.
+Updated 2026-09-21. Windows, Node 22.14, pnpm 11.19, PostgreSQL 17.6 in Docker and Playwright Chromium.
 
-## Automated results
+## Isolation contract
 
-- `tsc -b`: pass under strict TypeScript 5.9.3.
-- `eslint . --max-warnings=0`: pass.
-- Vitest unit: 3 files, 5 tests passed. Covers canonical sections, protected melody, scoped drum simplification, deterministic/non-silent PCM and honest Gemini/Nexus boundaries.
-- Vitest PostgreSQL integration: 1 file, 3 tests passed. Covers idempotency mismatch, duplicate reuse, expired-lease worker recovery/fencing, failed and cancelled revision jobs and cross-owner denial.
-- Playwright Chromium: 2 tests passed. Covers page/create-or-existing path, named sliders, real audio play/pause state, version dialog/focus return, phone sheet and focused composer visibility.
-- Vite production build: pass, 2,142 modules; main JS approximately 386 kB / 125 kB gzip before later small changes.
-- axe-core 4.12.1 WCAG A/AA audit: 16 passes, 0 incomplete, 0 violations after labeling the hidden upload input.
+Ordinary tests force `APP_ENV=test`, a database whose name ends in `_test`, `.local/test-audio`, `FIXTURE_MODE=true`, and empty OpenAI/Gemini environment values. Configuration refuses the normal development database/audio root or non-fixture test execution. Mock provider tests use the real transactional effect ledger but never construct a network client.
 
-## Integrated live proof
+`pnpm test:e2e:prepare` truncates only the dedicated test database, then recreates the deterministic owned WAV/demo. It never touches the development database.
 
-- OpenAI Deep Agent succeeded on `gpt-6-astra`; the integrated job planned and rendered **Sunroom Haze** from natural language plus the owned source.
-- Revision 1 and 2 are both 44.636375 seconds, 48 kHz stereo, 8,570,228 bytes and non-silent. Their SHA-256 hashes differ.
-- Revision 2 removed exactly six Groove hi-hats. Protected melody structure hash is `2b9612658f342e00ad9e16e85f193126642bf7ebde5fe9d9c8f99bfb9cc3d973`; protected melody stem SHA-256 is `43a991f3f1cacb22a311acd8d2344a69867b58657c0b85ecfc72b666f9e78ecf` in both versions.
-- Rendered preview byte-range request returned HTTP 206 with the expected 128-byte content range.
-- Explicit restore was exercised from v2 to v1 and back to v2; both immutable rows remained.
-- Nexus export is `needs_auth` and contains four `editable-stem` parts. No remote Audiotool project is claimed.
-- Source and preview analysis rows are stored as `unavailable`; Gemini was not called because no key is configured.
+## Latest automated results
 
-Re-run the artifact assertions with `pnpm exec tsx scripts/verify-demo.ts` and spend reconciliation with `pnpm exec tsx scripts/audit-usage.ts`.
+| Command | Result | Coverage highlights |
+| --- | --- | --- |
+| `pnpm lint` | pass | Strict typed ESLint, no warnings. |
+| `pnpm typecheck` | pass | All TypeScript project references. |
+| `pnpm test` | 5 files / 14 tests pass | Canonical arrangement, energy/export contract, deterministic render, malformed WAVs, bounded recorder cleanup, Gemini unavailable, forced repair success/failure, OAuth denial/state branches, refresh persistence failure and Nexus mapping/mock resume. |
+| `pnpm test:integration` | 1 file / 8 tests pass | Owner/project idempotency, queued/running cancellation, lease recovery/fencing, DB-time stale commit rejection, expected-head race, identical composition reuse, encrypted Audiotool session, Gemini ledger/cache/malformed/timeout/budget. |
+| `pnpm test:e2e` | 2 Chromium tests pass | Source audition, labeled seek/volume, real Play/Pause, unsupported revision rejection, real durable revision, A/B audition, Keep current, explicit restore, dialog/sheet focus return, phone focused composer, reduced motion. |
+| `pnpm build` | pass | Production web bundle plus all TypeScript projects. Audiotool is lazy-loaded at connection time. |
+| `pnpm verify:demo` | pass | Two immutable 44.636 s playable WAVs, distinct preview hashes, six scoped hat removals, byte-identical protected melody stems and four editable Nexus parts. |
+
+Playwright’s Windows service teardown can leave the parent command waiting after both tests report `ok`; no service ports remain open. The tests themselves passed. This is tracked as harness cleanup, not a product failure.
+
+## Required behavioral evidence
+
+- Queued cancel is immediately terminal and emits one cancellation event. Running cancel settles through the current attempt; stale attempts cannot append progress or overwrite terminal state.
+- Expired leases are reclaimed with a new generation/attempt. Old attempts fail writes.
+- Successful Gemini mock output is cached and billed once. A timeout becomes `uncertain` and a second request is withheld. Malformed schema degrades to `failed`; a job at its cost ceiling never dispatches the mock.
+- Source descriptors contain asset identity, measured facts, bounded observations and uncertainty; producer workspace text treats them as untrusted data.
+- Preview critique is keyed to the exact WAV hash. A repaired candidate reruns deterministic signal/melody checks and is stored as `uncritiqued` when the one-pass Gemini budget is exhausted.
+- A forced repair render failure returns the earlier composition/render unchanged.
+- Four-stem offline Nexus validation creates four audio tracks and regions. Mock live adapter resumes the known drums sample, uploads three remaining stems, inserts all four and stops the synced document.
+- Audio DTOs expose URLs/peaks and provenance, never server storage paths.
 
 ## Visual evidence
 
-- [Created desktop Listening Room](testing/evidence/listening-room-created-desktop.png)
-- [Phone Listening Room](testing/evidence/listening-room-mobile.png)
-- [Initial/empty desktop state](testing/evidence/listening-room-desktop.png)
+Playwright writes current representative images to ignored local evidence:
 
-The final manual browser pass also verified: no Vite overlay, meaningful body content, keyboard opening/closing of the mobile sheet, focus returning to the sheet and compare triggers, reduced-motion emulation (`0.00001s` transition), named seek/volume inputs and actual WAV playback advancing the seek value.
+- `.local/evidence/listening-room-desktop.png`
+- `.local/evidence/listening-room-mobile.png`
 
-## Not verified here
+The final pass must inspect both files, not merely assert their existence. Desktop and 390×844 emulation are not substitutes for physical iOS/Android keyboard/safe-area verification.
 
-- Physical iOS/Android keyboard and notched-device safe area; the 390×844 focused-input and CSS safe-area behavior passed in Chromium emulation.
-- Live Gemini listening, because no Gemini key is present.
-- Live Audiotool OAuth/project mutation, because app registration is absent.
-- Non-WAV uploads, because FFmpeg is absent.
+Both final captures were visually inspected on 2026-09-21. The desktop image is free of transient dialog overlays; the mobile image preserves the selected ivory/forest/orange Listening Room hierarchy and keeps the core listen/revise/compare controls reachable.
+
+The current revision audio is the ignored local artifact whose SHA-256 is `8db8389af5e66634ea8fec21b1a0fa275e4984eb82b9d9c74ab8346463641894`; decoded evidence is 44.636375 seconds, 48 kHz stereo, peak 0.452606 and RMS 0.057934. The original preview hash is `0a6e89a88036655f23b4574bcbba182147c377797ed20cc298d1311016ccbeeb`.
+
+## Live-provider evidence
+
+The configured models are `gpt-6-astra` and `gemini-3-flash-preview`. `pnpm budget:status` reports US$0.226660 recorded OpenAI actual cost and US$0 Gemini cost against a US$5 overall / US$0.25 job cap.
+
+The new integrated live runner has not dispatched. The host denied the execution request because sending the deterministic owned source, generated preview and bounded prompts to external APIs requires an additional explicit approval. The rejected attempt did not create a provider effect or spend. Once approved, `pnpm test:live` will:
+
+1. reuse its stored success evidence if already complete;
+2. otherwise create one marked private test project and 0.75-second synthesized owned WAV;
+3. run source Gemini analysis → OpenAI Deep Agent → real render → preview Gemini critique through the worker/effect ledger;
+4. reload the snapshot and prove no additional provider effect was created;
+5. print only hashes, typed statuses, models, timing and reconciled costs.
+
+It will not retry a terminal failed/uncertain marked run automatically.
+
+## Not yet verified
+
+- Live Gemini source/preview calls (explicit external transmission/spend approval pending).
+- Live Audiotool OAuth, upload grant and Studio editability (registration/client ID and consent pending).
+- Physical phone/notched-device behavior.
+- Non-WAV decoding; intentionally unsupported.

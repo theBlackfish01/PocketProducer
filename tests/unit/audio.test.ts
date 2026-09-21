@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { decodeWav, renderComposition, validateComposition } from "@pocket/core";
+import { decodeWav, encodeWav, renderComposition, validateComposition } from "@pocket/core";
 
 const tinyComposition = validateComposition({
   schemaVersion: 1,
@@ -39,5 +39,18 @@ describe("deterministic WAV renderer", () => {
     expect(first.rms).toBeGreaterThan(0.001);
     expect(first.nonSilentRatio).toBeGreaterThan(0.01);
     expect(createHash("sha256").update(firstBytes).digest("hex")).toBe(createHash("sha256").update(secondBytes).digest("hex"));
+  });
+
+  it("rejects malformed, unsupported and over-duration WAV input with typed client errors", () => {
+    const valid = encodeWav(new Float32Array(4_800), new Float32Array(4_800), 48_000);
+    const truncated = Buffer.from(valid);
+    truncated.writeUInt32LE(valid.length + 500, 4);
+    expect(() => decodeWav(truncated)).toThrow(expect.objectContaining({ code: "MALFORMED_WAV", statusCode: 422 }));
+
+    const unsupported = Buffer.from(valid);
+    unsupported.writeUInt16LE(24, 34);
+    expect(() => decodeWav(unsupported)).toThrow(expect.objectContaining({ code: "UNSUPPORTED_WAV_ENCODING", statusCode: 415 }));
+
+    expect(() => decodeWav(valid, { maxDurationSeconds: 0.05 })).toThrow(expect.objectContaining({ code: "WAV_DURATION_OUT_OF_RANGE", statusCode: 422 }));
   });
 });

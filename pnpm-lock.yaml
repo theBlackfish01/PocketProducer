@@ -17,6 +17,9 @@ importers:
       '@pocket/core':
         specifier: workspace:*
         version: link:packages/core
+      '@pocket/worker':
+        specifier: workspace:*
+        version: link:apps/worker
       '@types/node':
         specifier: 24.7.0
         version: 24.7.0
@@ -59,6 +62,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@audiotool/nexus':
+        specifier: 0.0.17
+        version: 0.0.17
       '@base-ui/react':
         specifier: 1.8.0
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

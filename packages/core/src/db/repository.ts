@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { canonicalHash, validateComposition, type Composition } from "../domain/composition.js";
 import type { AudioAnalysis } from "../providers/gemini.js";
+import { getConfig } from "../config.js";
 import { getPool } from "./pool.js";
 
 export const DEV_SUBJECT = "dev-loopback";
@@ -25,9 +26,35 @@ export interface JobRecord {
   request: Record<string, unknown>;
   baseRevisionId: string | null;
   expectedHeadRevisionId: string | null;
+  leaseOwner: string;
   leaseGeneration: number;
+  attemptId: string;
+  leaseUntil: string;
+  deadlineAt: string;
   attempts: number;
   cancellationRequestedAt: string | null;
+}
+
+export type JobControlCode = "CANCELLED" | "LEASE_LOST" | "DEADLINE_EXCEEDED";
+
+export class JobControlError extends Error {
+  readonly code: JobControlCode;
+  constructor(code: JobControlCode, message: string) {
+    super(message);
+    this.name = "JobControlError";
+    this.code = code;
+  }
+}
+
+async function insertJobEvent(client: pg.PoolClient, jobId: string, eventType: string, payload: Record<string, unknown>): Promise<number> {
+  const allocated = await client.query<{ sequence: number }>(
+    "UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1 RETURNING next_event_sequence-1 AS sequence",
+    [jobId]
+  );
+  const sequence = Number(allocated.rows[0]?.sequence);
+  if (!Number.isInteger(sequence)) throw new Error("Unable to allocate job event sequence");
+  await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,$2,$3,$4)", [jobId, sequence, eventType, payload]);
+  return sequence;
 }
 
 export async function devOwnerId(): Promise<string> {
@@ -64,24 +91,53 @@ export async function createJob(input: {
   baseRevisionId?: string | null; expectedHeadRevisionId?: string | null;
 }): Promise<{ id: string; duplicate: boolean }> {
   const pool = getPool();
-  const requestHash = canonicalHash(input.request);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT id FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [input.projectId, input.ownerId]);
-    const existing = await client.query<{ id: string; request_hash: string }>("SELECT id,request_hash FROM job WHERE owner_id=$1 AND kind=$2 AND idempotency_key=$3", [input.ownerId, input.kind, input.idempotencyKey]);
+    const projectResult = await client.query<{ current_revision_id: string | null }>(
+      "SELECT current_revision_id FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE",
+      [input.projectId, input.ownerId]
+    );
+    const project = projectResult.rows[0];
+    if (!project) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
+
+    if (input.baseRevisionId) {
+      const base = await client.query("SELECT 1 FROM revision WHERE id=$1 AND owner_id=$2 AND project_id=$3", [input.baseRevisionId, input.ownerId, input.projectId]);
+      if (base.rowCount !== 1) throw Object.assign(new Error("Base revision is not part of this project"), { statusCode: 422 });
+    }
+    const sourceAssetId = typeof input.request.sourceAssetId === "string" ? input.request.sourceAssetId : undefined;
+    if (sourceAssetId) {
+      const source = await client.query("SELECT 1 FROM asset WHERE id=$1 AND owner_id=$2 AND project_id=$3 AND kind='source' AND readiness='ready'", [sourceAssetId, input.ownerId, input.projectId]);
+      if (source.rowCount !== 1) throw Object.assign(new Error("Source asset is not available in this project"), { statusCode: 422 });
+    }
+
+    const expectedHead = input.expectedHeadRevisionId === undefined ? project.current_revision_id : input.expectedHeadRevisionId;
+    const requestHash = canonicalHash({
+      ownerId: input.ownerId,
+      projectId: input.projectId,
+      kind: input.kind,
+      request: input.request,
+      baseRevisionId: input.baseRevisionId ?? null,
+      expectedHeadRevisionId: expectedHead ?? null
+    });
+    const existing = await client.query<{ id: string; request_hash: string }>(
+      "SELECT id,request_hash FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND idempotency_key=$4",
+      [input.ownerId, input.projectId, input.kind, input.idempotencyKey]
+    );
     if (existing.rows[0]) {
       if (existing.rows[0].request_hash !== requestHash) throw Object.assign(new Error("Idempotency key reused with a different request"), { statusCode: 409 });
       await client.query("COMMIT");
       return { id: existing.rows[0].id, duplicate: true };
     }
+    const deadlineSeconds = getConfig().MAX_JOB_SECONDS;
     const result = await client.query<{ id: string }>(
-      "INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,base_revision_id,expected_head_revision_id,state) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued') RETURNING id",
-      [input.ownerId, input.projectId, input.kind, input.idempotencyKey, requestHash, input.request, input.baseRevisionId ?? null, input.expectedHeadRevisionId ?? null]
+      `INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,base_revision_id,expected_head_revision_id,state,deadline_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued',now()+make_interval(secs=>$9)) RETURNING id`,
+      [input.ownerId, input.projectId, input.kind, input.idempotencyKey, requestHash, input.request, input.baseRevisionId ?? null, expectedHead ?? null, deadlineSeconds]
     );
     const id = result.rows[0]?.id;
     if (!id) throw new Error("Job insert failed");
-    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,1,'accepted',$2)", [id, { message: "Request accepted" }]);
+    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,1,'accepted',$2)", [id, { message: "Request accepted", expectedHeadRevisionId: expectedHead ?? null }]);
     await client.query("INSERT INTO outbox(job_id,topic) VALUES($1,$2)", [id, `job.${input.kind}`]);
     await client.query("COMMIT");
     return { id, duplicate: false };
@@ -99,92 +155,60 @@ export async function dispatchOutbox(): Promise<number> {
 }
 
 export async function claimNextJob(workerId: string): Promise<JobRecord | null> {
+  const leaseSeconds = getConfig().JOB_LEASE_SECONDS;
   const result = await getPool().query(
     `WITH candidate AS (
        SELECT id FROM job
-       WHERE (state='queued' OR (state='running' AND lease_until < now()))
+       WHERE (state='queued' OR (state IN ('running','cancel_requested') AND lease_until < now()))
          AND EXISTS (SELECT 1 FROM outbox WHERE outbox.job_id=job.id AND delivered_at IS NOT NULL)
        ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
-     ) UPDATE job SET state='running',stage=CASE WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
-       lease_owner=$1,lease_generation=lease_generation+1,lease_until=now()+interval '45 seconds',attempts=attempts+1,updated_at=now()
+     ) UPDATE job SET state=CASE WHEN job.state='cancel_requested' THEN 'cancel_requested' ELSE 'running' END,
+       stage=CASE WHEN job.state='cancel_requested' THEN NULL WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
+       lease_owner=$1,lease_generation=lease_generation+1,attempt_id=gen_random_uuid(),lease_until=now()+make_interval(secs=>$2),attempts=attempts+1,updated_at=now()
      WHERE id=(SELECT id FROM candidate)
-     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_generation,attempts,cancellation_requested_at`,
-    [workerId]
+     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_owner,lease_generation,attempt_id,lease_until,deadline_at,attempts,cancellation_requested_at`,
+    [workerId, leaseSeconds]
   );
   const row = result.rows[0];
   return row ? {
     id: String(row.id), ownerId: String(row.owner_id), projectId: String(row.project_id), kind: row.kind as JobRecord["kind"],
     state: String(row.state), stage: row.stage ? String(row.stage) : null, request: row.request as Record<string, unknown>,
     baseRevisionId: row.base_revision_id ? String(row.base_revision_id) : null, expectedHeadRevisionId: row.expected_head_revision_id ? String(row.expected_head_revision_id) : null,
-    leaseGeneration: Number(row.lease_generation), attempts: Number(row.attempts), cancellationRequestedAt: row.cancellation_requested_at ? new Date(row.cancellation_requested_at).toISOString() : null
+    leaseOwner: String(row.lease_owner), leaseGeneration: Number(row.lease_generation), attemptId: String(row.attempt_id),
+    leaseUntil: new Date(row.lease_until).toISOString(), deadlineAt: new Date(row.deadline_at).toISOString(),
+    attempts: Number(row.attempts), cancellationRequestedAt: row.cancellation_requested_at ? new Date(row.cancellation_requested_at).toISOString() : null
+  } : null;
+}
+
+export async function claimJobById(jobId: string, workerId: string): Promise<JobRecord | null> {
+  const leaseSeconds = getConfig().JOB_LEASE_SECONDS;
+  const result = await getPool().query(
+    `UPDATE job SET state=CASE WHEN state='cancel_requested' THEN 'cancel_requested' ELSE 'running' END,
+       stage=CASE WHEN state='cancel_requested' THEN NULL WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
+       lease_owner=$2,lease_generation=lease_generation+1,attempt_id=gen_random_uuid(),lease_until=now()+make_interval(secs=>$3),attempts=attempts+1,updated_at=now()
+     WHERE id=$1 AND (state='queued' OR (state IN ('running','cancel_requested') AND lease_until<now()))
+       AND EXISTS (SELECT 1 FROM outbox WHERE outbox.job_id=job.id AND delivered_at IS NOT NULL)
+     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_owner,lease_generation,attempt_id,lease_until,deadline_at,attempts,cancellation_requested_at`,
+    [jobId, workerId, leaseSeconds]
+  );
+  const row = result.rows[0];
+  return row ? {
+    id: String(row.id), ownerId: String(row.owner_id), projectId: String(row.project_id), kind: row.kind as JobRecord["kind"],
+    state: String(row.state), stage: row.stage ? String(row.stage) : null, request: row.request as Record<string, unknown>,
+    baseRevisionId: row.base_revision_id ? String(row.base_revision_id) : null, expectedHeadRevisionId: row.expected_head_revision_id ? String(row.expected_head_revision_id) : null,
+    leaseOwner: String(row.lease_owner), leaseGeneration: Number(row.lease_generation), attemptId: String(row.attempt_id),
+    leaseUntil: new Date(row.lease_until).toISOString(), deadlineAt: new Date(row.deadline_at).toISOString(), attempts: Number(row.attempts),
+    cancellationRequestedAt: row.cancellation_requested_at ? new Date(row.cancellation_requested_at).toISOString() : null
   } : null;
 }
 
 export async function appendJobEvent(jobId: string, eventType: string, payload: Record<string, unknown>, stage?: string): Promise<void> {
-  await getPool().query(
-    `WITH next AS (SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM job_event WHERE job_id=$1)
-     INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT $1,sequence,$2,$3 FROM next`, [jobId, eventType, payload]
-  );
-  if (stage) await getPool().query("UPDATE job SET stage=$2,updated_at=now() WHERE id=$1", [jobId, stage]);
-}
-
-export async function heartbeat(job: JobRecord, workerId: string): Promise<boolean> {
-  const result = await getPool().query("UPDATE job SET lease_until=now()+interval '45 seconds',updated_at=now() WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND state='running'", [job.id, workerId, job.leaseGeneration]);
-  return result.rowCount === 1;
-}
-
-export async function isCancelled(job: JobRecord): Promise<boolean> {
-  const result = await getPool().query<{ state: string; cancellation_requested_at: Date | null }>("SELECT state,cancellation_requested_at FROM job WHERE id=$1", [job.id]);
-  return Boolean(result.rows[0]?.cancellation_requested_at) || result.rows[0]?.state === "cancel_requested";
-}
-
-export async function failJob(job: JobRecord, code: string, message: string): Promise<void> {
-  await getPool().query("UPDATE job SET state='failed',stage=NULL,error_code=$2,error_message=$3,lease_until=NULL,updated_at=now() WHERE id=$1 AND lease_generation=$4", [job.id, code, message.slice(0, 500), job.leaseGeneration]);
-  await appendJobEvent(job.id, "failed", { code, message: message.slice(0, 240) });
-}
-
-export async function cancelJob(ownerId: string, jobId: string): Promise<void> {
-  const result = await getPool().query("UPDATE job SET state=CASE WHEN state IN ('queued','running') THEN 'cancel_requested' ELSE state END,cancellation_requested_at=CASE WHEN state IN ('queued','running') THEN now() ELSE cancellation_requested_at END,updated_at=now() WHERE id=$1 AND owner_id=$2 RETURNING state", [jobId, ownerId]);
-  if (!result.rows[0]) throw Object.assign(new Error("Job not found"), { statusCode: 404 });
-}
-
-export async function commitCancelled(job: JobRecord): Promise<void> {
-  await getPool().query("UPDATE job SET state='cancelled',stage=NULL,lease_until=NULL,updated_at=now() WHERE id=$1 AND lease_generation=$2", [job.id, job.leaseGeneration]);
-  await appendJobEvent(job.id, "cancelled", { message: "Request cancelled before commit" });
-}
-
-export interface RevisionInput {
-  composition: Composition; previewPath: string; stems: Record<string, string>; waveformPeaks: number[]; durationSeconds: number;
-  peak: number; rms: number; nonSilentRatio: number; title: string; summary: string; protectedTrackHashes: Record<string, string>; producer: Record<string, unknown>;
-}
-
-export async function commitRevision(job: JobRecord, input: RevisionInput): Promise<string> {
-  const composition = validateComposition(input.composition);
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    const current = await client.query<{ current_revision_id: string | null; deleted_at: Date | null }>("SELECT current_revision_id,deleted_at FROM project WHERE id=$1 AND owner_id=$2 FOR UPDATE", [job.projectId, job.ownerId]);
-    const project = current.rows[0];
-    if (!project || project.deleted_at) throw new Error("Project no longer available");
-    const jobState = await client.query<{ state: string; lease_generation: number; cancellation_requested_at: Date | null }>("SELECT state,lease_generation,cancellation_requested_at FROM job WHERE id=$1 FOR UPDATE", [job.id]);
-    const active = jobState.rows[0];
-    if (!active || active.lease_generation !== job.leaseGeneration || active.cancellation_requested_at || active.state !== "running") throw new Error("Job lease or cancellation fence rejected commit");
-    const ordinalResult = await client.query<{ next: number }>("SELECT COALESCE(MAX(ordinal),0)+1 AS next FROM revision WHERE project_id=$1", [job.projectId]);
-    const ordinal = Number(ordinalResult.rows[0]?.next ?? 1);
-    const id = randomUUID();
-    await client.query(
-      `INSERT INTO revision(id,owner_id,project_id,parent_revision_id,creator_job_id,ordinal,title,composition,composition_hash,preview_path,stems,waveform_peaks,duration_seconds,peak,rms,non_silent_ratio,change_summary,protected_track_hashes,producer)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-      [id, job.ownerId, job.projectId, job.baseRevisionId, job.id, ordinal, input.title, JSON.stringify(composition), canonicalHash(composition), input.previewPath, JSON.stringify(input.stems), JSON.stringify(input.waveformPeaks), input.durationSeconds, input.peak, input.rms, input.nonSilentRatio, input.summary, JSON.stringify(input.protectedTrackHashes), JSON.stringify(input.producer)]
-    );
-    const expected = job.kind === "generation" ? project.current_revision_id : job.expectedHeadRevisionId;
-    const mayAdvance = (project.current_revision_id ?? null) === (expected ?? null);
-    if (mayAdvance) await client.query("UPDATE project SET current_revision_id=$2,version=version+1,updated_at=now() WHERE id=$1", [job.projectId, id]);
-    await client.query("UPDATE job SET state='succeeded',stage=NULL,result_revision_id=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id, id]);
-    const sequence = await nextSequence(client, job.id);
-    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,$2,'succeeded',$3)", [job.id, sequence, { revisionId: id, selected: mayAdvance }]);
+    if (stage) await client.query("UPDATE job SET stage=$2,updated_at=now() WHERE id=$1", [jobId, stage]);
+    await insertJobEvent(client, jobId, eventType, payload);
     await client.query("COMMIT");
-    return id;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -193,9 +217,299 @@ export async function commitRevision(job: JobRecord, input: RevisionInput): Prom
   }
 }
 
-async function nextSequence(client: pg.PoolClient, jobId: string): Promise<number> {
-  const result = await client.query<{ next: number }>("SELECT COALESCE(MAX(sequence),0)+1 AS next FROM job_event WHERE job_id=$1", [jobId]);
-  return Number(result.rows[0]?.next ?? 1);
+export async function appendAttemptEvent(job: JobRecord, eventType: string, payload: Record<string, unknown>, stage?: string): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const active = await client.query<{ state: string; cancellation_requested_at: Date | null; deadline_at: Date }>(
+      `UPDATE job SET stage=COALESCE($5,stage),updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND lease_until>now() AND deadline_at>now()
+       RETURNING state,cancellation_requested_at,deadline_at`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, stage ?? null]
+    );
+    const row = active.rows[0];
+    if (!row) throw new JobControlError("LEASE_LOST", "Worker lease or deadline rejected progress");
+    if (row.cancellation_requested_at || row.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation requested");
+    if (row.state !== "running") throw new JobControlError("LEASE_LOST", "Job is no longer running");
+    await insertJobEvent(client, job.id, eventType, payload);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function heartbeat(job: JobRecord): Promise<boolean> {
+  const leaseSeconds = getConfig().JOB_LEASE_SECONDS;
+  const result = await getPool().query(
+    `UPDATE job SET lease_until=now()+make_interval(secs=>$5),updated_at=now()
+     WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND state='running'
+       AND cancellation_requested_at IS NULL AND lease_until>now() AND deadline_at>now()`,
+    [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, leaseSeconds]
+  );
+  return result.rowCount === 1;
+}
+
+export async function isCancelled(job: JobRecord): Promise<boolean> {
+  const result = await getPool().query<{ state: string; cancellation_requested_at: Date | null }>(
+    "SELECT state,cancellation_requested_at FROM job WHERE id=$1 AND lease_generation=$2 AND attempt_id=$3",
+    [job.id, job.leaseGeneration, job.attemptId]
+  );
+  if (!result.rows[0]) throw new JobControlError("LEASE_LOST", "Job attempt no longer owns the lease");
+  return Boolean(result.rows[0]?.cancellation_requested_at) || result.rows[0]?.state === "cancel_requested";
+}
+
+export async function failJob(job: JobRecord, code: string, message: string): Promise<boolean> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE job SET state='failed',stage=NULL,error_code=$5,error_message=$6,lease_until=NULL,lease_owner=NULL,attempt_id=NULL,updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND state='running' AND cancellation_requested_at IS NULL AND lease_until>now()
+       RETURNING id`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, code, message.slice(0, 500)]
+    );
+    if (result.rowCount !== 1) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await insertJobEvent(client, job.id, "failed", { code, message: message.slice(0, 240) });
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function needsAttentionJob(job: JobRecord, code: string, message: string): Promise<boolean> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE job SET state='needs_attention',stage=NULL,error_code=$5,error_message=$6,lease_until=NULL,lease_owner=NULL,attempt_id=NULL,updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND state='running' AND cancellation_requested_at IS NULL
+       RETURNING id`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, code, message.slice(0, 500)]
+    );
+    if (result.rowCount === 1) await insertJobEvent(client, job.id, "needs_attention", { code, message: message.slice(0, 240) });
+    await client.query("COMMIT");
+    return result.rowCount === 1;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function cancelJob(ownerId: string, jobId: string): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const selected = await client.query<{ state: string }>("SELECT state FROM job WHERE id=$1 AND owner_id=$2 FOR UPDATE", [jobId, ownerId]);
+    const row = selected.rows[0];
+    if (!row) throw Object.assign(new Error("Job not found"), { statusCode: 404 });
+    if (row.state === "queued") {
+      await client.query("UPDATE job SET state='cancelled',stage=NULL,cancellation_requested_at=COALESCE(cancellation_requested_at,now()),lease_until=NULL,updated_at=now() WHERE id=$1", [jobId]);
+      await insertJobEvent(client, jobId, "cancelled", { message: "Queued request cancelled before execution" });
+    } else if (row.state === "running") {
+      await client.query("UPDATE job SET state='cancel_requested',cancellation_requested_at=COALESCE(cancellation_requested_at,now()),updated_at=now() WHERE id=$1", [jobId]);
+      await insertJobEvent(client, jobId, "cancel_requested", { message: "Cancellation requested for the active attempt" });
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function commitCancelled(job: JobRecord): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE job SET state='cancelled',stage=NULL,lease_until=NULL,lease_owner=NULL,attempt_id=NULL,updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND state='cancel_requested' RETURNING id`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId]
+    );
+    if (result.rowCount === 1) await insertJobEvent(client, job.id, "cancelled", { message: "Active request settled as cancelled" });
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function requeueJob(job: JobRecord, code: string, message: string): Promise<boolean> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE job SET state='queued',stage=NULL,lease_until=NULL,lease_owner=NULL,attempt_id=NULL,error_code=$5,error_message=$6,updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND state='running'
+         AND cancellation_requested_at IS NULL AND lease_until>now() AND deadline_at>now()
+       RETURNING id`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, code, message.slice(0, 500)]
+    );
+    if (result.rowCount !== 1) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    await insertJobEvent(client, job.id, "retrying", { attempt: job.attempts, code, message: message.slice(0, 240) });
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function expireJob(job: JobRecord): Promise<boolean> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE job SET state='failed',stage=NULL,error_code='DEADLINE_EXCEEDED',error_message='The bounded job deadline expired.',lease_until=NULL,lease_owner=NULL,attempt_id=NULL,updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND state='running' RETURNING id`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId]
+    );
+    if (result.rowCount === 1) await insertJobEvent(client, job.id, "failed", { code: "DEADLINE_EXCEEDED", message: "The bounded job deadline expired." });
+    await client.query("COMMIT");
+    return result.rowCount === 1;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export type ProjectExportState = "disabled" | "awaiting_authorization" | "exporting" | "failed" | "uncertain" | "completed";
+
+async function assertExportAttempt(client: pg.PoolClient, job: JobRecord): Promise<void> {
+  const active = await client.query(
+    `SELECT 1 FROM job WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND state='running'
+     AND cancellation_requested_at IS NULL AND lease_until>now() AND deadline_at>now() FOR UPDATE`,
+    [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId]
+  );
+  if (active.rowCount !== 1) throw new JobControlError("LEASE_LOST", "Export attempt lost its lease");
+}
+
+export async function recordExportProgress(job: JobRecord, input: { fidelity: Record<string, unknown>; manifestPath: string; remoteProjectId?: string; remoteEffects?: Record<string, unknown> }): Promise<void> {
+  if (!job.baseRevisionId) throw new Error("Export job is missing its revision");
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertExportAttempt(client, job);
+    await client.query(
+      `INSERT INTO project_export(owner_id,project_id,revision_id,job_id,provider,state,fidelity,manifest_path,remote_project_id,remote_effects)
+       VALUES($1,$2,$3,$4,'audiotool','exporting',$5,$6,$7,$8)
+       ON CONFLICT(revision_id,provider) DO UPDATE SET job_id=EXCLUDED.job_id,state='exporting',fidelity=EXCLUDED.fidelity,
+         manifest_path=EXCLUDED.manifest_path,remote_project_id=COALESCE(EXCLUDED.remote_project_id,project_export.remote_project_id),
+         remote_effects=EXCLUDED.remote_effects,error_message=NULL,updated_at=now()`,
+      [job.ownerId, job.projectId, job.baseRevisionId, job.id, input.fidelity, input.manifestPath, input.remoteProjectId ?? null, input.remoteEffects ?? {}]
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally { client.release(); }
+}
+
+export async function exportResumeState(ownerId: string, revisionId: string): Promise<{ remoteProjectId?: string; uploadedSamples?: Record<string, string> }> {
+  const result = await getPool().query("SELECT remote_project_id,remote_effects FROM project_export WHERE owner_id=$1 AND revision_id=$2 AND provider='audiotool'", [ownerId, revisionId]);
+  const row = result.rows[0];
+  const effects = row?.remote_effects && typeof row.remote_effects === "object" ? row.remote_effects as Record<string, unknown> : {};
+  return {
+    ...(row?.remote_project_id ? { remoteProjectId: String(row.remote_project_id) } : {}),
+    ...(effects.uploadedSamples && typeof effects.uploadedSamples === "object" ? { uploadedSamples: effects.uploadedSamples as Record<string, string> } : {})
+  };
+}
+
+export async function commitExportPreparation(job: JobRecord, input: { state: Exclude<ProjectExportState, "exporting">; fidelity: Record<string, unknown>; manifestPath: string; errorMessage?: string; remoteProjectId?: string; remoteUrl?: string; remoteEffects?: Record<string, unknown> }): Promise<void> {
+  if (!job.baseRevisionId) throw new Error("Export job is missing its revision");
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertExportAttempt(client, job);
+    await client.query(
+      `INSERT INTO project_export(owner_id,project_id,revision_id,job_id,provider,state,fidelity,manifest_path,error_message,remote_project_id,remote_url,remote_effects)
+       VALUES($1,$2,$3,$4,'audiotool',$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT(revision_id,provider) DO UPDATE SET job_id=EXCLUDED.job_id,state=EXCLUDED.state,fidelity=EXCLUDED.fidelity,
+         manifest_path=EXCLUDED.manifest_path,error_message=EXCLUDED.error_message,remote_project_id=COALESCE(EXCLUDED.remote_project_id,project_export.remote_project_id),
+         remote_url=COALESCE(EXCLUDED.remote_url,project_export.remote_url),remote_effects=EXCLUDED.remote_effects,updated_at=now()`,
+      [job.ownerId, job.projectId, job.baseRevisionId, job.id, input.state, input.fidelity, input.manifestPath, input.errorMessage ?? null, input.remoteProjectId ?? null, input.remoteUrl ?? null, input.remoteEffects ?? {}]
+    );
+    const jobState = input.state === "failed" ? "failed" : input.state === "uncertain" ? "needs_attention" : "succeeded";
+    const errorCode = input.state === "failed" ? "EXPORT_FAILED" : input.state === "uncertain" ? "EXPORT_OUTCOME_UNCERTAIN" : null;
+    await client.query("UPDATE job SET state=$2,stage=NULL,result_revision_id=$3,error_code=$4,error_message=$5,lease_until=NULL,lease_owner=NULL,attempt_id=NULL,updated_at=now() WHERE id=$1", [job.id, jobState, job.baseRevisionId, errorCode, input.errorMessage ?? null]);
+    await insertJobEvent(client, job.id, jobState === "succeeded" ? "succeeded" : jobState, { localManifestReady: true, exportState: input.state, remoteProjectId: input.remoteProjectId ?? null });
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export interface RevisionInput {
+  composition: Composition; previewPath: string; stems: Record<string, string>; waveformPeaks: number[]; durationSeconds: number;
+  previewHash?: string; peak: number; rms: number; nonSilentRatio: number; title: string; summary: string; protectedTrackHashes: Record<string, string>; producer: Record<string, unknown>;
+}
+
+export async function commitRevision(job: JobRecord, input: RevisionInput): Promise<{ revisionId: string; selected: boolean; reused: boolean }> {
+  const composition = validateComposition(input.composition);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const current = await client.query<{ current_revision_id: string | null; deleted_at: Date | null }>("SELECT current_revision_id,deleted_at FROM project WHERE id=$1 AND owner_id=$2 FOR UPDATE", [job.projectId, job.ownerId]);
+    const project = current.rows[0];
+    if (!project || project.deleted_at) throw new Error("Project no longer available");
+    const jobState = await client.query<{ state: string; lease_generation: number; attempt_id: string | null; lease_owner: string | null; lease_valid: boolean; deadline_valid: boolean; cancellation_requested_at: Date | null }>("SELECT state,lease_generation,attempt_id,lease_owner,lease_until>now() AS lease_valid,deadline_at>now() AS deadline_valid,cancellation_requested_at FROM job WHERE id=$1 FOR UPDATE", [job.id]);
+    const active = jobState.rows[0];
+    if (active?.cancellation_requested_at || active?.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation fence rejected commit");
+    if (!active || active.lease_generation !== job.leaseGeneration || active.attempt_id !== job.attemptId || active.lease_owner !== job.leaseOwner || active.state !== "running" || !active.lease_valid) {
+      throw new JobControlError("LEASE_LOST", "Job lease rejected commit");
+    }
+    if (!active.deadline_valid) throw new JobControlError("DEADLINE_EXCEEDED", "Job deadline rejected commit");
+    const compositionHash = canonicalHash(composition);
+    const existing = await client.query<{ id: string }>("SELECT id FROM revision WHERE project_id=$1 AND composition_hash=$2", [job.projectId, compositionHash]);
+    const ordinalResult = await client.query<{ next: number }>("SELECT COALESCE(MAX(ordinal),0)+1 AS next FROM revision WHERE project_id=$1", [job.projectId]);
+    const ordinal = Number(ordinalResult.rows[0]?.next ?? 1);
+    const reused = Boolean(existing.rows[0]);
+    const id = existing.rows[0]?.id ?? randomUUID();
+    if (!reused) {
+      await client.query(
+        `INSERT INTO revision(id,owner_id,project_id,parent_revision_id,creator_job_id,ordinal,title,composition,composition_hash,preview_path,preview_hash,stems,waveform_peaks,duration_seconds,peak,rms,non_silent_ratio,change_summary,protected_track_hashes,producer)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+        [id, job.ownerId, job.projectId, job.baseRevisionId, job.id, ordinal, input.title, JSON.stringify(composition), compositionHash, input.previewPath, input.previewHash ?? null, JSON.stringify(input.stems), JSON.stringify(input.waveformPeaks), input.durationSeconds, input.peak, input.rms, input.nonSilentRatio, input.summary, JSON.stringify(input.protectedTrackHashes), JSON.stringify(input.producer)]
+      );
+    }
+    const expected = job.expectedHeadRevisionId;
+    const mayAdvance = (project.current_revision_id ?? null) === (expected ?? null);
+    if (mayAdvance) await client.query("UPDATE project SET current_revision_id=$2,version=version+1,updated_at=now() WHERE id=$1", [job.projectId, id]);
+    await client.query("UPDATE job SET state='succeeded',stage=NULL,result_revision_id=$2,lease_until=NULL,lease_owner=NULL,attempt_id=NULL,updated_at=now() WHERE id=$1", [job.id, id]);
+    await insertJobEvent(client, job.id, "succeeded", { revisionId: id, selected: mayAdvance, reused });
+    await client.query("COMMIT");
+    return { revisionId: id, selected: mayAdvance, reused };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getRevision(ownerId: string, revisionId: string) {
@@ -205,11 +519,13 @@ export async function getRevision(ownerId: string, revisionId: string) {
 }
 
 export async function listRevisions(ownerId: string, projectId: string) {
-  const result = await getPool().query("SELECT id,parent_revision_id,ordinal,title,composition_hash,duration_seconds,peak,rms,change_summary,protected_track_hashes,created_at FROM revision WHERE owner_id=$1 AND project_id=$2 ORDER BY ordinal DESC", [ownerId, projectId]);
+  const result = await getPool().query("SELECT id,parent_revision_id,ordinal,title,composition_hash,preview_hash,duration_seconds,peak,rms,waveform_peaks,change_summary,protected_track_hashes,producer,created_at FROM revision WHERE owner_id=$1 AND project_id=$2 ORDER BY ordinal DESC", [ownerId, projectId]);
   return result.rows.map((row) => ({
     id: String(row.id), parentRevisionId: row.parent_revision_id ? String(row.parent_revision_id) : null, ordinal: Number(row.ordinal), title: String(row.title),
-    compositionHash: String(row.composition_hash), durationSeconds: Number(row.duration_seconds), peak: Number(row.peak), rms: Number(row.rms),
-    changeSummary: String(row.change_summary), protectedTrackHashes: row.protected_track_hashes as Record<string, string>, createdAt: new Date(row.created_at).toISOString()
+    compositionHash: String(row.composition_hash), previewHash: row.preview_hash ? String(row.preview_hash) : null,
+    durationSeconds: Number(row.duration_seconds), peak: Number(row.peak), rms: Number(row.rms), waveformPeaks: row.waveform_peaks as number[],
+    changeSummary: String(row.change_summary), protectedTrackHashes: row.protected_track_hashes as Record<string, string>, producer: row.producer as Record<string, unknown>,
+    audioUrl: `/api/v1/revisions/${String(row.id)}/audio`, createdAt: new Date(row.created_at).toISOString()
   }));
 }
 
@@ -218,19 +534,37 @@ export async function getProjectSnapshot(ownerId: string, projectId: string) {
   const assets = await getPool().query("SELECT id,name,mime_type,duration_seconds,sample_rate,channels,readiness,provenance,created_at FROM asset WHERE owner_id=$1 AND project_id=$2 ORDER BY created_at DESC", [ownerId, projectId]);
   const revisions = await listRevisions(ownerId, projectId);
   const activeJob = await getPool().query("SELECT id,kind,state,stage,error_code,error_message,result_revision_id,created_at,updated_at FROM job WHERE owner_id=$1 AND project_id=$2 ORDER BY created_at DESC LIMIT 1", [ownerId, projectId]);
-  const analyses = await getPool().query("SELECT id,revision_id,status,provider,model,purpose,prompt_version,measured,observations,uncertainty,usage,model_cost_usd,created_at FROM audio_analysis WHERE owner_id=$1 AND project_id=$2 ORDER BY created_at DESC LIMIT 12", [ownerId, projectId]);
+  const analyses = await getPool().query("SELECT id,revision_id,asset_hash,status,provider,model,purpose,prompt_version,measured,observations,uncertainty,usage,model_cost_usd,created_at FROM audio_analysis WHERE owner_id=$1 AND project_id=$2 ORDER BY created_at DESC LIMIT 12", [ownerId, projectId]);
   const current = project.currentRevisionId ? await getRevision(ownerId, project.currentRevisionId) : null;
-  return { project, assets: assets.rows, revisions, analyses: analyses.rows, latestJob: activeJob.rows[0] ?? null, currentRevision: current };
+  return {
+    project,
+    assets: assets.rows.map((row) => ({
+      id: String(row.id), name: String(row.name), mimeType: String(row.mime_type), durationSeconds: Number(row.duration_seconds), sampleRate: Number(row.sample_rate),
+      channels: Number(row.channels), readiness: String(row.readiness), provenance: String(row.provenance), audioUrl: `/api/v1/assets/${String(row.id)}/audio`, createdAt: new Date(row.created_at).toISOString()
+    })),
+    revisions,
+    analyses: analyses.rows.map((row) => ({
+      id: String(row.id), revisionId: row.revision_id ? String(row.revision_id) : null, assetHash: String(row.asset_hash), status: String(row.status), provider: String(row.provider), model: String(row.model),
+      purpose: String(row.purpose), promptVersion: String(row.prompt_version), measured: row.measured, observations: row.observations, uncertainty: String(row.uncertainty),
+      usage: row.usage, modelCostUsd: Number(row.model_cost_usd), createdAt: new Date(row.created_at).toISOString()
+    })),
+    latestJob: activeJob.rows[0] ?? null,
+    currentRevision: current ? {
+      id: String(current.id), title: String(current.title), ordinal: Number(current.ordinal), compositionHash: String(current.composition_hash), previewHash: current.preview_hash ? String(current.preview_hash) : null,
+      durationSeconds: Number(current.duration_seconds), waveformPeaks: current.waveform_peaks as number[], composition: current.composition as Composition,
+      changeSummary: String(current.change_summary), producer: current.producer as Record<string, unknown>, audioUrl: `/api/v1/revisions/${String(current.id)}/audio`
+    } : null
+  };
 }
 
-export async function recordAudioAnalysis(input: { ownerId: string; projectId: string; revisionId: string; analysis: AudioAnalysis }): Promise<void> {
+export async function recordAudioAnalysis(input: { ownerId: string; projectId: string; revisionId: string | null; analysis: AudioAnalysis }): Promise<void> {
   const model = input.analysis.model ?? "unconfigured";
   await getPool().query(
     `INSERT INTO audio_analysis(owner_id,project_id,revision_id,asset_hash,provider,model,purpose,prompt_version,interval_start,interval_end,measured,observations,uncertainty,status,usage,model_cost_usd)
-     VALUES($1,$2,$3,$4,'gemini',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,0)
-     ON CONFLICT(asset_hash,provider,model,purpose,prompt_version,interval_start,interval_end)
-     DO UPDATE SET revision_id=EXCLUDED.revision_id,measured=EXCLUDED.measured,observations=EXCLUDED.observations,uncertainty=EXCLUDED.uncertainty,status=EXCLUDED.status,usage=EXCLUDED.usage`,
-    [input.ownerId, input.projectId, input.revisionId, input.analysis.assetHash, model, input.analysis.purpose, input.analysis.promptVersion, input.analysis.inspectedInterval.start, input.analysis.inspectedInterval.end, JSON.stringify(input.analysis.measured), JSON.stringify(input.analysis.observations), input.analysis.uncertainty, input.analysis.status, JSON.stringify(input.analysis.usage)]
+     VALUES($1,$2,$3,$4,'gemini',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     ON CONFLICT(owner_id,project_id,asset_hash,provider,model,purpose,prompt_version,interval_start,interval_end)
+     DO UPDATE SET revision_id=EXCLUDED.revision_id,measured=EXCLUDED.measured,observations=EXCLUDED.observations,uncertainty=EXCLUDED.uncertainty,status=EXCLUDED.status,usage=EXCLUDED.usage,model_cost_usd=EXCLUDED.model_cost_usd`,
+    [input.ownerId, input.projectId, input.revisionId, input.analysis.assetHash, model, input.analysis.purpose, input.analysis.promptVersion, input.analysis.inspectedInterval.start, input.analysis.inspectedInterval.end, JSON.stringify(input.analysis.measured), JSON.stringify(input.analysis.observations), input.analysis.uncertainty, input.analysis.status, JSON.stringify(input.analysis.usage), input.analysis.costMicrousd / 1_000_000]
   );
 }
 

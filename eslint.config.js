@@ -2,7 +2,7 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/dist/**", "**/coverage/**", "docs/handoff/**", "playwright-report/**", "eslint.config.js", "apps/web/src/components/ui/**"] },
+  { ignores: ["**/dist/**", "**/coverage/**", "docs/handoff/**", "docs/pocket-producer-course/**", "playwright-report/**", "eslint.config.js", "vitest.config.ts", "apps/web/src/components/ui/**"] },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {

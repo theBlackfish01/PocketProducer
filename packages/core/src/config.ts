@@ -22,15 +22,18 @@ const configSchema = z.object({
   GEMINI_MODEL: z.string().min(1).default("gemini-3-flash-preview"),
   AUDIOTOOL_CLIENT_ID: optionalSecret,
   AUDIOTOOL_REDIRECT_URL: z.url().default("http://127.0.0.1:5173/auth/audiotool/callback"),
-  AUDIOTOOL_SCOPES: z.string().default(""),
+  AUDIOTOOL_SCOPES: z.preprocess((value) => value === "" ? undefined : value, z.string().default("project:write")),
   DEV_LOCAL_AUTH: booleanString.default(true),
   FIXTURE_MODE: booleanString.default(false),
-  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(1),
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(1).default(1),
+  JOB_LEASE_SECONDS: z.coerce.number().int().min(3).max(300).default(45),
   MAX_MODEL_CALLS_PER_JOB: z.coerce.number().int().min(1).max(12).default(4),
   MAX_RENDER_ATTEMPTS_PER_JOB: z.coerce.number().int().min(1).max(3).default(2),
   MAX_AUDIO_CRITIQUE_PASSES: z.coerce.number().int().min(0).max(2).default(1),
   MAX_JOB_SECONDS: z.coerce.number().int().min(10).max(900).default(300),
   MAX_UPLOAD_BYTES: z.coerce.number().int().min(1_024).max(104_857_600).default(20_971_520),
+  MAX_SOURCE_SECONDS: z.coerce.number().int().min(1).max(300).default(300),
+  MAX_OUTPUT_SECONDS: z.coerce.number().int().min(10).max(120).default(60),
   INITIAL_BUILD_API_BUDGET_USD: z.coerce.number().min(0).max(5).default(5),
   MAX_JOB_COST_USD: z.coerce.number().min(0).max(1).default(0.25),
   GEMINI_ESTIMATED_CALL_COST_USD: z.coerce.number().min(0).max(0.25).default(0.05)
@@ -44,6 +47,14 @@ export function getConfig(): AppConfig {
   cachedConfig ??= configSchema.parse(process.env);
   if (cachedConfig.APP_ENV === "production" && cachedConfig.DEV_LOCAL_AUTH) {
     throw new Error("DEV_LOCAL_AUTH must be false in production");
+  }
+  if (cachedConfig.APP_ENV === "test") {
+    const databaseName = new URL(cachedConfig.DATABASE_URL).pathname.slice(1);
+    if (!databaseName.endsWith("_test")) throw new Error("APP_ENV=test requires a dedicated *_test database");
+    const normalAssetRoot = resolve(REPOSITORY_ROOT, ".local/audio");
+    const selectedAssetRoot = resolve(REPOSITORY_ROOT, cachedConfig.OBJECT_STORAGE_LOCAL_ROOT);
+    if (selectedAssetRoot === normalAssetRoot) throw new Error("APP_ENV=test refuses the normal development asset root");
+    if (!cachedConfig.FIXTURE_MODE) throw new Error("APP_ENV=test requires FIXTURE_MODE=true so ordinary tests cannot call providers");
   }
   return cachedConfig;
 }

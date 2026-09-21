@@ -15,6 +15,7 @@ export function compileArrangement(plan: ArrangementPlan, sourceAssetId?: string
   const melodyEvents: Track["events"] = [];
   const textureEvents: Track["events"] = [];
   let index = 0;
+  const energyGainDb = Math.round((plan.energy - 0.5) * 6 * 10) / 10;
 
   for (let bar = 0; bar < bars; bar += 1) {
     const sectionDensity = bar < 2 ? 0.45 : bar >= 12 ? 0.55 : bar >= 8 ? 1 : 0.8;
@@ -51,11 +52,13 @@ export function compileArrangement(plan: ArrangementPlan, sourceAssetId?: string
   }
 
   const tracks: Track[] = [
-    { id: "drums", role: "drums", gainDb: -3, pan: 0, events: drumEvents },
-    { id: "bass", role: "bass", gainDb: -6, pan: 0, events: bassEvents },
-    { id: "melody", role: "melody", gainDb: -8, pan: 0.08, events: melodyEvents }
+    { id: "drums", role: "drums", gainDb: -3 + energyGainDb, pan: 0, events: drumEvents },
+    { id: "bass", role: "bass", gainDb: -6 + energyGainDb * 0.6, pan: 0, events: bassEvents },
+    { id: "melody", role: "melody", gainDb: -8 + energyGainDb * 0.35, pan: 0.08, events: melodyEvents },
+    // Keep a stable four-part export contract. When no source is selected this is
+    // an intentionally silent texture stem, not a claim that supplied audio was used.
+    { id: "texture", role: "texture", gainDb: -5 + energyGainDb * 0.25, pan: -0.12, events: textureEvents }
   ];
-  if (textureEvents.length > 0) tracks.push({ id: "texture", role: "texture", gainDb: -5, pan: -0.12, events: textureEvents });
 
   return {
     schemaVersion: 1,
@@ -96,4 +99,3 @@ export function simplifyDrums(base: Composition): { composition: Composition; re
   });
   return { composition: { ...structuredClone(base), tracks }, removed };
 }
-
