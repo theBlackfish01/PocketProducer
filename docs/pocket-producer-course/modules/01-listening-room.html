@@ -207,6 +207,48 @@
       </section>
 
       <section class="screen animate-in">
+        <h2 class="screen-heading">A small UI detail can carry a big contract</h2>
+        <p>A long direction should make a readable room title, not leave a word cut in half. The deterministic fallback keeps the title inside the domain limit and adds a visible <span class="term" data-definition="An ellipsis is the three-dot-like mark that tells a reader text has been shortened. Here it keeps a generated title readable without pretending the full direction is the title.">ellipsis</span> at a word boundary.</p>
+
+        <div class="translation-block animate-in">
+          <div class="translation-code">
+            <span class="translation-label">CODE · packages/core/src/agent/producer.ts</span>
+            <pre><code>  const sentence = direction.trim().split(/[.!?]/)[0]?.trim() || "New listening room";
+  const clipped = sentence.slice(0, 63);
+  const wordBoundary = clipped.lastIndexOf(" ");
+  const title = sentence.length &lt;= 64 ? sentence : `${(wordBoundary &gt;= 32 ? clipped.slice(0, wordBoundary) : clipped).trimEnd()}…`;</code></pre>
+          </div>
+          <div class="translation-english">
+            <span class="translation-label">PLAIN ENGLISH</span>
+            <div class="translation-lines">
+              <p class="tl">Take the first sentence of the listener’s direction, or use a calm default.</p>
+              <p class="tl">Reserve room for a final ellipsis when shortening long text.</p>
+              <p class="tl">Find the last complete word before the limit.</p>
+              <p class="tl">Keep the <span class="term" data-definition="A domain limit is a rule enforced by the product’s shared data model, not just by one screen. It keeps every caller inside the same safe boundary.">domain limit</span> while preserving a readable title.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="pattern-cards" aria-label="Title safety checks">
+          <div class="pattern-card" style="border-top: 3px solid #2d8b55">
+            <div class="pattern-icon" style="background: #2d8b55">✓</div>
+            <h3 class="pattern-title">Readable</h3>
+            <p class="pattern-desc">The listener sees a complete word rather than a surprising mid-word cut.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #d94f30">
+            <div class="pattern-icon" style="background: #d94f30">⌁</div>
+            <h3 class="pattern-title">Bounded</h3>
+            <p class="pattern-desc">The shared composition schema still receives a title no longer than 64 characters.</p>
+          </div>
+          <div class="pattern-card" style="border-top: 3px solid #2a7b9b">
+            <div class="pattern-icon" style="background: #2a7b9b">↔</div>
+            <h3 class="pattern-title">Tested</h3>
+            <p class="pattern-desc">A unit test protects the behavior, so a future UI refactor cannot quietly undo it.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen animate-in">
         <h2 class="screen-heading">Where would you look first?</h2>
         <p>Use the symptom and the last successful handoff to choose the smallest useful investigation.</p>
 

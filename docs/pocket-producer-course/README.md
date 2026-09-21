@@ -1,6 +1,6 @@
 # Pocket Producer architecture course
 
-Content is current through the 2026-09-21 F1–F8/A1–A6 repair pass applied after runtime `010969f` and course commit `25913b9`. The six modules cover project-safe browser receipts, worker attempt fencing and restart recovery, the bounded Deep Agent, candidate-preserving audio repair, conservative provider accounting, and the Nexus v3 timing/recovery boundary.
+Content is current through the 2026-09-21 F1–F8/A1–A6 repair pass in commits `a46e55c`, `6708276`, and `3b51a25`, applied after runtime `010969f` and course commit `25913b9`. The six modules cover project-safe browser receipts, worker attempt fencing and restart recovery, the bounded Deep Agent, candidate-preserving audio repair, conservative provider accounting, and the Nexus v3 timing/recovery boundary.
 
 Open `index.html` directly, or serve this directory from the repository root:
 

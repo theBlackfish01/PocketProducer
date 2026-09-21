@@ -53,4 +53,4 @@ File: tests/e2e/listening-room.spec.ts (lines 16-27)
 ### Connections
 - Previous: external boundaries reveal honest unavailable states.
 - Next: final big-picture handoff with vocabulary and safe next changes.
-- Tone/style: distinguish provider-proof fixture isolation, successful live OpenAI evidence, terminal/uncertain Gemini failure evidence, emulated mobile checks, and unverified physical-device/Audiotool paths. The maintained suite currently has 28 unit/domain tests, 17 PostgreSQL integration tests, two fresh-project browser journeys, and explicit service shutdown.
+- Tone/style: distinguish provider-proof fixture isolation, successful live OpenAI evidence, terminal/uncertain Gemini failure evidence, emulated mobile checks, and unverified physical-device/Audiotool paths. The maintained suite currently has 29 unit/domain tests, 17 PostgreSQL integration tests, two fresh-project browser journeys, and explicit service shutdown.
