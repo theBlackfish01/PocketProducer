@@ -8,41 +8,47 @@
 
 ### Code Snippets (pre-extracted)
 
-File: packages/core/src/db/repository.ts (lines 101-112)
+File: packages/core/src/db/repository.ts (`claimNextJob`)
 ```ts
 export async function claimNextJob(workerId: string): Promise<JobRecord | null> {
   const result = await getPool().query(
     `WITH candidate AS (
        SELECT id FROM job
-       WHERE (state='queued' OR (state='running' AND lease_until < now()))
+       WHERE (state='queued' OR (state IN ('running','cancel_requested') AND lease_until < now()))
          AND EXISTS (SELECT 1 FROM outbox WHERE outbox.job_id=job.id AND delivered_at IS NOT NULL)
        ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
-     ) UPDATE job SET state='running',stage=CASE WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
-       lease_owner=$1,lease_generation=lease_generation+1,lease_until=now()+interval '45 seconds',attempts=attempts+1,updated_at=now()
+     ) UPDATE job SET state=CASE WHEN job.state='cancel_requested' THEN 'cancel_requested' ELSE 'running' END,
+       lease_owner=$1,lease_generation=lease_generation+1,attempt_id=gen_random_uuid(),
+       lease_until=now()+make_interval(secs=>$2),attempts=attempts+1,updated_at=now()
      WHERE id=(SELECT id FROM candidate)
-     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_generation,attempts,cancellation_requested_at`,
-    [workerId]
+     RETURNING id,state,lease_owner,lease_generation,attempt_id,lease_until,deadline_at,cancellation_requested_at`,
+    [workerId, getConfig().JOB_LEASE_SECONDS]
 ```
 
-File: packages/core/src/db/repository.ts (lines 169-185)
+File: packages/core/src/db/repository.ts (`appendAttemptEvent`)
 ```ts
-    const jobState = await client.query<{ state: string; lease_generation: number; cancellation_requested_at: Date | null }>("SELECT state,lease_generation,cancellation_requested_at FROM job WHERE id=$1 FOR UPDATE", [job.id]);
-    const active = jobState.rows[0];
-    if (!active || active.lease_generation !== job.leaseGeneration || active.cancellation_requested_at || active.state !== "running") throw new Error("Job lease or cancellation fence rejected commit");
-    const ordinalResult = await client.query<{ next: number }>("SELECT COALESCE(MAX(ordinal),0)+1 AS next FROM revision WHERE project_id=$1", [job.projectId]);
-    const ordinal = Number(ordinalResult.rows[0]?.next ?? 1);
-    const id = randomUUID();
-    await client.query(
-      `INSERT INTO revision(id,owner_id,project_id,parent_revision_id,creator_job_id,ordinal,title,composition,composition_hash,preview_path,stems,waveform_peaks,duration_seconds,peak,rms,non_silent_ratio,change_summary,protected_track_hashes,producer)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-      [id, job.ownerId, job.projectId, job.baseRevisionId, job.id, ordinal, input.title, JSON.stringify(composition), canonicalHash(composition), input.previewPath, JSON.stringify(input.stems), JSON.stringify(input.waveformPeaks), input.durationSeconds, input.peak, input.rms, input.nonSilentRatio, input.summary, JSON.stringify(input.protectedTrackHashes), JSON.stringify(input.producer)]
+    const active = await client.query<{ state: string; cancellation_requested_at: Date | null; deadline_at: Date }>(
+      `UPDATE job SET stage=COALESCE($5,stage),updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND lease_until>now() AND deadline_at>now()
+       RETURNING state,cancellation_requested_at,deadline_at`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, stage ?? null]
     );
-    const expected = job.kind === "generation" ? project.current_revision_id : job.expectedHeadRevisionId;
-    const mayAdvance = (project.current_revision_id ?? null) === (expected ?? null);
-    if (mayAdvance) await client.query("UPDATE project SET current_revision_id=$2,version=version+1,updated_at=now() WHERE id=$1", [job.projectId, id]);
-    await client.query("UPDATE job SET state='succeeded',stage=NULL,result_revision_id=$2,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id, id]);
-    const sequence = await nextSequence(client, job.id);
-    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,$2,'succeeded',$3)", [job.id, sequence, { revisionId: id, selected: mayAdvance }]);
+    const row = active.rows[0];
+    if (!row) throw new JobControlError("LEASE_LOST", "Worker lease or deadline rejected progress");
+    if (row.cancellation_requested_at || row.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation requested");
+    if (row.state !== "running") throw new JobControlError("LEASE_LOST", "Job is no longer running");
+    await insertJobEvent(client, job.id, eventType, payload);
+```
+
+File: packages/core/src/db/repository.ts (`commitRevision` fence)
+```ts
+    const jobState = await client.query<{ state: string; lease_generation: number; attempt_id: string | null; lease_owner: string | null; lease_valid: boolean; deadline_valid: boolean; cancellation_requested_at: Date | null }>("SELECT state,lease_generation,attempt_id,lease_owner,lease_until>now() AS lease_valid,deadline_at>now() AS deadline_valid,cancellation_requested_at FROM job WHERE id=$1 FOR UPDATE", [job.id]);
+    const active = jobState.rows[0];
+    if (active?.cancellation_requested_at || active?.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation fence rejected commit");
+    if (!active || active.lease_generation !== job.leaseGeneration || active.attempt_id !== job.attemptId || active.lease_owner !== job.leaseOwner || active.state !== "running" || !active.lease_valid) {
+      throw new JobControlError("LEASE_LOST", "Job lease rejected commit");
+    }
+    if (!active.deadline_valid) throw new JobControlError("DEADLINE_EXCEEDED", "Job deadline rejected commit");
 ```
 
 ### Interactive Elements

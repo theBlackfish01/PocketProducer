@@ -53,6 +53,7 @@ Audiotool remains the only product-access prerequisite. `AUDIOTOOL_CLIENT_ID` is
 - `pnpm verify:demo`: pass. It proved two immutable 44.636 s WAVs with distinct SHA-256 hashes, six Groove hats removed, byte-identical protected melody stems and four editable Nexus parts.
 - `pnpm test:live`: completed once after approval. OpenAI succeeded and produced a source-backed revision; both Gemini effects failed deterministically with empty structured responses. Reload created no new effects. The diagnosed output/thinking limit is repaired and covered offline.
 - Representative desktop/mobile screenshots were visually inspected after the final browser run and are written to `.local/evidence/`; the desktop capture is dialog-free and the 390×844 layout keeps the focused composer in view. They remain intentionally uncommitted. Physical-phone behavior is still unverified.
+- The generated six-module architecture course was refreshed through the 2026-09-21 repair milestone. `pnpm test:course` passes all 6-module/18-question structure checks, completes the Gemini/Nexus quiz, verifies the 390 px layout has no horizontal overflow, and writes visually inspected desktop/mobile captures to `.local/evidence/course-*.png`.
 
 ## API usage
 

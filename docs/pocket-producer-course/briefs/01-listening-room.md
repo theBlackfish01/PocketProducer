@@ -8,18 +8,19 @@
 
 ### Code Snippets (pre-extracted)
 
-File: apps/web/src/App.tsx (lines 106-115)
+File: apps/web/src/App.tsx (`submitDirection`)
 ```tsx
-  const submitDirection = async () => {
-    if (draft.trim().length < 3) return
-    setBusy(true); setError(null)
-    try {
-      const id = await ensureProject()
-      const result = snapshot?.project.currentRevisionId
-        ? await api.revise(id, snapshot.project.currentRevisionId, draft)
-        : await api.generate(id, draft, snapshot?.assets[0]?.id)
+      const baseRevisionId = snapshot?.project.currentRevisionId ?? null
+      const sourceAssetId = snapshot?.assets[0]?.id
+      const commandIdentity = `${id}:${baseRevisionId ?? "new"}:${sourceAssetId ?? "palette"}:${draft.trim()}`
+      const storageKey = `pocket-producer:submission:${commandIdentity}`
+      const idempotencyKey = localStorage.getItem(storageKey) ?? crypto.randomUUID()
+      localStorage.setItem(storageKey, idempotencyKey)
+      const result = baseRevisionId
+        ? await api.revise(id, baseRevisionId, draft, idempotencyKey)
+        : await api.generate(id, draft, idempotencyKey, sourceAssetId)
+      localStorage.removeItem(storageKey)
       setJob(await api.job(result.jobId))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit direction") }
 ```
 
 File: apps/web/src/features/listening/audio-player.tsx (lines 33-45)

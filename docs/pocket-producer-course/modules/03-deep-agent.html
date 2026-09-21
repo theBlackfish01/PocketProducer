@@ -81,7 +81,18 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE · packages/core/src/agent/producer.ts</span>
-            <pre><code>    const agent = createDeepAgent({
+            <pre><code>  const accounting = new AccountedOpenAICalls(input.job, config.OPENAI_MODEL, operationHash);
+  try {
+    const model = new ChatOpenAI({
+      model: config.OPENAI_MODEL,
+      apiKey: config.OPENAI_API_KEY,
+      useResponsesApi: true,
+      reasoning: { effort: "low" },
+      maxTokens: 900,
+      maxRetries: 0,
+      timeout: Math.min(60_000, Math.max(1_000, new Date(input.job.deadlineAt).getTime() - Date.now()))
+    });
+    const agent = createDeepAgent({
       name: &quot;pocket-producer&quot;,
       model,
       tools: [paletteTool],
@@ -96,23 +107,25 @@
       ],
       systemPrompt: &quot;You are Pocket Producer's main producer. Read /skills/arrange-short-instrumental/SKILL.md and /workspace/brief.md, call list_supported_palettes once, then immediately return one valid compact arrangement plan. Do not list the filesystem. Never claim to hear audio. Do not create raw timeline events; deterministic application code compiles the plan.&quot;
     });
-    const agentInput = { messages: [{ role: &quot;user&quot;, content: &quot;Plan this supported instrumental now. Use the source when one is available.&quot; }], files: await runtimeFiles(input.direction, input.hasSource) };
+    const agentInput = { messages: [{ role: &quot;user&quot;, content: &quot;Plan this supported instrumental now. Use the source only when its typed descriptors and the direction support a real role.&quot; }], files: await runtimeFiles(input.direction, input.source) };
     const result = await agent.invoke(
       agentInput as never,
-      { configurable: { thread_id: input.jobId }, recursionLimit: 24 }
+      { configurable: { thread_id: input.job.id }, recursionLimit: 8, callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) }
     );</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
+              <p class="tl">Configure the server-side OpenAI model with bounded reasoning, output, retries, and deadline.</p>
+              <p class="tl">Attach a callback that reserves and reconciles every paid model call in the shared effect ledger.</p>
               <p class="tl">Create one named producer inside the Deep Agents framework.</p>
               <p class="tl">Give it the selected model and exactly one controlled tool: the supported-palette lookup.</p>
               <p class="tl">Require its answer to match the arrangement-plan schema, then attach saved run state from the checkpointer.</p>
               <p class="tl">Mount the reusable skill instructions into its private <span class="term" data-definition="A runtime is the controlled environment where a program executes, including the files and tools it can access.">runtime</span>.</p>
               <p class="tl">Allow reads only in the approved locations; explicitly deny writes and all other reads.</p>
               <p class="tl">Tell the producer to read its instructions, inspect the supported palette once, and return a compact plan without inventing listening or timeline work.</p>
-              <p class="tl">Build the one user message plus the runtime files that describe this particular job.</p>
-              <p class="tl">Invoke the agent under the job’s <span class="term" data-definition="A thread ID is a stable label that ties saved agent state to one job, much like a claim number ties updates to one case.">thread ID</span>, with a <span class="term" data-definition="A recursion limit caps how many internal reasoning or tool steps an agent run may take before it must stop.">recursion limit</span> of 24.</p>
+              <p class="tl">Build the one user message plus runtime files containing the direction and typed, untrusted source-analysis descriptor.</p>
+              <p class="tl">Invoke the agent under the job’s <span class="term" data-definition="A thread ID is a stable label that ties saved agent state to one job, much like a claim number ties updates to one case.">thread ID</span>, with a <span class="term" data-definition="A recursion limit caps how many internal reasoning or tool steps an agent run may take before it must stop.">recursion limit</span> of 8, the accounting callback, and the job’s abort signal.</p>
             </div>
           </div>
         </div>

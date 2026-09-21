@@ -8,8 +8,19 @@
 
 ### Code Snippets (pre-extracted)
 
-File: packages/core/src/agent/producer.ts (lines 141-160)
+File: packages/core/src/agent/producer.ts (`produceArrangement`)
 ```ts
+  const accounting = new AccountedOpenAICalls(input.job, config.OPENAI_MODEL, operationHash);
+  try {
+    const model = new ChatOpenAI({
+      model: config.OPENAI_MODEL,
+      apiKey: config.OPENAI_API_KEY,
+      useResponsesApi: true,
+      reasoning: { effort: "low" },
+      maxTokens: 900,
+      maxRetries: 0,
+      timeout: Math.min(60_000, Math.max(1_000, new Date(input.job.deadlineAt).getTime() - Date.now()))
+    });
     const agent = createDeepAgent({
       name: "pocket-producer",
       model,
@@ -25,10 +36,10 @@ File: packages/core/src/agent/producer.ts (lines 141-160)
       ],
       systemPrompt: "You are Pocket Producer's main producer. Read /skills/arrange-short-instrumental/SKILL.md and /workspace/brief.md, call list_supported_palettes once, then immediately return one valid compact arrangement plan. Do not list the filesystem. Never claim to hear audio. Do not create raw timeline events; deterministic application code compiles the plan."
     });
-    const agentInput = { messages: [{ role: "user", content: "Plan this supported instrumental now. Use the source when one is available." }], files: await runtimeFiles(input.direction, input.hasSource) };
+    const agentInput = { messages: [{ role: "user", content: "Plan this supported instrumental now. Use the source only when its typed descriptors and the direction support a real role." }], files: await runtimeFiles(input.direction, input.source) };
     const result = await agent.invoke(
       agentInput as never,
-      { configurable: { thread_id: input.jobId }, recursionLimit: 24 }
+      { configurable: { thread_id: input.job.id }, recursionLimit: 8, callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) }
     );
 ```
 

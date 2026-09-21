@@ -137,6 +137,14 @@
             <p>A <span class="term" data-definition="A hash is a compact fingerprint calculated from data. Matching hashes provide strong evidence that two files or structures are exactly the same.">hash</span> turns “the melody sounds unchanged” into a checkable identity claim.</p>
           </div>
         </div>
+
+        <aside class="callout callout-info animate-in">
+          <span class="callout-icon" aria-hidden="true">↩</span>
+          <div>
+            <h3>A repair candidate cannot erase a good render</h3>
+            <p>If Gemini asks for simpler drums, <code>attemptBoundedDrumRepair</code> renders a separate candidate and checks signal plus the melody hash. A failed candidate returns the earlier composition and audio unchanged; a successful repaired render is labeled <code>uncritiqued</code> because the one-pass critique budget was already spent.</p>
+          </div>
+        </aside>
       </section>
 
       <section class="screen animate-in">
@@ -234,7 +242,7 @@
           <div class="quiz-question-block"
                data-correct="option-a"
                data-explanation-right="Exactly. The renderer can support the numerical statement directly; the emotional claim needs human listening or a separately named analysis process."
-               data-explanation-wrong="Not quite. A waveform or hash cannot establish an emotional quality, while a peak value is directly computed from samples rather than guessed by a listener."
+               data-explanation-wrong="Not quite. A waveform or hash cannot establish an emotional quality, while a peak value is directly computed from samples rather than guessed by a listener.">
             <div class="scenario-context">
               <span class="scenario-label">Measured vs. subjective</span>
               <p>A release note needs one claim backed directly by renderer output. Which claim is defensible?</p>

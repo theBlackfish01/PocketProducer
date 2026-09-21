@@ -56,6 +56,23 @@ File: packages/core/src/audio/renderer.ts (lines 146-166)
   await writeFile(previewPath, encodeWav(masterLeft, masterRight, SAMPLE_RATE));
 ```
 
+File: packages/core/src/audio/repair.ts (`attemptBoundedDrumRepair`)
+```ts
+  const protectedMelody = protectedTrackHash(input.composition, "melody");
+  const simplified = simplifyDrums(input.composition);
+  if (simplified.removed === 0) return { composition: input.composition, render: input.render, removed: 0 };
+  try {
+    const candidate = validateComposition(simplified.composition);
+    const candidateRender = await input.renderCandidate(candidate);
+    if (protectedTrackHash(candidate, "melody") !== protectedMelody || !input.validateCandidate(candidate, candidateRender)) {
+      throw new Error("Bounded repair failed deterministic signal or melody-lock validation");
+    }
+    return { composition: candidate, render: candidateRender, removed: simplified.removed };
+  } catch (error) {
+    return { composition: input.composition, render: input.render, removed: 0, rejectedError: error instanceof Error ? error.message : "Bounded repair failed" };
+  }
+```
+
 ### Interactive Elements
 - [x] Code↔English translation of scoped drum simplification.
 - [x] Quiz: 3 scenarios on protected melody, deterministic seeds, and measured vs subjective audio facts.

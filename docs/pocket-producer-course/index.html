@@ -179,34 +179,34 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE</span>
-            <pre><code>  const submitDirection = async () =&gt; {
-    if (draft.trim().length &lt; 3) return
-    setBusy(true); setError(null)
-    try {
-      const id = await ensureProject()
-      const result = snapshot?.project.currentRevisionId
-        ? await api.revise(id, snapshot.project.currentRevisionId, draft)
-        : await api.generate(id, draft, snapshot?.assets[0]?.id)
-      setJob(await api.job(result.jobId))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit direction") }</code></pre>
+            <pre><code>      const baseRevisionId = snapshot?.project.currentRevisionId ?? null
+      const sourceAssetId = snapshot?.assets[0]?.id
+      const commandIdentity = `${id}:${baseRevisionId ?? "new"}:${sourceAssetId ?? "palette"}:${draft.trim()}`
+      const storageKey = `pocket-producer:submission:${commandIdentity}`
+      const idempotencyKey = localStorage.getItem(storageKey) ?? crypto.randomUUID()
+      localStorage.setItem(storageKey, idempotencyKey)
+      const result = baseRevisionId
+        ? await api.revise(id, baseRevisionId, draft, idempotencyKey)
+        : await api.generate(id, draft, idempotencyKey, sourceAssetId)
+      localStorage.removeItem(storageKey)
+      setJob(await api.job(result.jobId))</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
-              <p class="tl">Create the action that runs when the listener submits a direction.</p>
-              <p class="tl">Ignore directions too short to be useful.</p>
-              <p class="tl">Show a busy state and clear any old error.</p>
-              <p class="tl">Begin a protected attempt that can report failure cleanly.</p>
-              <p class="tl">Make sure there is a project, and wait for its identifier.</p>
+              <p class="tl">Capture the accepted base version and optional owned source at submission time.</p>
+              <p class="tl">Build a stable identity from the exact musical command.</p>
+              <p class="tl">Reuse the saved <span class="term" data-definition="An idempotency key identifies one intended request so a network retry can return the same durable job instead of creating duplicate work.">idempotency key</span>, or create it once for a new command.</p>
+              <p class="tl">Keep that key in browser storage while the request outcome is unknown.</p>
               <p class="tl">
                 If the current <span class="term" data-definition="A revision is an immutable saved version of a composition and its rendered results.">revision</span>
                 exists, request a revision; otherwise request a fresh generation.
               </p>
+              <p class="tl">Remove the saved submission key only after the server acknowledges the request.</p>
               <p class="tl">
                 Fetch the accepted <span class="term" data-definition="A job is a durable record of background work that was accepted and can be tracked independently of the browser.">job</span>
                 so the screen can display progress.
               </p>
-              <p class="tl">If anything fails, show the clearest available message to the listener.</p>
             </div>
           </div>
         </div>
@@ -569,34 +569,28 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE</span>
-            <pre><code>export async function claimNextJob(workerId: string): Promise&lt;JobRecord | null&gt; {
-  const result = await getPool().query(
-    `WITH candidate AS (
-       SELECT id FROM job
-       WHERE (state='queued' OR (state='running' AND lease_until &lt; now()))
-         AND EXISTS (SELECT 1 FROM outbox WHERE outbox.job_id=job.id AND delivered_at IS NOT NULL)
-       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
-     ) UPDATE job SET state='running',stage=CASE WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
-       lease_owner=$1,lease_generation=lease_generation+1,lease_until=now()+interval '45 seconds',attempts=attempts+1,updated_at=now()
-     WHERE id=(SELECT id FROM candidate)
-     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_generation,attempts,cancellation_requested_at`,
-    [workerId]</code></pre>
+            <pre><code>    const active = await client.query&lt;{ state: string; cancellation_requested_at: Date | null; deadline_at: Date }&gt;(
+      `UPDATE job SET stage=COALESCE($5,stage),updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND lease_until&gt;now() AND deadline_at&gt;now()
+       RETURNING state,cancellation_requested_at,deadline_at`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, stage ?? null]
+    );
+    const row = active.rows[0];
+    if (!row) throw new JobControlError("LEASE_LOST", "Worker lease or deadline rejected progress");
+    if (row.cancellation_requested_at || row.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation requested");
+    if (row.state !== "running") throw new JobControlError("LEASE_LOST", "Job is no longer running");
+    await insertJobEvent(client, job.id, eventType, payload);</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
-              <p class="tl">Define a background claim that returns one job record, or nothing when no work is ready.</p>
-              <p class="tl">
-                Ask the shared database connection pool to run one <span class="term" data-definition="A SQL query is a structured instruction that asks a relational database to read or change records.">SQL query</span>.
-              </p>
-              <p class="tl">Start by finding one candidate job identifier.</p>
-              <p class="tl">A queued job is ready, and a running job becomes ready again only after its lease expires.</p>
-              <p class="tl">Require proof that the outbox delivery finished before any worker can claim the job.</p>
-              <p class="tl">Choose the oldest candidate, lock it, and skip any row already locked by another worker.</p>
-              <p class="tl">Mark the winner as running and choose the stage that matches its job kind.</p>
-              <p class="tl">Record the owner, advance the lease generation, set a 45-second expiry, and count the attempt.</p>
-              <p class="tl">Update only the chosen candidate and return everything the worker needs for safe execution.</p>
-              <p class="tl">Bind the requesting worker identifier into the query rather than mixing it into the SQL text.</p>
+              <p class="tl">Ask PostgreSQL to append progress only while every custody field still matches this worker.</p>
+              <p class="tl">Match the job, worker, lease generation, and unique attempt ID.</p>
+              <p class="tl">Use database time to require both a live lease and an unexpired absolute deadline.</p>
+              <p class="tl">If nothing matched, classify the in-memory worker as stale.</p>
+              <p class="tl">Treat a cancellation request as a separate terminal path, not ordinary progress.</p>
+              <p class="tl">Require the durable state to remain <code>running</code>.</p>
+              <p class="tl">Only then allocate and append the next ordered job event.</p>
             </div>
           </div>
         </div>
@@ -610,8 +604,8 @@
         <div class="pattern-cards commit-fence-cards" aria-label="Commit fence checks">
           <div class="pattern-card" style="border-top: 3px solid #ca8a04">
             <div class="pattern-icon" style="background: #ca8a04">1</div>
-            <h3 class="pattern-title">Lease generation</h3>
-            <p class="pattern-desc">Reject an old worker whose expired job has already been reclaimed with a newer generation.</p>
+            <h3 class="pattern-title">Generation + attempt</h3>
+            <p class="pattern-desc">Reject an old worker whose job was reclaimed with a newer generation or a different attempt UUID.</p>
           </div>
           <div class="pattern-card" style="border-top: 3px solid #d94f30">
             <div class="pattern-icon" style="background: #d94f30">2</div>
@@ -816,7 +810,18 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE · packages/core/src/agent/producer.ts</span>
-            <pre><code>    const agent = createDeepAgent({
+            <pre><code>  const accounting = new AccountedOpenAICalls(input.job, config.OPENAI_MODEL, operationHash);
+  try {
+    const model = new ChatOpenAI({
+      model: config.OPENAI_MODEL,
+      apiKey: config.OPENAI_API_KEY,
+      useResponsesApi: true,
+      reasoning: { effort: "low" },
+      maxTokens: 900,
+      maxRetries: 0,
+      timeout: Math.min(60_000, Math.max(1_000, new Date(input.job.deadlineAt).getTime() - Date.now()))
+    });
+    const agent = createDeepAgent({
       name: &quot;pocket-producer&quot;,
       model,
       tools: [paletteTool],
@@ -831,23 +836,25 @@
       ],
       systemPrompt: &quot;You are Pocket Producer's main producer. Read /skills/arrange-short-instrumental/SKILL.md and /workspace/brief.md, call list_supported_palettes once, then immediately return one valid compact arrangement plan. Do not list the filesystem. Never claim to hear audio. Do not create raw timeline events; deterministic application code compiles the plan.&quot;
     });
-    const agentInput = { messages: [{ role: &quot;user&quot;, content: &quot;Plan this supported instrumental now. Use the source when one is available.&quot; }], files: await runtimeFiles(input.direction, input.hasSource) };
+    const agentInput = { messages: [{ role: &quot;user&quot;, content: &quot;Plan this supported instrumental now. Use the source only when its typed descriptors and the direction support a real role.&quot; }], files: await runtimeFiles(input.direction, input.source) };
     const result = await agent.invoke(
       agentInput as never,
-      { configurable: { thread_id: input.jobId }, recursionLimit: 24 }
+      { configurable: { thread_id: input.job.id }, recursionLimit: 8, callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) }
     );</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
+              <p class="tl">Configure the server-side OpenAI model with bounded reasoning, output, retries, and deadline.</p>
+              <p class="tl">Attach a callback that reserves and reconciles every paid model call in the shared effect ledger.</p>
               <p class="tl">Create one named producer inside the Deep Agents framework.</p>
               <p class="tl">Give it the selected model and exactly one controlled tool: the supported-palette lookup.</p>
               <p class="tl">Require its answer to match the arrangement-plan schema, then attach saved run state from the checkpointer.</p>
               <p class="tl">Mount the reusable skill instructions into its private <span class="term" data-definition="A runtime is the controlled environment where a program executes, including the files and tools it can access.">runtime</span>.</p>
               <p class="tl">Allow reads only in the approved locations; explicitly deny writes and all other reads.</p>
               <p class="tl">Tell the producer to read its instructions, inspect the supported palette once, and return a compact plan without inventing listening or timeline work.</p>
-              <p class="tl">Build the one user message plus the runtime files that describe this particular job.</p>
-              <p class="tl">Invoke the agent under the job’s <span class="term" data-definition="A thread ID is a stable label that ties saved agent state to one job, much like a claim number ties updates to one case.">thread ID</span>, with a <span class="term" data-definition="A recursion limit caps how many internal reasoning or tool steps an agent run may take before it must stop.">recursion limit</span> of 24.</p>
+              <p class="tl">Build the one user message plus runtime files containing the direction and typed, untrusted source-analysis descriptor.</p>
+              <p class="tl">Invoke the agent under the job’s <span class="term" data-definition="A thread ID is a stable label that ties saved agent state to one job, much like a claim number ties updates to one case.">thread ID</span>, with a <span class="term" data-definition="A recursion limit caps how many internal reasoning or tool steps an agent run may take before it must stop.">recursion limit</span> of 8, the accounting callback, and the job’s abort signal.</p>
             </div>
           </div>
         </div>
@@ -1088,6 +1095,14 @@
             <p>A <span class="term" data-definition="A hash is a compact fingerprint calculated from data. Matching hashes provide strong evidence that two files or structures are exactly the same.">hash</span> turns “the melody sounds unchanged” into a checkable identity claim.</p>
           </div>
         </div>
+
+        <aside class="callout callout-info animate-in">
+          <span class="callout-icon" aria-hidden="true">↩</span>
+          <div>
+            <h3>A repair candidate cannot erase a good render</h3>
+            <p>If Gemini asks for simpler drums, <code>attemptBoundedDrumRepair</code> renders a separate candidate and checks signal plus the melody hash. A failed candidate returns the earlier composition and audio unchanged; a successful repaired render is labeled <code>uncritiqued</code> because the one-pass critique budget was already spent.</p>
+          </div>
+        </aside>
       </section>
 
       <section class="screen animate-in">
@@ -1185,7 +1200,7 @@
           <div class="quiz-question-block"
                data-correct="option-a"
                data-explanation-right="Exactly. The renderer can support the numerical statement directly; the emotional claim needs human listening or a separately named analysis process."
-               data-explanation-wrong="Not quite. A waveform or hash cannot establish an emotional quality, while a peak value is directly computed from samples rather than guessed by a listener."
+               data-explanation-wrong="Not quite. A waveform or hash cannot establish an emotional quality, while a peak value is directly computed from samples rather than guessed by a listener.">
             <div class="scenario-context">
               <span class="scenario-label">Measured vs. subjective</span>
               <p>A release note needs one claim backed directly by renderer output. Which claim is defensible?</p>
@@ -1210,7 +1225,7 @@
     <header class="module-header animate-in">
       <span class="module-number">05</span>
       <h1 class="module-title">Two Honest Borders</h1>
-      <p class="module-subtitle">How <span class="term" data-definition="Gemini is Google's family of AI models. Here it is used only as a bounded audio critic, not as the owner of the song.">Gemini</span> advice and <span class="term" data-definition="Nexus is the export document format used here to describe a project and its editable audio parts. It does not itself render sound or log in to Audiotool.">Nexus</span> export stay useful without claiming powers they do not have.</p>
+      <p class="module-subtitle">How <span class="term" data-definition="Gemini is Google's family of AI models. Here it is a bounded audio analyst, never the owner of the song.">Gemini</span> advice and the <span class="term" data-definition="Nexus is Audiotool's project API and document SDK. Pocket Producer uses it behind an adapter for authorization, sample upload, and editable-stem insertion; it is not the audio renderer.">Nexus</span> handoff remain useful, recoverable, and honestly labeled.</p>
     </header>
 
     <div class="module-body">
@@ -1234,70 +1249,81 @@
           <div class="flow-step checkpoint-card">
             <div class="flow-step-num">N</div>
             <h3>Nexus checkpoint</h3>
-            <p>May label local <span class="term" data-definition="A stem is one separately exported musical part, such as drums or bass. Stems let someone remix parts without receiving every original note and instrument setting.">stems</span> in a <span class="term" data-definition="A manifest is a structured packing list. It records what files belong to an export and what each one means.">manifest</span>; it does not render them or change a remote project.</p>
+            <p>Maps local <span class="term" data-definition="A stem is one separately exported musical part, such as drums or bass. Stems let someone remix parts without receiving every original note and instrument setting.">stems</span> into a validated <span class="term" data-definition="A manifest is a structured packing list. It records what files belong to an export and what each one means.">manifest</span>, then—after consent—can upload and insert them into a remote project. It never renders them.</p>
           </div>
         </div>
 
         <div class="badge-list integration-status-ledger">
           <div class="badge-item">
-            <code class="badge-code">GEMINI · BUILT / NOT LIVE</code>
-            <span class="badge-desc">The audio-analysis <span class="term" data-definition="An adapter is a small translator between the app's own rules and an outside service's interface. It lets the rest of the app stay stable if the provider changes.">adapter</span> is built, but no Gemini <span class="term" data-definition="An API key is a secret credential an app presents to a service. It must stay server-side and should never appear in course pages, logs, or browser code.">API key</span> is configured and no live call has run.</span>
+            <code class="badge-code" style="flex: 0 0 auto">GEMINI</code>
+            <span class="badge-desc">The key is configured and two approved audio requests reached Gemini. Both returned empty structured text because the former output ceiling was consumed by thinking. Their effects are terminal failures, not invented successes.</span>
           </div>
           <div class="badge-item">
-            <code class="badge-code">NEXUS 0.0.17 · LOCAL VERIFIED</code>
-            <span class="badge-desc">The offline document and local editable-stem manifest are verified; <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">Audiotool OAuth</span> and <span class="term" data-definition="A remote mutation is a change sent to another service, such as creating or editing a project on Audiotool's servers.">remote mutation</span> are not.</span>
+            <code class="badge-code" style="flex: 0 0 auto">NEXUS</code>
+            <span class="badge-desc">Four-track offline mapping, resumed mock uploads, project edits, stop/cleanup, browser <span class="term" data-definition="OAuth is a consent-based login flow that lets one service act in another service without receiving the user's password.">OAuth</span> branches, and encrypted token rotation are verified. A real remote mutation still needs an Audiotool client ID and consent.</span>
           </div>
           <div class="badge-item">
-            <code class="badge-code">FFMPEG · ABSENT</code>
-            <span class="badge-desc"><span class="term" data-definition="FFmpeg is a command-line media tool commonly used to encode, decode, and inspect audio or video files.">FFmpeg</span> is not installed, so no FFmpeg-backed result should be implied.</span>
+            <code class="badge-code" style="flex: 0 0 auto">WAV</code>
+            <span class="badge-desc">The deterministic renderer and validator own the current WAV path. <span class="term" data-definition="FFmpeg is a command-line media tool commonly used to encode, decode, and inspect audio or video files.">FFmpeg</span> is optional until compressed input formats are deliberately added.</span>
           </div>
         </div>
       </section>
 
       <section class="screen animate-in">
-        <h2 class="screen-heading">Reserve the toll before paying it</h2>
-        <p>A Gemini attempt first reserves an <span class="term" data-definition="An idempotency key is a unique label for one intended side effect. Reusing it lets the system recognize a retry instead of charging for the same work twice.">idempotency key</span>. If the same attempt already exists, the code reuses a completed answer or returns an honest unavailable result rather than risking duplicate billing.</p>
+        <h2 class="screen-heading">Reserve the toll—and count thinking too</h2>
+        <p>A Gemini attempt first reserves an <span class="term" data-definition="An idempotency key is a unique label for one intended side effect. Reusing it lets the system recognize a retry instead of charging for the same work twice.">idempotency key</span> under the shared budget lock. The response path accounts for prompt, answer, and hidden thinking tokens even when the JSON is invalid.</p>
 
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE · packages/core/src/providers/gemini.ts</span>
-            <pre><code>    const idempotencyKey = `gemini:${purpose}:${input.hash}:audio-critique-v1`;
-    const reserved = await getPool().query&lt;{ id: string }&gt;(
-      "INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider) VALUES($1,$2,$3,$4,'pending','gemini') ON CONFLICT(job_id,idempotency_key) DO NOTHING RETURNING id",
-      [input.jobId, purpose, idempotencyKey, canonicalHash({ hash: input.hash, purpose, measured })]
-    );
-    effectId = reserved.rows[0]?.id;
-    if (!effectId) {
-      const prior = await getPool().query&lt;{ state: string; output: { analysis?: AudioAnalysis } | null }&gt;("SELECT state,output FROM effect WHERE job_id=$1 AND idempotency_key=$2", [input.jobId, idempotencyKey]);
-      if (prior.rows[0]?.state === "succeeded" &amp;&amp; prior.rows[0].output?.analysis) return prior.rows[0].output.analysis;
-      return { status: "unavailable", assetHash: input.hash, model: config.GEMINI_MODEL, promptVersion: "audio-critique-v1", purpose, inspectedInterval: { start: 0, end: input.durationSeconds }, measured, observations: [], uncertainty: "A previous Gemini attempt did not complete; it was not repeated to avoid duplicate billing.", suggestedActions: [], repairAction: "none", usage: { promptTokens: 0, candidateTokens: 0, totalTokens: 0 } };
-    }
-    await getPool().query("UPDATE job SET estimated_cost_usd=estimated_cost_usd+$2 WHERE id=$1", [input.jobId, estimatedCallCost]);</code></pre>
+            <pre><code>    const response = await client.generateContent({
+      model: config.GEMINI_MODEL,
+      contents: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/wav", data: bytes.toString("base64") } }, { text: prompt }] }],
+      config: {
+        maxOutputTokens: 2_048,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+        responseMimeType: "application/json",
+        responseJsonSchema: schema,
+        ...(input.signal ? { abortSignal: input.signal } : {}),
+        httpOptions: { timeout: Math.min(60_000, Math.max(1_000, new Date(input.job.deadlineAt).getTime() - Date.now())) }
+      }
+    });
+    const text = response.text ?? "";
+    responseTextLength = text.length;
+    finishReason = response.candidates?.[0]?.finishReason;
+    if (text.length &gt; 16_384) throw new Error("Gemini response exceeded the bounded JSON size");
+    usage = {
+      promptTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      candidateTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      thoughtsTokens: response.usageMetadata?.thoughtsTokenCount ?? 0,
+      totalTokens: response.usageMetadata?.totalTokenCount ?? 0
+    };
+    const outputTokens = Math.max(usage.candidateTokens + usage.thoughtsTokens, usage.totalTokens - usage.promptTokens);
+    costMicrousd = tokenCostMicrousd("gemini", config.GEMINI_MODEL, { inputTokens: usage.promptTokens, outputTokens });</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
-              <p class="tl">Name this one critique from its purpose, audio fingerprint, and prompt version.</p>
-              <p class="tl">Try to reserve one pending provider effect. A duplicate reservation is deliberately ignored.</p>
-              <p class="tl">Fingerprint the measured input too, so the record says exactly what was submitted.</p>
-              <p class="tl">Keep the new reservation’s ID—if there is one.</p>
-              <p class="tl">No new ID means this exact attempt was seen before, so look up its recorded outcome.</p>
-              <p class="tl">If that earlier attempt succeeded, return its saved analysis instead of calling Gemini again.</p>
-              <p class="tl">If it did not finish, say “unavailable” and explain why it was not repeated.</p>
-              <p class="tl">Only the newly reserved call adds its estimated cost to the job.</p>
+              <p class="tl">Send the real WAV bytes and the purpose-specific prompt to the configured Gemini model.</p>
+              <p class="tl">Bound output at 2,048 tokens and request minimal thinking so reasoning leaves room for the answer.</p>
+              <p class="tl">Require purpose-specific JSON, propagate cancellation, and stop at the job’s deadline.</p>
+              <p class="tl">Capture the returned text length and finish reason without logging the content.</p>
+              <p class="tl">Reject an unexpectedly large response before parsing it.</p>
+              <p class="tl">Record prompt, candidate, thought, and total token counts separately.</p>
+              <p class="tl">Bill the larger trustworthy output count, so hidden thinking is not lost when JSON validation fails.</p>
             </div>
           </div>
         </div>
 
         <aside class="callout callout-accent">
           <span class="callout-icon" aria-hidden="true">✦</span>
-          <p><strong>Aha:</strong> uncertainty is data, not permission to spend again. The safe result can be “we do not know, and we did not double-charge.”</p>
+          <p><strong>Aha:</strong> a provider response can fail product validation and still consume tokens. Failure handling must preserve both truths: “no usable analysis” and “usage may still be billable.”</p>
         </aside>
       </section>
 
       <section class="screen animate-in">
         <h2 class="screen-heading">An export is a ladder, not a magic portal</h2>
-        <p><span class="term" data-definition="Export fidelity describes how much editing freedom survives when music leaves one system for another. Higher fidelity preserves smaller, more meaningful musical pieces.">Fidelity</span> must be named precisely. The current verified Nexus path reaches editable stems locally, not a fully editable remote Audiotool project.</p>
+        <p><span class="term" data-definition="Export fidelity describes how much editing freedom survives when music leaves one system for another. Higher fidelity preserves smaller, more meaningful musical pieces.">Fidelity</span> must be named precisely. Pocket Producer now has a complete four-stem remote adapter, but only its offline and mock execution are verified until real Audiotool authorization exists.</p>
 
         <div class="flow-steps fidelity-ladder" aria-label="Export fidelity from most to least editable">
           <article class="flow-step fidelity-rung">
@@ -1315,7 +1341,7 @@
           <article class="flow-step fidelity-rung fidelity-rung-current">
             <div class="pattern-icon">✓</div>
             <h3 class="pattern-title">Editable stems</h3>
-            <p class="pattern-desc"><strong>Current local export.</strong> Drums, bass, and other parts stay separate for mixing.</p>
+            <p class="pattern-desc"><strong>Current contract.</strong> Drums, bass, melody, and texture stay separate for mixing.</p>
           </article>
           <div class="flow-arrow" aria-hidden="true">›</div>
           <article class="flow-step fidelity-rung">
@@ -1328,13 +1354,13 @@
         <div class="pattern-cards boundary-cards">
           <article class="pattern-card">
             <div class="pattern-icon" aria-hidden="true">📦</div>
-            <h3 class="pattern-title">What Nexus does</h3>
-            <p class="pattern-desc">Writes an offline document that maps composition metadata and local stem paths with an <code>editable-stem</code> label.</p>
+            <h3 class="pattern-title">What the adapter does</h3>
+            <p class="pattern-desc">Creates or resumes a project, uploads only missing private samples, waits for readiness, inserts four full-timeline regions, and closes the synced document.</p>
           </article>
           <article class="pattern-card">
             <div class="pattern-icon" aria-hidden="true">🚧</div>
             <h3 class="pattern-title">What remains outside</h3>
-            <p class="pattern-desc">The render pipeline creates audio. Audiotool login and remote project creation still require unverified client configuration and OAuth.</p>
+            <p class="pattern-desc">Live proof requires an issued client ID and browser consent. Tokens are encrypted and owner-bound locally; they are never pasted into chat or the browser bundle.</p>
           </article>
         </div>
       </section>
@@ -1354,11 +1380,11 @@
           </div>
           <div class="badge-item">
             <code class="badge-code">LOCAL VERIFIED</code>
-            <span class="badge-desc">“Nexus 0.0.17 offline document and local editable-stem manifest verified.” This says nothing about a remote Audiotool project.</span>
+            <span class="badge-desc">“Nexus 0.0.17 four-track mapping and resumable mock export verified.” This still says nothing about a real remote Audiotool project.</span>
           </div>
           <div class="badge-item">
-            <code class="badge-code">NOT LIVE</code>
-            <span class="badge-desc">“Gemini has no configured key or live call; Audiotool has no verified OAuth or remote mutation.” Missing proof stays visible.</span>
+            <code class="badge-code">LIVE FAILURE</code>
+            <span class="badge-desc">“Gemini was called and returned no usable structured analysis; the bounded-thinking fix is offline verified and its targeted live retest is pending.” Failed evidence is not the same as no evidence.</span>
           </div>
         </div>
 
@@ -1370,7 +1396,7 @@
           <div class="flow-arrow" aria-hidden="true">→</div>
           <div class="flow-step">
             <div class="flow-step-num">2</div>
-            <p>Read the reserved effect record</p>
+            <p>Read the effect state and attempt fence</p>
           </div>
           <div class="flow-arrow" aria-hidden="true">→</div>
           <div class="flow-step">
@@ -1380,7 +1406,7 @@
           <div class="flow-arrow" aria-hidden="true">∨</div>
           <div class="flow-step">
             <div class="flow-step-num">3B</div>
-            <p>No success → return unavailable</p>
+            <p>Failed/uncertain → do not replay</p>
           </div>
         </div>
       </section>
@@ -1436,13 +1462,13 @@
 
           <div class="quiz-question-block"
                data-correct="option-a"
-               data-explanation-right="Exactly. This names the verified local artifact and the unverified remote boundary without underselling the useful stems."
-               data-explanation-wrong="Not quite. The local manifest is real, but OAuth and remote Audiotool mutation have not been verified, so a live-project claim would overreach. ">
+               data-explanation-right="Exactly. This names the implemented and mock-verified adapter while preserving the unverified live authorization boundary."
+               data-explanation-wrong="Not quite. The adapter is more substantial than a local manifest, but OAuth and a real remote mutation are still unverified, so a live-project claim would overreach. ">
             <h3 class="quiz-question">3. A teammate asks whether the export now creates a fully editable Audiotool project. Which answer is accurate?</h3>
             <div class="quiz-options">
               <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
-                <span>Local editable stems and the Nexus 0.0.17 manifest are verified; Audiotool OAuth and remote project mutation are not.</span>
+                <span>The four-stem mapping, PKCE flow, encrypted session, and resumable mock export are verified; live Audiotool consent and remote editability are not.</span>
               </button>
               <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
@@ -1569,15 +1595,19 @@
             <div class="badge-list">
               <div class="badge-item">
                 <strong>DATABASE · VERIFIED</strong>
-                <span class="badge-desc">The repository integration test proves expired-lease reclaim, a higher generation, and a durable terminal failure.</span>
+                <span class="badge-desc">Eight PostgreSQL integration scenarios cover ownership, cancellation settlement, lease recovery, stale-write fencing, expected-head races, revision reuse, encrypted sessions, and provider accounting.</span>
               </div>
               <div class="badge-item">
                 <strong>BROWSER · FIXTURE MODE</strong>
-                <span class="badge-desc"><span class="term" data-definition="Fixture mode supplies controlled local test data instead of depending on a live outside service. It proves the product journey, not the provider connection.">Fixture</span> journeys exercise play, pause, compare, keep-current, and focus restoration.</span>
+                <span class="badge-desc">Two <span class="term" data-definition="Fixture mode supplies controlled local test data instead of depending on a live outside service. It proves the product journey, not the provider connection.">fixture</span> journeys exercise source audition, real Play/Pause, durable revision, compare, restore, focus return, contrast, and 390×844 reduced motion.</span>
               </div>
               <div class="badge-item">
                 <strong>OPENAI · LIVE EVIDENCE</strong>
-                <span class="badge-desc">A live OpenAI producer path has recorded evidence; keep that claim separate from Gemini.</span>
+                <span class="badge-desc">The approved integrated run produced a real source-backed revision for US$0.067380. The total preserved OpenAI ledger is US$0.294040.</span>
+              </div>
+              <div class="badge-item">
+                <strong>GEMINI · LIVE FAILURE EVIDENCE</strong>
+                <span class="badge-desc">Two calls reached Gemini and returned empty structured text under the old 512-token ceiling. Both effects are terminal failures and were not replayed.</span>
               </div>
               <div class="badge-item">
                 <strong>MOBILE · EMULATED</strong>
@@ -1585,7 +1615,7 @@
               </div>
               <div class="badge-item">
                 <strong>NEXUS · LOCAL VERIFIED</strong>
-                <span class="badge-desc">The Nexus 0.0.17 offline document and local editable-stem manifest are verified.</span>
+                <span class="badge-desc">Four-track mapping plus resumable upload/project-edit behavior are offline and mock verified, including token-rotation persistence and document cleanup.</span>
               </div>
             </div>
           </div>
@@ -1598,16 +1628,16 @@
                 <span class="badge-desc">Physical-phone touch, audio output, and browser media behavior still need a real-device check.</span>
               </div>
               <div class="badge-item">
-                <strong>GEMINI · NO KEY / NO LIVE CALL</strong>
-                <span class="badge-desc">The adapter is built, but there is no configured Gemini key and no live Gemini analysis.</span>
+                <strong>GEMINI · FIXED PATH NOT YET LIVE</strong>
+                <span class="badge-desc">Minimal thinking, a 2,048-token ceiling, and thought-token accounting pass offline tests; the two-call Gemini-only recovery proof still needs separate approval.</span>
               </div>
               <div class="badge-item">
                 <strong>AUDIOTOOL · NOT REMOTE</strong>
                 <span class="badge-desc">OAuth and remote project mutation have not been verified.</span>
               </div>
               <div class="badge-item">
-                <strong>FFMPEG · ABSENT</strong>
-                <span class="badge-desc">FFmpeg is not installed, so FFmpeg-backed rendering or inspection must not be reported as tested.</span>
+                <strong>PLAYWRIGHT · WINDOWS CLEANUP</strong>
+                <span class="badge-desc">Both browser tests report <code>ok</code>, but the parent Playwright command can wait during Windows service teardown after all local ports have closed.</span>
               </div>
             </div>
           </div>
@@ -1720,21 +1750,21 @@
 
           <div class="quiz-question-block"
                data-correct="option-a"
-               data-explanation-right="Exactly. This reports the configuration gap honestly and preserves the app's ability to continue without pretending analysis occurred."
-               data-explanation-wrong="Not quite. The adapter's existence is not evidence of a live call, and copying another provider's evidence would erase an important boundary. ">
-            <h3 class="quiz-question">3. A run requests Gemini analysis, but the environment has no Gemini key. What should the report say?</h3>
+               data-explanation-right="Exactly. Preserve the failed effects, fix the bounded-output cause, and use a separately approved new identity for a targeted proof rather than rewriting history or silently replaying."
+               data-explanation-wrong="Not quite. A live failure must remain visible, and its effect identity must not be reused as if it were a fresh, safely repeatable call. ">
+            <h3 class="quiz-question">3. Gemini returned empty JSON after its thinking consumed the output ceiling. What is the honest recovery?</h3>
             <div class="quiz-options">
               <button class="quiz-option" data-value="option-a" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
-                <span>The adapter is built, but Gemini is unavailable and no live analysis ran.</span>
+                <span>Keep the terminal failures, fix the bounded-thinking configuration, and require approval for a new targeted verification identity.</span>
               </button>
               <button class="quiz-option" data-value="option-b" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
-                <span>Gemini passed because the adapter code loaded successfully.</span>
+                <span>Edit the failed effects to succeeded because the diagnosis is understood.</span>
               </button>
               <button class="quiz-option" data-value="option-c" onclick="selectOption(this)">
                 <div class="quiz-option-radio"></div>
-                <span>Use the live OpenAI producer evidence as proof that Gemini also worked.</span>
+                <span>Retry the same failed effects automatically until structured JSON appears.</span>
               </button>
             </div>
             <div class="quiz-feedback"></div>

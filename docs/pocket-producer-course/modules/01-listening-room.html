@@ -126,34 +126,34 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE</span>
-            <pre><code>  const submitDirection = async () =&gt; {
-    if (draft.trim().length &lt; 3) return
-    setBusy(true); setError(null)
-    try {
-      const id = await ensureProject()
-      const result = snapshot?.project.currentRevisionId
-        ? await api.revise(id, snapshot.project.currentRevisionId, draft)
-        : await api.generate(id, draft, snapshot?.assets[0]?.id)
-      setJob(await api.job(result.jobId))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit direction") }</code></pre>
+            <pre><code>      const baseRevisionId = snapshot?.project.currentRevisionId ?? null
+      const sourceAssetId = snapshot?.assets[0]?.id
+      const commandIdentity = `${id}:${baseRevisionId ?? "new"}:${sourceAssetId ?? "palette"}:${draft.trim()}`
+      const storageKey = `pocket-producer:submission:${commandIdentity}`
+      const idempotencyKey = localStorage.getItem(storageKey) ?? crypto.randomUUID()
+      localStorage.setItem(storageKey, idempotencyKey)
+      const result = baseRevisionId
+        ? await api.revise(id, baseRevisionId, draft, idempotencyKey)
+        : await api.generate(id, draft, idempotencyKey, sourceAssetId)
+      localStorage.removeItem(storageKey)
+      setJob(await api.job(result.jobId))</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
-              <p class="tl">Create the action that runs when the listener submits a direction.</p>
-              <p class="tl">Ignore directions too short to be useful.</p>
-              <p class="tl">Show a busy state and clear any old error.</p>
-              <p class="tl">Begin a protected attempt that can report failure cleanly.</p>
-              <p class="tl">Make sure there is a project, and wait for its identifier.</p>
+              <p class="tl">Capture the accepted base version and optional owned source at submission time.</p>
+              <p class="tl">Build a stable identity from the exact musical command.</p>
+              <p class="tl">Reuse the saved <span class="term" data-definition="An idempotency key identifies one intended request so a network retry can return the same durable job instead of creating duplicate work.">idempotency key</span>, or create it once for a new command.</p>
+              <p class="tl">Keep that key in browser storage while the request outcome is unknown.</p>
               <p class="tl">
                 If the current <span class="term" data-definition="A revision is an immutable saved version of a composition and its rendered results.">revision</span>
                 exists, request a revision; otherwise request a fresh generation.
               </p>
+              <p class="tl">Remove the saved submission key only after the server acknowledges the request.</p>
               <p class="tl">
                 Fetch the accepted <span class="term" data-definition="A job is a durable record of background work that was accepted and can be tracked independently of the browser.">job</span>
                 so the screen can display progress.
               </p>
-              <p class="tl">If anything fails, show the clearest available message to the listener.</p>
             </div>
           </div>
         </div>

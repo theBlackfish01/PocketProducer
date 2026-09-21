@@ -222,34 +222,28 @@
         <div class="translation-block animate-in">
           <div class="translation-code">
             <span class="translation-label">CODE</span>
-            <pre><code>export async function claimNextJob(workerId: string): Promise&lt;JobRecord | null&gt; {
-  const result = await getPool().query(
-    `WITH candidate AS (
-       SELECT id FROM job
-       WHERE (state='queued' OR (state='running' AND lease_until &lt; now()))
-         AND EXISTS (SELECT 1 FROM outbox WHERE outbox.job_id=job.id AND delivered_at IS NOT NULL)
-       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
-     ) UPDATE job SET state='running',stage=CASE WHEN kind='export' THEN 'exporting' ELSE 'analyzing' END,
-       lease_owner=$1,lease_generation=lease_generation+1,lease_until=now()+interval '45 seconds',attempts=attempts+1,updated_at=now()
-     WHERE id=(SELECT id FROM candidate)
-     RETURNING id,owner_id,project_id,kind,state,stage,request,base_revision_id,expected_head_revision_id,lease_generation,attempts,cancellation_requested_at`,
-    [workerId]</code></pre>
+            <pre><code>    const active = await client.query&lt;{ state: string; cancellation_requested_at: Date | null; deadline_at: Date }&gt;(
+      `UPDATE job SET stage=COALESCE($5,stage),updated_at=now()
+       WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4 AND lease_until&gt;now() AND deadline_at&gt;now()
+       RETURNING state,cancellation_requested_at,deadline_at`,
+      [job.id, job.leaseOwner, job.leaseGeneration, job.attemptId, stage ?? null]
+    );
+    const row = active.rows[0];
+    if (!row) throw new JobControlError("LEASE_LOST", "Worker lease or deadline rejected progress");
+    if (row.cancellation_requested_at || row.state === "cancel_requested") throw new JobControlError("CANCELLED", "Cancellation requested");
+    if (row.state !== "running") throw new JobControlError("LEASE_LOST", "Job is no longer running");
+    await insertJobEvent(client, job.id, eventType, payload);</code></pre>
           </div>
           <div class="translation-english">
             <span class="translation-label">PLAIN ENGLISH</span>
             <div class="translation-lines">
-              <p class="tl">Define a background claim that returns one job record, or nothing when no work is ready.</p>
-              <p class="tl">
-                Ask the shared database connection pool to run one <span class="term" data-definition="A SQL query is a structured instruction that asks a relational database to read or change records.">SQL query</span>.
-              </p>
-              <p class="tl">Start by finding one candidate job identifier.</p>
-              <p class="tl">A queued job is ready, and a running job becomes ready again only after its lease expires.</p>
-              <p class="tl">Require proof that the outbox delivery finished before any worker can claim the job.</p>
-              <p class="tl">Choose the oldest candidate, lock it, and skip any row already locked by another worker.</p>
-              <p class="tl">Mark the winner as running and choose the stage that matches its job kind.</p>
-              <p class="tl">Record the owner, advance the lease generation, set a 45-second expiry, and count the attempt.</p>
-              <p class="tl">Update only the chosen candidate and return everything the worker needs for safe execution.</p>
-              <p class="tl">Bind the requesting worker identifier into the query rather than mixing it into the SQL text.</p>
+              <p class="tl">Ask PostgreSQL to append progress only while every custody field still matches this worker.</p>
+              <p class="tl">Match the job, worker, lease generation, and unique attempt ID.</p>
+              <p class="tl">Use database time to require both a live lease and an unexpired absolute deadline.</p>
+              <p class="tl">If nothing matched, classify the in-memory worker as stale.</p>
+              <p class="tl">Treat a cancellation request as a separate terminal path, not ordinary progress.</p>
+              <p class="tl">Require the durable state to remain <code>running</code>.</p>
+              <p class="tl">Only then allocate and append the next ordered job event.</p>
             </div>
           </div>
         </div>
@@ -263,8 +257,8 @@
         <div class="pattern-cards commit-fence-cards" aria-label="Commit fence checks">
           <div class="pattern-card" style="border-top: 3px solid #ca8a04">
             <div class="pattern-icon" style="background: #ca8a04">1</div>
-            <h3 class="pattern-title">Lease generation</h3>
-            <p class="pattern-desc">Reject an old worker whose expired job has already been reclaimed with a newer generation.</p>
+            <h3 class="pattern-title">Generation + attempt</h3>
+            <p class="pattern-desc">Reject an old worker whose job was reclaimed with a newer generation or a different attempt UUID.</p>
           </div>
           <div class="pattern-card" style="border-top: 3px solid #d94f30">
             <div class="pattern-icon" style="background: #d94f30">2</div>

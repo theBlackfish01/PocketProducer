@@ -40,7 +40,7 @@ File: tests/e2e/listening-room.spec.ts (lines 16-27)
 
 ### Interactive Elements
 - [x] Code↔English translation of worker restart test.
-- [x] Quiz: 3 debugging scenarios—UI stale, audio silent, provider missing.
+- [x] Quiz: 3 debugging scenarios—UI stale, audio silent, and honest recovery from a terminal provider failure.
 - [x] Testing pyramid cards with exact verified/unverified distinctions.
 - [x] Visual troubleshooting decision path from browser → API → job events → worker/effects → revision/audio.
 
@@ -53,4 +53,4 @@ File: tests/e2e/listening-room.spec.ts (lines 16-27)
 ### Connections
 - Previous: external boundaries reveal honest unavailable states.
 - Next: final big-picture handoff with vocabulary and safe next changes.
-- Tone/style: distinguish fixture tests, live OpenAI evidence, emulated mobile checks, and unverified real-device/Gemini/Audiotool paths.
+- Tone/style: distinguish fixture tests, successful live OpenAI evidence, terminal Gemini live failure evidence, the offline-verified Gemini fix, emulated mobile checks, and unverified physical-device/Audiotool paths.
