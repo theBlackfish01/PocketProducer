@@ -34,7 +34,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let lastFailure: unknown
   for (let attempt = 0; attempt < (retryableRead ? 5 : 1); attempt += 1) {
     try {
-      const response = await fetch(`/api/v1${path}`, { ...init, headers });
+      const response = await fetch(`/api/v1${path}`, { cache: "no-store", ...init, headers });
       if (response.ok) return await response.json() as T;
       if (retryableRead && response.status >= 502 && attempt < 4) {
         await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)))
@@ -44,6 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new Error(problem.message ?? `Request failed (${response.status})`);
     } catch (error) {
       lastFailure = error
+      if (init?.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error
       if (!retryableRead || attempt >= 4) break
       await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)))
     }
@@ -55,17 +56,19 @@ export const api = {
   status: () => request<AppStatus>("/status"),
   listProjects: () => request<{ projects: Project[] }>("/projects"),
   createProject: (title: string) => request<{ project: Project }>("/projects", { method: "POST", body: JSON.stringify({ title }) }),
-  snapshot: (id: string) => request<ProjectSnapshot>(`/projects/${id}`),
-  job: (id: string) => request<Job>(`/jobs/${id}`),
+  snapshot: (id: string, signal?: AbortSignal) => request<ProjectSnapshot>(`/projects/${id}`, { signal }),
+  job: (id: string, signal?: AbortSignal) => request<Job>(`/jobs/${id}`, { signal }),
+  commandReceipt: (projectId: string, operation: "generation" | "revision" | "export", idempotencyKey: string, signal?: AbortSignal) => request<{ job: Job | null }>(`/projects/${projectId}/commands/${operation}/${encodeURIComponent(idempotencyKey)}`, { signal }),
   generate: (projectId: string, direction: string, idempotencyKey: string, sourceAssetId?: string) => request<{ jobId: string }>(`/projects/${projectId}/generations`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, sourceAssetId }) }),
   revise: (projectId: string, revisionId: string, direction: string, idempotencyKey: string) => request<{ jobId: string }>(`/projects/${projectId}/revisions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, baseRevisionId: revisionId, expectedHeadRevisionId: revisionId, protectedTrackIds: ["melody"], sectionId: "groove" }) }),
   cancel: (jobId: string) => request(`/jobs/${jobId}/cancel`, { method: "POST", body: "{}" }),
   selectVersion: (projectId: string, revisionId: string, expectedHeadRevisionId: string | null) => request(`/projects/${projectId}/select-version`, { method: "POST", body: JSON.stringify({ revisionId, expectedHeadRevisionId }) }),
-  export: (revisionId: string) => request<{ jobId: string }>(`/revisions/${revisionId}/exports`, { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: "{}" }),
-  exportStatus: (revisionId: string) => request<{ export: { state: string; fidelity: Record<string, unknown>; remote_url: string | null; error_message: string | null } | null }>(`/exports/${revisionId}`),
-  upload: async (projectId: string, file: File) => {
+  reconcile: (jobId: string, signal?: AbortSignal) => request<{ job: Job; export: { state: string; remote_url: string | null; error_message: string | null } | null }>(`/jobs/${jobId}/reconcile`, { method: "POST", body: "{}", signal }),
+  export: (revisionId: string, idempotencyKey: string) => request<{ jobId: string }>(`/revisions/${revisionId}/exports`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: "{}" }),
+  exportStatus: (revisionId: string, signal?: AbortSignal) => request<{ export: { state: string; fidelity: Record<string, unknown>; remote_url: string | null; error_message: string | null } | null }>(`/exports/${revisionId}`, { signal }),
+  upload: async (projectId: string, file: File, signal?: AbortSignal) => {
     const form = new FormData(); form.set("file", file);
-    const response = await fetch(`/api/v1/projects/${projectId}/assets`, { method: "POST", body: form });
+    const response = await fetch(`/api/v1/projects/${projectId}/assets`, { method: "POST", body: form, signal });
     if (!response.ok) { const body = await response.json().catch(() => ({ message: response.statusText })) as { message?: string }; throw new Error(body.message ?? "Upload failed"); }
     return response.json() as Promise<{ asset: { id: string; name: string } }>;
   }

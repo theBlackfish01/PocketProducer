@@ -138,9 +138,10 @@ button:disabled { cursor: not-allowed; }
   .topline { margin-top: 18px; }
   .topline > span:first-child { display: none; }
   .session-header { margin-top: 28px; }
-  .session-title { font-size: clamp(2.5rem, 13vw, 3.7rem); }
+  .session-title { font-size: clamp(2.35rem, 11vw, 3.45rem); overflow-wrap: anywhere; }
   .listening-grid { grid-template-columns: 1fr; gap: 26px; margin-top: 32px; }
-  .cover-art { width: min(78vw, 310px); justify-self: center; }
+  .player-card { grid-row: 1; }
+  .cover-art { grid-row: 2; width: min(54vw, 230px); justify-self: center; }
   .waveframe { min-height: 100px; }
   .detail-grid { grid-template-columns: 1fr; }
   .section-strip { overflow-x: auto; grid-template-columns: repeat(4, minmax(112px, 1fr)); padding-bottom: 4px; }

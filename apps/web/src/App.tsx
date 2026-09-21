@@ -19,6 +19,7 @@ function stageLabel(job: Job | null) {
   if (job.state === "cancel_requested") return "Stopping safely…"
   if (job.state === "failed") return job.error_message ?? "The request failed. Your previous version is safe."
   if (job.state === "cancelled") return "Request cancelled. Your previous version is unchanged."
+  if (job.state === "needs_attention") return job.error_message ?? "The outcome needs a safe reconciliation before any new paid or remote work."
   const labels: Record<string, string> = {
     analyzing: "Inspecting your source…", planning: "Shaping the arrangement…", composing: "Writing the parts…",
     rendering: "Rendering the real preview…", checking: "Checking timing and headroom…", exporting: "Preparing the Nexus handoff…"
@@ -32,6 +33,17 @@ function MiniWave() {
 
 const creationDraft = "Make a warm, restrained instrumental around this sound."
 const revisionDraft = "Simplify the drums in Groove; keep the melody."
+
+interface SubmissionReceipt {
+  key: string
+  projectId: string
+  operation: "generation" | "revision" | "export"
+  direction?: string
+  baseRevisionId?: string | null
+  sourceAssetId?: string
+  jobId?: string
+  acceptedAt?: string
+}
 
 function acceptedPlaybackItem(value: ProjectSnapshot | null): PlaybackItem | null {
   const revision = value?.currentRevision
@@ -64,26 +76,92 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null)
   const [recording, setRecording] = useState<RecordingSession | null>(null)
+  const [recordingNotice, setRecordingNotice] = useState<string | null>(null)
+  const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const projectRequestRef = useRef(0)
+  const activeProjectRef = useRef<string | null>(null)
+  const draftProjectRef = useRef<string | null>(null)
+  const recordingAbortRef = useRef<AbortController | null>(null)
+  const recordingProjectRef = useRef<string | null>(null)
   const pollingFailuresRef = useRef(0)
   const oauthCallbackRef = useRef(false)
   const playback = usePlayback()
+
+  const receiptKey = (id: string) => `pocket-producer:receipt:${id}`
+  const readReceipt = (id: string): SubmissionReceipt | null => {
+    try {
+      const raw = localStorage.getItem(receiptKey(id))
+      if (!raw) return null
+      const value = JSON.parse(raw) as SubmissionReceipt
+      return value.projectId === id ? value : null
+    } catch { return null }
+  }
+
+  const reconcileReceipt = (id: string, storedReceipt: SubmissionReceipt | null, attempt = 0) => {
+    if (!storedReceipt) return
+    if (attempt >= 150) { setError("The saved command is still unresolved. Reload later to continue reconciliation without creating duplicate work."); return }
+    const resolved = storedReceipt.jobId
+      ? api.job(storedReceipt.jobId).then((storedJob) => ({ job: storedJob }))
+      : api.commandReceipt(id, storedReceipt.operation, storedReceipt.key)
+    void resolved.then(async ({ job: storedJob }) => {
+      if (!storedJob || activeProjectRef.current !== id || storedJob.project_id !== id) return
+      const recovered = storedReceipt.jobId ? storedReceipt : { ...storedReceipt, jobId: storedJob.id, acceptedAt: storedReceipt.acceptedAt ?? new Date().toISOString() }
+      if (!storedReceipt.jobId) { localStorage.setItem(receiptKey(id), JSON.stringify(recovered)); setReceipt(recovered) }
+      setJob(storedJob)
+      if (terminalStates.has(storedJob.state)) {
+        const value = await api.snapshot(id)
+        if (activeProjectRef.current !== id) return
+        setSnapshot(value); setSelectedRevisionId(value.project.currentRevisionId)
+        if (storedJob.state === "succeeded" && storedJob.kind === "generation") { draftProjectRef.current = id; setDraft(revisionDraft) }
+        const accepted = acceptedPlaybackItem(value)
+        if (accepted) playback.load(accepted); else playback.clear()
+        if (storedJob.kind === "export" && value.project.currentRevisionId) {
+          const exportState = await api.exportStatus(value.project.currentRevisionId)
+          if (activeProjectRef.current === id) setExportResult(exportState.export)
+        }
+      } else {
+        window.setTimeout(() => {
+          if (activeProjectRef.current !== id) return
+          const current = readReceipt(id)
+          if (current?.key === recovered.key) reconcileReceipt(id, current, attempt + 1)
+        }, 800)
+      }
+    }).catch(() => {
+      window.setTimeout(() => {
+        if (activeProjectRef.current !== id) return
+        const current = readReceipt(id)
+        if (current?.key === storedReceipt.key) reconcileReceipt(id, current, attempt + 1)
+      }, 1_200)
+    })
+  }
+
+  const loadExportState = (project: string, revisionId: string, requestId: number) => {
+    void api.exportStatus(revisionId).then((result) => {
+      if (requestId === projectRequestRef.current && activeProjectRef.current === project) setExportResult(result.export)
+    }).catch(() => {
+      if (requestId === projectRequestRef.current && activeProjectRef.current === project) setExportResult(null)
+    })
+  }
 
   const refreshProjects = async (preferred?: string) => {
     const requestId = ++projectRequestRef.current
     const result = await api.listProjects()
     if (requestId !== projectRequestRef.current) return
     setProjects(result.projects)
-    const next = preferred ?? projectId ?? result.projects[0]?.id ?? null
+    const next = preferred ?? activeProjectRef.current ?? result.projects[0]?.id ?? null
+    activeProjectRef.current = next
     setProjectId(next)
     if (next) {
       const value = await api.snapshot(next)
-      if (requestId !== projectRequestRef.current) return
+      if (requestId !== projectRequestRef.current || activeProjectRef.current !== next) return
       setSnapshot(value); setJob(value.latestJob); setSelectedRevisionId(value.project.currentRevisionId)
-      const accepted = acceptedPlaybackItem(value); if (accepted) playback.load(accepted)
-      if (value.currentRevision) void api.exportStatus(value.currentRevision.id).then((result) => setExportResult(result.export)).catch(() => setExportResult(null))
-    } else { setSnapshot(null) }
+      draftProjectRef.current = next
+      setDraft(localStorage.getItem(`pocket-producer:draft:${next}`) ?? (value.currentRevision ? revisionDraft : creationDraft))
+      const accepted = acceptedPlaybackItem(value); if (accepted) playback.load(accepted); else playback.clear()
+      const storedReceipt = readReceipt(next); setReceipt(storedReceipt); reconcileReceipt(next, storedReceipt)
+      if (value.currentRevision) loadExportState(next, value.currentRevision.id, requestId); else setExportResult(null)
+    } else { setSnapshot(null); setReceipt(null); setExportResult(null); playback.clear() }
   }
 
   useEffect(() => {
@@ -91,14 +169,16 @@ export default function App() {
     void Promise.all([api.status(), api.listProjects()]).then(async ([status, list]) => {
       if (requestId !== projectRequestRef.current) return
       setProviders(status.providers); setNexus(status.nexus); setProjects(list.projects)
-      const first = list.projects[0]?.id ?? null; setProjectId(first)
+      const first = list.projects[0]?.id ?? null; activeProjectRef.current = first; setProjectId(first)
       if (first) {
         const value = await api.snapshot(first)
-        if (requestId !== projectRequestRef.current) return
+        if (requestId !== projectRequestRef.current || activeProjectRef.current !== first) return
         setSnapshot(value); setJob(value.latestJob); setSelectedRevisionId(value.project.currentRevisionId)
+        draftProjectRef.current = first
         setDraft(localStorage.getItem(`pocket-producer:draft:${first}`) ?? (value.currentRevision ? revisionDraft : creationDraft))
-        const accepted = acceptedPlaybackItem(value); if (accepted) playback.load(accepted)
-        if (value.currentRevision) void api.exportStatus(value.currentRevision.id).then((result) => setExportResult(result.export)).catch(() => setExportResult(null))
+        const accepted = acceptedPlaybackItem(value); if (accepted) playback.load(accepted); else playback.clear()
+        const storedReceipt = readReceipt(first); setReceipt(storedReceipt); reconcileReceipt(first, storedReceipt)
+        if (value.currentRevision) loadExportState(first, value.currentRevision.id, requestId)
       }
     }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unable to connect to Pocket Producer")).finally(() => setLoading(false))
   }, [])
@@ -112,33 +192,47 @@ export default function App() {
       .finally(() => window.history.replaceState({}, "", "/"))
   }, [nexus.oauth])
 
-  useEffect(() => { if (projectId) localStorage.setItem(`pocket-producer:draft:${projectId}`, draft) }, [draft, projectId])
+  useEffect(() => { if (projectId && draftProjectRef.current === projectId) localStorage.setItem(`pocket-producer:draft:${projectId}`, draft) }, [draft, projectId])
 
-  useEffect(() => () => { recording?.discard() }, [recording])
+  useEffect(() => () => { recordingAbortRef.current?.abort(); recording?.discard() }, [recording])
 
   useEffect(() => {
     if (!job || terminalStates.has(job.state)) return
-    const timer = window.setInterval(() => {
-      void api.job(job.id).then(async (next) => {
+    const polledJobId = job.id
+    const polledProjectId = job.project_id
+    const controller = new AbortController()
+    let disposed = false
+    const poll = () => {
+      void Promise.all([api.job(polledJobId, controller.signal), api.snapshot(polledProjectId, controller.signal)]).then(async ([next, value]) => {
+        if (disposed) return
         pollingFailuresRef.current = 0
-        setJob(next)
+        if (next.project_id !== polledProjectId || activeProjectRef.current !== polledProjectId) return
+        setJob(next); setSnapshot(value); setSelectedRevisionId(value.project.currentRevisionId)
         if (terminalStates.has(next.state)) {
-          await refreshProjects(next.project_id)
-          if (next.state === "succeeded" && next.kind === "generation") setDraft(revisionDraft)
-          if (next.kind === "export" && snapshot?.project.currentRevisionId) setExportResult((await api.exportStatus(snapshot.project.currentRevisionId)).export)
+          window.clearInterval(timer)
+          if (next.state === "succeeded" && next.kind === "generation") { draftProjectRef.current = polledProjectId; setDraft(revisionDraft) }
+          const accepted = acceptedPlaybackItem(value)
+          if (accepted && (!playback.item || playback.item.kind === "revision")) playback.load(accepted)
+          if (next.kind === "export" && value.project.currentRevisionId) {
+            const exportState = (await api.exportStatus(value.project.currentRevisionId, controller.signal)).export
+            if (activeProjectRef.current === polledProjectId) setExportResult(exportState)
+          }
         }
       }).catch(() => {
+        if (disposed || controller.signal.aborted) return
         pollingFailuresRef.current += 1
         if (pollingFailuresRef.current >= 3) setError("Connection to the local worker was interrupted. The job remains durable; reload to reconcile its status.")
       })
-    }, 800)
-    return () => window.clearInterval(timer)
-  }, [job?.id, job?.state])
+    }
+    const timer = window.setInterval(poll, 800)
+    poll()
+    return () => { disposed = true; controller.abort(); window.clearInterval(timer) }
+  }, [job?.id])
 
   const currentRevision = snapshot?.currentRevision ?? null
   const acceptedItem = acceptedPlaybackItem(snapshot)
   const audibleItem = playback.item ?? acceptedItem
-  const activeSectionId = playback.item?.kind === "revision" && currentRevision
+  const activeSectionId = playback.item?.kind === "revision" && playback.item.id === currentRevision?.id && currentRevision
     ? currentRevision.composition.sections.find((section) => {
         const tick = playback.currentTime * currentRevision.composition.tempoBpm / 60 * 960
         return tick >= section.startTick && tick < section.endTick
@@ -149,6 +243,7 @@ export default function App() {
   const currentAnalysis = snapshot?.analyses.find((analysis) => analysis.revisionId === currentRevision?.id && analysis.purpose === "preview-critique")
   const sourceAnalysis = snapshot?.analyses.find((analysis) => analysis.revisionId === currentRevision?.id && analysis.purpose === "source-analysis")
   const producerProvenance = currentRevision?.producer.provider === "openai-deep-agent" ? "OpenAI Deep Agent" : currentRevision ? "deterministic fixture" : providers.openai ? "OpenAI configured" : "fixture fallback"
+  const sourceLineage = currentRevision?.producer.sourceLineage as { attached?: string[]; selected?: string | null; referenced?: string[]; audiblyUsed?: boolean } | undefined
 
   const returnToAccepted = () => {
     if (!acceptedItem) return
@@ -176,38 +271,88 @@ export default function App() {
       return
     }
     setBusy(true); setError(null)
+    let targetProjectId = projectId
     try {
       const id = await ensureProject()
+      targetProjectId = id
       const baseRevisionId = snapshot?.project.currentRevisionId ?? null
       const sourceAssetId = snapshot?.assets[0]?.id
       const commandIdentity = `${id}:${baseRevisionId ?? "new"}:${sourceAssetId ?? "palette"}:${draft.trim()}`
       const storageKey = `pocket-producer:submission:${commandIdentity}`
       const idempotencyKey = localStorage.getItem(storageKey) ?? crypto.randomUUID()
       localStorage.setItem(storageKey, idempotencyKey)
+      const pendingReceipt: SubmissionReceipt = {
+        key: idempotencyKey,
+        projectId: id,
+        operation: baseRevisionId ? "revision" : "generation",
+        direction: draft.trim(),
+        baseRevisionId,
+        ...(sourceAssetId ? { sourceAssetId } : {})
+      }
+      localStorage.setItem(receiptKey(id), JSON.stringify(pendingReceipt))
+      if (activeProjectRef.current === id) setReceipt(pendingReceipt)
       const result = baseRevisionId
         ? await api.revise(id, baseRevisionId, draft, idempotencyKey)
         : await api.generate(id, draft, idempotencyKey, sourceAssetId)
-      localStorage.removeItem(storageKey)
-      setJob(await api.job(result.jobId))
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to submit direction") }
+      const acceptedReceipt = { ...pendingReceipt, jobId: result.jobId, acceptedAt: new Date().toISOString() }
+      localStorage.setItem(receiptKey(id), JSON.stringify(acceptedReceipt))
+      if (activeProjectRef.current === id) {
+        setReceipt(acceptedReceipt)
+        setJob(await api.job(result.jobId))
+      }
+    } catch (cause) {
+      if (activeProjectRef.current === targetProjectId) setError(cause instanceof Error ? cause.message : "Unable to submit direction")
+    }
     finally { setBusy(false) }
   }
 
   const uploadFile = async (file: File) => {
     setBusy(true); setError(null)
-    try { const id = await ensureProject(); await api.upload(id, file); await refreshProjects(id); setSourcesOpen(true) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Upload failed") }
+    let targetProjectId = projectId
+    try {
+      const id = await ensureProject(); targetProjectId = id
+      await api.upload(id, file)
+      if (activeProjectRef.current !== id) return
+      await refreshProjects(id)
+      if (activeProjectRef.current === id) setSourcesOpen(true)
+    }
+    catch (cause) { if (activeProjectRef.current === targetProjectId) setError(cause instanceof Error ? cause.message : "Upload failed") }
     finally { setBusy(false); if (fileRef.current) fileRef.current.value = "" }
   }
 
   const toggleRecording = async () => {
     setError(null)
     if (recording) {
-      try { const file = await recording.stop(); setRecording(null); await uploadFile(file) }
-      catch (cause) { setRecording(null); setError(cause instanceof Error ? cause.message : "Recording failed") }
+      const targetProjectId = recordingProjectRef.current
+      try {
+        const file = await recording.stop(); setRecording(null); setRecordingNotice(null)
+        if (!targetProjectId || activeProjectRef.current !== targetProjectId) return
+        await uploadFile(file)
+      }
+      catch (cause) { setRecording(null); if (activeProjectRef.current === targetProjectId) setError(cause instanceof Error ? cause.message : "Recording failed") }
     } else {
-      try { setRecording(await startWavRecording()) }
-      catch { setError("Microphone access was denied or unavailable. You can still upload a WAV or type a direction.") }
+      let targetProjectId: string | null = null
+      try {
+        targetProjectId = await ensureProject()
+        const controller = new AbortController()
+        recordingAbortRef.current?.abort()
+        recordingAbortRef.current = controller
+        recordingProjectRef.current = targetProjectId
+        setRecordingNotice("Recording… it will stop automatically at 30 seconds or 5 MB.")
+        const session = await startWavRecording({
+          signal: controller.signal,
+          onLimitReached: () => {
+            if (activeProjectRef.current === targetProjectId && recordingAbortRef.current === controller) setRecordingNotice("Recording limit reached. Choose “Stop and use” to add it.")
+          }
+        })
+        if (controller.signal.aborted || activeProjectRef.current !== targetProjectId) { session.discard(); return }
+        setRecording(session)
+      }
+      catch (cause) {
+        if (cause instanceof DOMException && cause.name === "AbortError") return
+        setRecordingNotice(null)
+        if (activeProjectRef.current === targetProjectId) setError("Microphone access was denied or unavailable. You can still upload a WAV or type a direction.")
+      }
     }
   }
 
@@ -218,31 +363,55 @@ export default function App() {
 
   const chooseProject = async (id: string) => {
     const requestId = ++projectRequestRef.current
-    playback.audio?.pause(); recording?.discard(); setRecording(null); setProjectId(id); setSelectedRevisionId(null); setLoading(true); setError(null)
+    activeProjectRef.current = id
+    draftProjectRef.current = id
+    recordingAbortRef.current?.abort(); recording?.discard(); setRecording(null); setRecordingNotice(null)
+    playback.clear(); setProjectId(id); setSnapshot(null); setJob(null); setSelectedRevisionId(null); setExportResult(null); setReceipt(readReceipt(id)); setLoading(true); setError(null)
+    setDraft(localStorage.getItem(`pocket-producer:draft:${id}`) ?? creationDraft)
     try {
       const value = await api.snapshot(id)
-      if (requestId !== projectRequestRef.current) return
-      setSnapshot(value); setJob(value.latestJob); setSelectedRevisionId(value.project.currentRevisionId); setNavOpen(false); setExportResult(null)
+      if (requestId !== projectRequestRef.current || activeProjectRef.current !== id) return
+      setSnapshot(value); setJob(value.latestJob); setSelectedRevisionId(value.project.currentRevisionId); setNavOpen(false)
       setDraft(localStorage.getItem(`pocket-producer:draft:${id}`) ?? (value.currentRevision ? revisionDraft : creationDraft))
-      const accepted = acceptedPlaybackItem(value); if (accepted) playback.load(accepted)
+      const accepted = acceptedPlaybackItem(value); if (accepted) playback.load(accepted); else playback.clear()
+      const storedReceipt = readReceipt(id); setReceipt(storedReceipt); reconcileReceipt(id, storedReceipt)
+      if (value.currentRevision) loadExportState(id, value.currentRevision.id, requestId)
     }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to open session") }
+    catch (cause) { if (activeProjectRef.current === id) setError(cause instanceof Error ? cause.message : "Unable to open session") }
     finally { if (requestId === projectRequestRef.current) setLoading(false) }
   }
 
   const useSelectedVersion = async () => {
     if (!snapshot || !selectedRevisionId) return
+    const targetProjectId = snapshot.project.id
     setBusy(true)
-    try { await api.selectVersion(snapshot.project.id, selectedRevisionId, snapshot.project.currentRevisionId); await refreshProjects(snapshot.project.id); setCompareOpen(false) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to restore version") }
+    try {
+      await api.selectVersion(targetProjectId, selectedRevisionId, snapshot.project.currentRevisionId)
+      if (activeProjectRef.current !== targetProjectId) return
+      await refreshProjects(targetProjectId); setCompareOpen(false)
+    }
+    catch (cause) { if (activeProjectRef.current === targetProjectId) setError(cause instanceof Error ? cause.message : "Unable to restore version") }
     finally { setBusy(false) }
   }
 
   const exportCurrent = async () => {
     if (!snapshot?.project.currentRevisionId) return
+    const targetProjectId = snapshot.project.id
+    const revisionId = snapshot.project.currentRevisionId
     setBusy(true); setError(null)
-    try { const result = await api.export(snapshot.project.currentRevisionId); setExportResult({ state: "exporting", remote_url: null, error_message: null }); setJob(await api.job(result.jobId)) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to prepare export") }
+    try {
+      const existing = readReceipt(targetProjectId)
+      const exportReceipt: SubmissionReceipt = existing?.operation === "export" && existing.baseRevisionId === revisionId
+        ? existing
+        : { key: crypto.randomUUID(), projectId: targetProjectId, operation: "export", baseRevisionId: revisionId }
+      localStorage.setItem(receiptKey(targetProjectId), JSON.stringify(exportReceipt)); setReceipt(exportReceipt)
+      const result = await api.export(revisionId, exportReceipt.key)
+      const acceptedReceipt = { ...exportReceipt, jobId: result.jobId, acceptedAt: new Date().toISOString() }
+      localStorage.setItem(receiptKey(targetProjectId), JSON.stringify(acceptedReceipt))
+      if (activeProjectRef.current !== targetProjectId) return
+      setReceipt(acceptedReceipt); setExportResult({ state: "exporting", remote_url: null, error_message: null }); setJob(await api.job(result.jobId))
+    }
+    catch (cause) { if (activeProjectRef.current === targetProjectId) setError(cause instanceof Error ? cause.message : "Unable to prepare export") }
     finally { setBusy(false) }
   }
 
@@ -254,6 +423,21 @@ export default function App() {
       if (result === "connected") { const status = await api.status(); setProviders(status.providers); setNexus(status.nexus) }
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Audiotool connection failed") }
     finally { setBusy(false) }
+  }
+
+  const reconcileKnownOutcome = async () => {
+    if (!job) return
+    const targetProjectId = job.project_id
+    setBusy(true); setError(null)
+    try {
+      const result = await api.reconcile(job.id)
+      if (activeProjectRef.current !== targetProjectId) return
+      setJob(result.job); if (result.export) setExportResult(result.export)
+      const value = await api.snapshot(targetProjectId)
+      if (activeProjectRef.current === targetProjectId) setSnapshot(value)
+    } catch (cause) {
+      if (activeProjectRef.current === targetProjectId) setError(cause instanceof Error ? cause.message : "Unable to reconcile the known outcome")
+    } finally { setBusy(false) }
   }
 
   const navContent = useMemo(() => <>
@@ -275,11 +459,13 @@ export default function App() {
             <div className="listening-grid"><div className="cover-art" role="img" aria-label="Abstract burnt-orange and forest-green session artwork"><span className="cover-grain" /><span className="cover-label">Sunroom palette</span></div><AudioPlayer audio={playback.audio} item={audibleItem} playing={playback.playing} currentTime={playback.currentTime} duration={playback.duration || audibleItem.durationSeconds} volume={playback.volume} error={playback.error} onToggle={() => void playback.toggle()} onSeek={playback.seek} onVolume={playback.setVolume} onReturnToPiece={audibleItem.kind === "source" && acceptedItem ? returnToAccepted : undefined} /></div>
             {currentRevision && audibleItem.kind === "revision" ? <div className="section-strip" aria-label="Arrangement sections">{currentRevision.composition.sections.map((section, index) => <button key={section.id} className="section-button" aria-pressed={section.id === activeSectionId} onClick={() => { if (acceptedItem && playback.item?.id !== acceptedItem.id) playback.load(acceptedItem); window.requestAnimationFrame(() => playback.seek(section.startTick / currentRevision.composition.tempoBpm / 960 * 60)) }}><strong>{section.name}</strong><br /><small>{index === 0 ? "arrives softly" : index === 3 ? "settles" : index === 2 ? "opens up" : "main pulse"}</small></button>)}</div> : null}
           </> : <div className="empty-surface"><AudioLines className="mx-auto mb-4 size-9 text-primary" /><h2>Start with a sound or an idea.</h2><p className="mx-auto max-w-xl text-muted-foreground">Add an owned WAV, record a small sound, or let the Sunroom palette begin from your written direction.</p><div className="empty-actions"><Button onClick={() => fileRef.current?.click()}><Upload /> Add sound</Button><Button variant="outline" onClick={() => void toggleRecording()}>{recording ? <X /> : <Mic />}{recording ? "Stop and use" : "Record a sound"}</Button><Button variant="ghost" onClick={() => void submitDirection()}><AudioLines /> Try the direction below</Button></div></div>}
-           {jobMessage && job && (activeJob || job.state === "failed" || job.state === "cancelled") ? <div className="job-status" role={job.state === "failed" ? "alert" : "status"} aria-live="polite"><strong>{jobMessage}</strong><span className="provider-note">{activeJob ? "You can leave this page; the durable worker will keep going." : "Your accepted audio and earlier versions remain available."}</span>{activeJob ? <Button className="mt-3" variant="ghost" size="sm" onClick={() => { void api.cancel(job.id).then(() => api.job(job.id)).then(setJob).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Unable to cancel request")) }}>Cancel request</Button> : null}</div> : null}
+           {jobMessage && job && (activeJob || job.state === "failed" || job.state === "cancelled" || job.state === "needs_attention") ? <div className="job-status" role={job.state === "failed" || job.state === "needs_attention" ? "alert" : "status"} aria-live="polite"><strong>{jobMessage}</strong><span className="provider-note">{activeJob ? "You can leave this page; the durable worker will keep going." : job.state === "needs_attention" ? "Checking the existing operation is safe. Starting a genuinely new paid or remote attempt is a separate action." : "Your accepted audio and earlier versions remain available."}</span>{activeJob ? <Button className="mt-3" variant="ghost" size="sm" onClick={() => { const target = job.project_id; void api.cancel(job.id).then(() => api.job(job.id)).then((next) => { if (activeProjectRef.current === target) setJob(next) }).catch((cause: unknown) => { if (activeProjectRef.current === target) setError(cause instanceof Error ? cause.message : "Unable to cancel request") }) }}>Cancel request</Button> : job.state === "needs_attention" ? <Button className="mt-3" variant="outline" size="sm" onClick={() => void reconcileKnownOutcome()} disabled={busy}>Check known outcome</Button> : null}</div> : null}
+           {receipt && !receipt.jobId ? <div className="job-status" role="status"><strong>Submission receipt retained</strong><span>The acknowledgement was interrupted. Submit the unchanged direction again to reconcile the same command; Pocket Producer will reuse its key instead of starting duplicate work.</span></div> : null}
+           {recordingNotice ? <div className="job-status" role="status" aria-live="polite"><strong>Microphone capture</strong><span>{recordingNotice}</span></div> : null}
            {error ? <div className="job-status" role="alert"><strong>Something needs attention</strong><span>{error}</span></div> : null}
            <div className="composer-shell"><form className="composer" onSubmit={(event) => { event.preventDefault(); void submitDirection() }}><label htmlFor="direction" className="sr-only">Direction for the producer</label><Textarea id="direction" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={currentRevision ? "What should change?" : "What should this become?"} disabled={Boolean(activeJob)} /><div className="composer-actions"><div className="chips">{currentRevision ? <><span className="chip"><ShieldCheck className="mr-1 size-3" /> Melody protected</span><span className="chip">Groove selected</span></> : <span className="chip">16 bars · Sunroom palette</span>}</div><Button className="round-play" size="icon" type="submit" aria-label={currentRevision ? "Request revision" : "Create instrumental"} disabled={busy || Boolean(activeJob) || draft.trim().length < 3}><ArrowUp /></Button></div></form></div>
            <div className="detail-grid">
-            <section className="quiet-section"><div className="section-heading"><h2>Sources</h2><Button variant="ghost" size="sm" onClick={() => setSourcesOpen(true)}>{snapshot.assets.length ? "Manage" : "Add"}</Button></div><div className="source-list">{snapshot.assets.length ? snapshot.assets.map((asset) => <button className="source-pill" key={asset.id} onClick={() => auditionSource(asset.id)} aria-label={`Audition source ${asset.name}`}><MiniWave /> {asset.name}</button>) : <span className="provider-note">No source added. The owned palette can still create.</span>}</div>{sourceAnalysis ? <p className="provider-note">Source analysis: {sourceAnalysis.status} via {sourceAnalysis.model}. Interpretive notes remain separate from measured audio facts.</p> : snapshot.assets.length ? <p className="provider-note">Source analysis has not run for the current version.</p> : null}</section>
+            <section className="quiet-section"><div className="section-heading"><h2>Sources</h2><Button variant="ghost" size="sm" onClick={() => setSourcesOpen(true)}>{snapshot.assets.length ? "Manage" : "Add"}</Button></div><div className="source-list">{snapshot.assets.length ? snapshot.assets.map((asset) => <button className="source-pill" key={asset.id} onClick={() => auditionSource(asset.id)} aria-label={`Audition source ${asset.name}`}><MiniWave /> {asset.name}</button>) : <span className="provider-note">No source added. The owned palette can still create.</span>}</div>{sourceLineage?.selected ? <p className="provider-note">Selected source: {sourceLineage.audiblyUsed ? "used in the rendered arrangement" : "kept attached but not audibly used"}.</p> : null}{sourceAnalysis ? <p className="provider-note">Source analysis: {sourceAnalysis.status} via {sourceAnalysis.model}. Interpretive notes remain separate from measured audio facts.</p> : snapshot.assets.length ? <p className="provider-note">Source analysis has not run for the current version.</p> : null}</section>
             <section className="quiet-section"><div className="section-heading"><h2>Versions</h2><Button variant="ghost" size="sm" onClick={() => setCompareOpen(true)} disabled={snapshot.revisions.length < 1}><GitCompareArrows /> Compare</Button></div><p className="provider-note">{snapshot.revisions.length ? `${snapshot.revisions.length} immutable ${snapshot.revisions.length === 1 ? "version" : "versions"}. Melody protection is enforced by the server during revision.` : "Your first accepted version will appear here."}</p></section>
           </div>
         </> : <div className="empty-surface"><Library className="mx-auto mb-4 size-9 text-primary" /><h2>Your rooms begin here.</h2><p className="text-muted-foreground">Create a private local session, then add a sound or write the first direction.</p><div className="empty-actions"><Button onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button></div>{error ? <p role="alert" className="mt-5 text-destructive">{error}</p> : null}</div>}

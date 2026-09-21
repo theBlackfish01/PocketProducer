@@ -82,6 +82,22 @@ export function usePlayback() {
     setPlaying(false)
   }, [])
 
+  const clear = useCallback(() => {
+    const audio = audioRef.current
+    if (audio) {
+      audio.pause()
+      audio.removeAttribute("src")
+      delete audio.dataset.identity
+      audio.load()
+    }
+    itemRef.current = null
+    setItem(null)
+    setPlaying(false)
+    setCurrentTime(0)
+    setDuration(0)
+    setError(null)
+  }, [])
+
   const playItem = useCallback(async (next: PlaybackItem) => {
     load(next)
     const audio = audioRef.current
@@ -113,7 +129,7 @@ export function usePlayback() {
     setVolumeState(clamped)
   }, [])
 
-  return { audio: audioRef.current, item, playing, currentTime, duration, volume, error, load, playItem, toggle, seek, setVolume }
+  return { audio: audioRef.current, item, playing, currentTime, duration, volume, error, load, clear, playItem, toggle, seek, setVolume }
 }
 
 interface AudioPlayerProps {
@@ -133,11 +149,11 @@ interface AudioPlayerProps {
 export function AudioPlayer({ audio, item, playing, currentTime, duration, volume, error, onToggle, onSeek, onVolume, onReturnToPiece }: AudioPlayerProps) {
   const waveformRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
-    if (!waveformRef.current || !audio || duration <= 0) return
+    if (!waveformRef.current || !audio || duration <= 0 || item.peaks.length === 0) return
     const wave = WaveSurfer.create({
       container: waveformRef.current,
       media: audio,
-      peaks: [item.peaks.length > 0 ? item.peaks : [0]],
+      peaks: [item.peaks],
       duration,
       height: 88,
       waveColor: "#9fa79f",
@@ -158,7 +174,9 @@ export function AudioPlayer({ audio, item, playing, currentTime, duration, volum
     <div className="player-card">
       <div className="player-meta"><span>{item.label}</span><span>{formatTime(duration)} total</span></div>
       {item.kind === "source" && onReturnToPiece ? <Button className="mb-3" size="sm" variant="outline" onClick={onReturnToPiece}><Undo2 /> Return to current piece</Button> : null}
-      <div className="waveframe" aria-hidden="true"><div ref={waveformRef} className="wave-canvas" data-testid="waveform" /></div>
+      <div className="waveframe" aria-hidden="true">
+        {item.peaks.length > 0 ? <div ref={waveformRef} className="wave-canvas" data-testid="waveform" /> : <div className="wave-canvas grid place-items-center text-xs text-muted-foreground">Waveform unavailable for this source</div>}
+      </div>
       <div className="seek-row">
         <span className="time">{formatTime(currentTime)}</span>
         <Slider aria-label={`Seek through the ${itemName}`} min={0} max={Math.max(duration, 1)} step={0.1} value={[Math.min(currentTime, Math.max(duration, 1))]} onValueChange={(value) => onSeek(Array.isArray(value) ? value[0] ?? 0 : value)} />
