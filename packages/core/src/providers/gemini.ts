@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import { getConfig } from "../config.js";
 import { canonicalHash } from "../domain/composition.js";
@@ -38,7 +38,7 @@ export interface AudioAnalysis {
   suggestedActions: string[];
   suggestedSourceRole: "percussion" | "texture" | "none" | null;
   repairAction: "none" | "simplify-drums";
-  usage: { promptTokens: number; candidateTokens: number; totalTokens: number };
+  usage: { promptTokens: number; candidateTokens: number; thoughtsTokens: number; totalTokens: number };
   costMicrousd: number;
 }
 
@@ -55,7 +55,13 @@ type AnalyzeInput = {
   client?: GeminiGenerateClient;
 };
 
-function emptyAnalysis(input: AnalyzeInput, status: AudioAnalysis["status"], uncertainty: string, model: string | null): AudioAnalysis {
+function emptyAnalysis(
+  input: AnalyzeInput,
+  status: AudioAnalysis["status"],
+  uncertainty: string,
+  model: string | null,
+  accounting?: Pick<AudioAnalysis, "usage" | "costMicrousd">
+): AudioAnalysis {
   const purpose = input.purpose ?? "preview-critique";
   return {
     status,
@@ -70,8 +76,8 @@ function emptyAnalysis(input: AnalyzeInput, status: AudioAnalysis["status"], unc
     suggestedActions: [],
     suggestedSourceRole: null,
     repairAction: "none",
-    usage: { promptTokens: 0, candidateTokens: 0, totalTokens: 0 },
-    costMicrousd: 0
+    usage: accounting?.usage ?? { promptTokens: 0, candidateTokens: 0, thoughtsTokens: 0, totalTokens: 0 },
+    costMicrousd: accounting?.costMicrousd ?? 0
   };
 }
 
@@ -86,7 +92,7 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
 
   const inputHash = canonicalHash({ hash: input.hash, purpose, measured: { durationSeconds: input.durationSeconds, peak: input.peak, rms: input.rms, nonSilentRatio: input.nonSilentRatio }, model: config.GEMINI_MODEL, promptVersion: "audio-analysis-v2" });
   const inputTokenBound = Math.ceil(input.durationSeconds * 32) + 2_000;
-  const reservationMicrousd = Math.ceil(tokenCostMicrousd("gemini", config.GEMINI_MODEL, { inputTokens: inputTokenBound, outputTokens: 512 }) * 1.1);
+  const reservationMicrousd = Math.ceil(tokenCostMicrousd("gemini", config.GEMINI_MODEL, { inputTokens: inputTokenBound, outputTokens: 2_048 }) * 1.1);
   let reservation;
   try {
     reservation = await reserveProviderEffect({
@@ -136,13 +142,17 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
     }
   };
 
+  let usage: AudioAnalysis["usage"] = { promptTokens: 0, candidateTokens: 0, thoughtsTokens: 0, totalTokens: 0 };
+  let costMicrousd = 0;
+  let finishReason: string | undefined;
+  let responseTextLength = 0;
   try {
     const response = await client.generateContent({
       model: config.GEMINI_MODEL,
       contents: [{ role: "user", parts: [{ inlineData: { mimeType: "audio/wav", data: bytes.toString("base64") } }, { text: prompt }] }],
       config: {
-        temperature: 0.1,
-        maxOutputTokens: 512,
+        maxOutputTokens: 2_048,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
         responseMimeType: "application/json",
         responseJsonSchema: schema,
         ...(input.signal ? { abortSignal: input.signal } : {}),
@@ -150,13 +160,22 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
       }
     });
     const text = response.text ?? "";
+    responseTextLength = text.length;
+    finishReason = response.candidates?.[0]?.finishReason;
     if (text.length > 16_384) throw new Error("Gemini response exceeded the bounded JSON size");
-    const usage = {
+    usage = {
       promptTokens: response.usageMetadata?.promptTokenCount ?? 0,
       candidateTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      thoughtsTokens: response.usageMetadata?.thoughtsTokenCount ?? 0,
       totalTokens: response.usageMetadata?.totalTokenCount ?? 0
     };
-    const costMicrousd = tokenCostMicrousd("gemini", config.GEMINI_MODEL, { inputTokens: usage.promptTokens, outputTokens: usage.candidateTokens });
+    const outputTokens = Math.max(usage.candidateTokens + usage.thoughtsTokens, usage.totalTokens - usage.promptTokens);
+    costMicrousd = tokenCostMicrousd("gemini", config.GEMINI_MODEL, { inputTokens: usage.promptTokens, outputTokens });
+    if (!text.trim()) {
+      const error = new Error("Gemini returned no structured response text");
+      error.name = finishReason ? `GeminiEmptyResponse_${finishReason}` : "GeminiEmptyResponse";
+      throw error;
+    }
     const measured = { durationSeconds: input.durationSeconds, peak: input.peak, rms: input.rms, nonSilentRatio: input.nonSilentRatio };
     let analysis: AudioAnalysis;
     if (purpose === "source-analysis") {
@@ -185,7 +204,20 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
     return analysis;
   } catch (error) {
     const uncertain = error instanceof Error && /timeout|abort|network|ECONN|socket/i.test(`${error.name} ${error.message}`);
-    await failProviderEffect({ effectId: reservation.id, job: input.job, errorClass: error instanceof Error ? error.name : "UnknownError", uncertain });
-    return emptyAnalysis(input, "failed", uncertain ? "Gemini outcome is uncertain after a transport interruption; the call was not repeated." : "Gemini returned an invalid or unavailable analysis; deterministic checks remain active.", config.GEMINI_MODEL);
+    await failProviderEffect({
+      effectId: reservation.id,
+      job: input.job,
+      errorClass: error instanceof Error ? error.name : "UnknownError",
+      uncertain,
+      actualCostMicrousd: costMicrousd,
+      safeDetails: { finishReason: finishReason ?? null, responseTextLength, promptTokens: usage.promptTokens, candidateTokens: usage.candidateTokens, thoughtsTokens: usage.thoughtsTokens }
+    });
+    return emptyAnalysis(
+      input,
+      "failed",
+      uncertain ? "Gemini outcome is uncertain after a transport interruption; the call was not repeated." : "Gemini returned an invalid or unavailable analysis; deterministic checks remain active.",
+      config.GEMINI_MODEL,
+      { usage, costMicrousd }
+    );
   }
 }

@@ -111,7 +111,7 @@ async function generation(job: JobRecord, signal: AbortSignal): Promise<void> {
         status: "uncritiqued", assetHash: createHash("sha256").update(repairedBytes).digest("hex"), model: analysis.model, promptVersion: "audio-analysis-v2", purpose: "preview-critique",
         inspectedInterval: { start: 0, end: render.durationSeconds }, measured: { durationSeconds: render.durationSeconds, peak: render.peak, rms: render.rms, nonSilentRatio: render.nonSilentRatio },
         observations: [], uncertainty: "The bounded critique budget was spent on the earlier candidate; this repaired audio passed deterministic checks but was not sent to Gemini again.",
-        suggestedActions: [], suggestedSourceRole: null, repairAction: "none", usage: { promptTokens: 0, candidateTokens: 0, totalTokens: 0 }, costMicrousd: 0
+        suggestedActions: [], suggestedSourceRole: null, repairAction: "none", usage: { promptTokens: 0, candidateTokens: 0, thoughtsTokens: 0, totalTokens: 0 }, costMicrousd: 0
       };
     }
   }

@@ -190,11 +190,13 @@ describe("durable job repository", () => {
     if (!successClaim) throw new Error("Expected Gemini mock job");
     let calls = 0;
     const successClient: GeminiGenerateClient = {
-      generateContent: (() => {
+      generateContent: ((request: Parameters<GeminiGenerateClient["generateContent"]>[0]) => {
         calls += 1;
+        expect(request.config).toMatchObject({ maxOutputTokens: 2_048, thinkingConfig: { thinkingLevel: "MINIMAL" } });
+        expect(request.config).not.toHaveProperty("temperature");
         return Promise.resolve({
           text: JSON.stringify({ observations: ["Soft transient"], musicalCharacter: ["Airy"], suggestedRole: "texture", confidence: "medium" }),
-          usageMetadata: { promptTokenCount: 320, candidatesTokenCount: 24, totalTokenCount: 344 }
+          usageMetadata: { promptTokenCount: 320, candidatesTokenCount: 24, thoughtsTokenCount: 8, totalTokenCount: 352 }
         });
       }) as unknown as GeminiGenerateClient["generateContent"]
     };
@@ -235,11 +237,14 @@ describe("durable job repository", () => {
     if (!malformedClaim) throw new Error("Expected Gemini malformed-output job");
     let malformedCalls = 0;
     const malformedClient: GeminiGenerateClient = {
-      generateContent: (() => { malformedCalls += 1; return Promise.resolve({ text: "{}", usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 2, totalTokenCount: 22 } }); }) as unknown as GeminiGenerateClient["generateContent"]
+      generateContent: (() => { malformedCalls += 1; return Promise.resolve({ text: "{}", candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 2, thoughtsTokenCount: 100, totalTokenCount: 122 } }); }) as unknown as GeminiGenerateClient["generateContent"]
     };
     const malformedInput = { job: malformedClaim, client: malformedClient, path, hash: `malformed-${randomUUID()}`, purpose: "source-analysis" as const, durationSeconds: 0.1, peak: 0, rms: 0, nonSilentRatio: 0 };
     expect(await analyzePreview(malformedInput)).toMatchObject({ status: "failed", observations: [] });
-    expect((await getPool().query("SELECT state FROM effect WHERE job_id=$1", [malformedClaim.id])).rows[0]?.state).toBe("failed");
+    const malformedLedger = (await getPool().query("SELECT state,actual_cost_microusd,output FROM effect WHERE job_id=$1", [malformedClaim.id])).rows[0];
+    expect(malformedLedger?.state).toBe("failed");
+    expect(Number(malformedLedger?.actual_cost_microusd)).toBeGreaterThan(0);
+    expect(malformedLedger?.output).toMatchObject({ errorClass: "ZodError", finishReason: "STOP", thoughtsTokens: 100 });
     expect((await analyzePreview(malformedInput)).status).toBe("unavailable");
     expect(malformedCalls).toBe(1);
     await failJob(malformedClaim, "TEST_COMPLETE", "Malformed provider mock verified");

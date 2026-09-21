@@ -48,21 +48,23 @@ The current revision audio is the ignored local artifact whose SHA-256 is `8db83
 
 ## Live-provider evidence
 
-The configured models are `gpt-6-astra` and `gemini-3-flash-preview`. `pnpm budget:status` reports US$0.226660 recorded OpenAI actual cost and US$0 Gemini cost against a US$5 overall / US$0.25 job cap.
+The configured models are `gpt-6-astra` and `gemini-3-flash-preview`. `pnpm budget:status` reports US$0.294040 recorded OpenAI actual cost and US$0 Gemini cost against a US$5 overall / US$0.25 job cap.
 
-The new integrated live runner has not dispatched. The host denied the execution request because sending the deterministic owned source, generated preview and bounded prompts to external APIs requires an additional explicit approval. The rejected attempt did not create a provider effect or spend. Once approved, `pnpm test:live` will:
+The integrated live runner dispatched once after explicit approval. It created one source-backed revision, spent US$0.067380 on successful OpenAI calls and proved reload did not create another effect. Both Gemini calls returned empty structured text and became terminal `failed` effects. The root cause was the former 512-token `maxOutputTokens`: Gemini 3 uses this ceiling for thinking plus answer tokens, so thinking can consume it before JSON output. The adapter now uses `minimal` thinking, a 2,048-token ceiling and accounts for thought tokens on both successful and invalid responses.
 
-1. reuse its stored success evidence if already complete;
-2. otherwise create one marked private test project and 0.75-second synthesized owned WAV;
-3. run source Gemini analysis → OpenAI Deep Agent → real render → preview Gemini critique through the worker/effect ledger;
-4. reload the snapshot and prove no additional provider effect was created;
-5. print only hashes, typed statuses, models, timing and reconciled costs.
+`pnpm test:gemini-live` is ready for a separately approved recovery proof. It:
+
+1. reuses the existing owned source, generated preview and canonical revision;
+2. makes only source-analysis and preview-critique Gemini calls under a new job/effect identity;
+3. invokes neither OpenAI nor the renderer;
+4. records typed analyses, exact hashes, thought-token usage and reconciled cost;
+5. settles by reusing the existing immutable revision and will not automatically retry a terminal failure.
 
 It will not retry a terminal failed/uncertain marked run automatically.
 
 ## Not yet verified
 
-- Live Gemini source/preview calls (explicit external transmission/spend approval pending).
+- Successful live Gemini source/preview responses after the bounded-thinking repair (new explicit approval pending).
 - Live Audiotool OAuth, upload grant and Studio editability (registration/client ID and consent pending).
 - Physical phone/notched-device behavior.
 - Non-WAV decoding; intentionally unsupported.

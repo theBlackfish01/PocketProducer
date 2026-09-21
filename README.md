@@ -31,11 +31,14 @@ pnpm test:integration
 pnpm test:e2e
 pnpm build
 pnpm test:live
+pnpm test:gemini-live
 pnpm verify:demo
 pnpm budget:status
 ```
 
 `pnpm test:live` is the opt-in integrated source-Gemini → OpenAI Deep Agent → render → preview-Gemini verification. It sends an owned synthetic WAV and generated preview to external providers and can incur bounded usage; run it only with explicit approval. The ordinary suite clears provider keys and is fully offline.
+
+`pnpm test:gemini-live` is a separately approval-gated recovery check. It reuses the integrated run's source, preview and canonical revision, makes only the two Gemini audio calls, and settles by reusing the existing revision; it does not invoke OpenAI or render again.
 
 ## What is implemented
 

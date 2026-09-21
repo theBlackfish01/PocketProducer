@@ -9,7 +9,7 @@ Baseline commit: `eaf47e3` (`main`, local only; no remote configured)
 
 The loopback Listening Room is a real vertical slice: owned WAV source → durable generation job → typed producer plan → canonical arrangement → playable render → protected revision → A/B audition → explicit restore. PostgreSQL is the authority, audio is stored privately on disk, worker effects are fenced by attempt/lease/deadline, and ordinary tests cannot load configured provider credentials.
 
-The supplied Gemini credential is detected. The requested live integrated verification did **not** execute: the host approval layer rejected transmission of the owned synthetic fixture and generated preview to Gemini/OpenAI as a separate external-data/spend action. No workaround was attempted and no Gemini spend was incurred. `pnpm test:live` is idempotently marked and ready for one run after that explicit approval.
+The supplied Gemini credential is detected. After explicit approval, the integrated live run completed on 2026-09-21: the OpenAI Deep Agent produced and rendered a real source-backed revision for US$0.067380. Both Gemini requests reached the API but returned empty structured text because Gemini 3 thinking exhausted the former 512-token output ceiling. They were recorded as terminal failures and were not replayed. The adapter now uses the provider-recommended `minimal` thinking level, a bounded 2,048-token output ceiling, and reconciles thought-token cost even when validation fails. Offline regression tests pass; one separately approved targeted Gemini-only verification remains.
 
 Audiotool remains the only product-access prerequisite. `AUDIOTOOL_CLIENT_ID` is absent, so remote mutation was not attempted. All credential-independent Nexus work is implemented and mock/offline verified; exact registration steps are in `docs/USER-SETUP.md`.
 
@@ -26,7 +26,7 @@ Audiotool remains the only product-access prerequisite. `AUDIOTOOL_CLIENT_ID` is
 | R7 playback identity | Implemented, browser verified | One `HTMLAudioElement` coordinates source/current/older-version identity, seeking, volume and wavesurfer. Source and A/B auditions explicitly return to accepted audio. |
 | R8 request/UI reliability | Implemented, browser verified | Stale project requests ignored, drafts keyed by project, submission key survives interruption, bounded GET startup retry, polling failure surfaced, supported revision enforced client/server. |
 | R9 recording/audio validation | Implemented, offline verified | Capture capped at 30 s / 5 MB before accumulation; stop/discard/setup cleanup tested. WAV chunks, encoding, alignment, sample finiteness, rate/channels/duration return typed 4xx errors. WAV only is advertised. |
-| R10 Gemini integration | Implemented and mocked; live run awaiting explicit host approval | Real inline WAV, purpose-specific schemas, source descriptor → producer, exact preview hash, persisted usage/cost, bounded repair and honest uncritiqued final state. Mock success/cache, malformed, timeout, unavailable, budget and forced repair failure pass. Key/model are configured; no live Gemini call occurred in this pass. |
+| R10 Gemini integration | Implemented and mocked; live calls diagnosed, fixed retest pending | Real inline WAV, purpose-specific schemas, source descriptor → producer, exact preview hash, persisted usage/thought-token cost, bounded repair and honest uncritiqued final state. The first live calls exposed a 512-token Gemini 3 thinking cutoff; both failed terminally without replay. `minimal` thinking/2,048-token regression is offline verified. A Gemini-only runner avoids another OpenAI/render charge for the retest. |
 | R11 Nexus/Audiotool | Credential-independent work complete; live authorization blocked | Browser PKCE/callback, encrypted owner-bound token handoff, refresh persistence callback, server client, resumable four-stem upload/mapping and truthful states implemented. SDK mock and validated offline four-track document pass. Needs app client ID + consent for one real export. |
 
 ## Implemented behavior
@@ -51,6 +51,7 @@ Audiotool remains the only product-access prerequisite. `AUDIOTOOL_CLIENT_ID` is
 - PostgreSQL dev/test schemas migrated through `004_audiotool_session.sql`.
 - Nexus offline validation produced four `audioTrack` and four `audioRegion` entities. Mock export resumed one prior upload, uploaded the remaining three, inserted all four and closed the synced document.
 - `pnpm verify:demo`: pass. It proved two immutable 44.636 s WAVs with distinct SHA-256 hashes, six Groove hats removed, byte-identical protected melody stems and four editable Nexus parts.
+- `pnpm test:live`: completed once after approval. OpenAI succeeded and produced a source-backed revision; both Gemini effects failed deterministically with empty structured responses. Reload created no new effects. The diagnosed output/thinking limit is repaired and covered offline.
 - Representative desktop/mobile screenshots were visually inspected after the final browser run and are written to `.local/evidence/`; the desktop capture is dialog-free and the 390×844 layout keeps the focused composer in view. They remain intentionally uncommitted. Physical-phone behavior is still unverified.
 
 ## API usage
@@ -58,13 +59,13 @@ Audiotool remains the only product-access prerequisite. `AUDIOTOOL_CLIENT_ID` is
 `pnpm budget:status` on 2026-09-21 reported:
 
 - Overall cap: **US$5.00**; per-job cap: **US$0.25**; model calls/job: **4**.
-- Recorded OpenAI actual cost: **US$0.226660** total — failed effects US$0.103980, successful effects US$0.122680. These are pre-existing live results preserved in the ledger.
+- Recorded OpenAI actual cost: **US$0.294040** total — failed effects US$0.103980, successful effects US$0.190060. The approved integrated run added US$0.067380.
 - Recorded Gemini actual cost: **US$0.000000**.
-- The rejected live-run attempt created no new provider job/effect and spent nothing.
+- The first Gemini failure path did not preserve response usage before parsing, so the ledger cannot prove whether the provider's free tier or billable usage handled those two calls. This accounting defect is now fixed for future failures; no monetary Gemini cost is claimed from the zero ledger value.
 
 ## Exact blockers
 
-1. **Integrated Gemini live proof:** execution requires explicit approval to transmit the deterministic 0.75-second owned fixture, the resulting generated preview, and bounded prompts to the configured Gemini/OpenAI APIs, with provider billing constrained by the existing US$5 overall and US$0.25 job caps. The host rejected the first execution request before dispatch.
+1. **Gemini fixed-path live proof:** `pnpm test:gemini-live` requires a new explicit approval. It reuses the already transmitted source and preview, performs only two bounded Gemini calls, and cannot invoke OpenAI or render again. The prior terminal effects are preserved rather than replayed.
 2. **Audiotool live export:** register the app and set `AUDIOTOOL_CLIENT_ID` as described in `docs/USER-SETUP.md`, then authorize once in the Listening Room. No access/refresh token should be pasted into chat or `.env`.
 3. **Physical phone:** safe-area and keyboard behavior passed Chromium emulation only.
 
@@ -93,10 +94,11 @@ pnpm build
 pnpm verify:demo
 pnpm budget:status
 pnpm test:live   # opt-in external provider transmission/spend
+pnpm test:gemini-live   # separately approved Gemini-only recovery proof
 ```
 
 ## Next
 
-1. Receive the explicit live-provider transmission/spend approval and run `pnpm test:live` exactly once; record hashes, typed statuses, observed usage/cost and whether critique naturally requested repair.
+1. Receive explicit approval for the two-call Gemini-only recovery proof, run `pnpm test:gemini-live` once, and record typed source/preview results with thought-token usage and reconciled cost.
 2. Receive Audiotool app registration/client ID, complete browser consent, then perform one explicit export to a private test project and verify Studio editability.
 3. Keep production identity, managed storage, deployment and submission outside this milestone.

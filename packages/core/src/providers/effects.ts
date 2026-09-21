@@ -145,7 +145,7 @@ export async function completeProviderEffect(input: { effectId: string; job: Job
   }
 }
 
-export async function failProviderEffect(input: { effectId: string; job: JobRecord; errorClass: string; uncertain: boolean; actualCostMicrousd?: number }): Promise<void> {
+export async function failProviderEffect(input: { effectId: string; job: JobRecord; errorClass: string; uncertain: boolean; actualCostMicrousd?: number; safeDetails?: Record<string, string | number | boolean | null> }): Promise<void> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -155,7 +155,7 @@ export async function failProviderEffect(input: { effectId: string; job: JobReco
     const actual = input.actualCostMicrousd ?? 0;
     await client.query(
       "UPDATE effect SET state=$2,output=$3,actual_cost_microusd=$4::bigint,cost_usd=($4::bigint)::numeric/1000000,completed_at=now(),updated_at=now() WHERE id=$1",
-      [input.effectId, input.uncertain ? "uncertain" : "failed", { errorClass: input.errorClass }, actual]
+      [input.effectId, input.uncertain ? "uncertain" : "failed", { errorClass: input.errorClass, ...(input.safeDetails ?? {}) }, actual]
     );
     if (!input.uncertain) {
       await client.query(
