@@ -1,5 +1,9 @@
 # Live implementation status
 
+## Brand update (2026-09-23)
+
+The user-supplied Pocket Producer logo sheet has been translated into a local SVG mark and a reusable, responsive text lockup. The desktop rail, phone bar, navigation sheet and browser tab now use the brand; the Listening Room palette and existing product workflow remain unchanged. The mark is decorative beside readable text. Desktop/390 px screenshots were inspected under `.local/evidence/logo-*.png`. `pnpm check` passed (8 unit files / 36 tests, lint, strict types, production build); the isolated fixture-mode brand browser test passed (1 Chromium test, desktop and 390 px phone viewport). No provider call was needed. The existing large lazy SDK chunk warning remains unrelated.
+
 ## Current assignment: native construction first (2026-09-23)
 
 The user explicitly deferred native rendering/playback and superseded the earlier render-first gate. The Listening Room now defaults to native construction; the existing Sunroom WAV workflow remains selectable as **Legacy audio** with its accepted data unchanged. `docs/adr/002-native-construction-first.md` is the current decision record. No Audiotool contact, remote export, native render probe, publication or deployment was made for this assignment.

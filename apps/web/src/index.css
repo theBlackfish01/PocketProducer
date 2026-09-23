@@ -67,8 +67,9 @@ button:disabled { cursor: not-allowed; }
 
 .app-shell { min-height: 100svh; display: grid; grid-template-columns: 208px minmax(0, 1fr); }
 .session-rail { position: sticky; top: 0; height: 100svh; border-right: 1px solid var(--border); padding: 28px 18px; display: flex; flex-direction: column; gap: 28px; background: color-mix(in srgb, var(--background) 92%, white); }
-.wordmark { font-family: Georgia, serif; font-size: 1.16rem; letter-spacing: -.02em; }
-.wordmark span { color: var(--primary); }
+.brand-lockup { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--foreground); }
+.brand-mark { display: block; width: 48px; height: 48px; flex: none; object-fit: contain; }
+.brand-name { display: block; max-width: 100px; font-family: Georgia, "Times New Roman", serif; font-size: 1.48rem; font-weight: 400; line-height: .87; letter-spacing: -.045em; text-wrap: balance; }
 .rail-list { display: grid; gap: 4px; }
 .rail-session { display: block; width: 100%; min-height: 44px; padding: 10px 12px; overflow: hidden; border: 0; border-radius: 12px; background: transparent; color: var(--muted-foreground); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .rail-session:hover, .rail-session[aria-current="page"] { background: var(--accent); color: var(--foreground); }
@@ -166,6 +167,8 @@ button:disabled { cursor: not-allowed; }
   .app-shell { display: block; }
   .session-rail { display: none; }
   .mobile-topbar { min-height: 54px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+  .mobile-topbar .brand-mark { width: 42px; height: 42px; }
+  .mobile-topbar .brand-name { font-size: 1.3rem; }
   .main-area { padding-top: 0; }
 }
 @media (max-width: 700px) {
