@@ -1,6 +1,6 @@
 # Live implementation status
 
-Updated: 2026-09-21 Asia/Karachi
+Updated: 2026-09-23 Asia/Karachi
 Milestone: second repair assignment, local create/listen/revise/compare/export-preparation slice
 Baseline inspected: runtime `010969f`, course update `25913b9`; newer work preserved
 
@@ -36,7 +36,7 @@ The repair pass added migration `005_repair_recovery.sql` for lifecycle/effect/a
 - R5/R6: head selection, ownership, immutable history, analysis associations and replay ordering are verified.
 - R7/R8/R9: coordinated playback, project-safe UI/receipts and recording cleanup are verified in unit/browser tests.
 - R10: Gemini adapter, persistence and failure criteria are implemented; a successful live response is still unverified.
-- R11: Nexus mapping/recovery is verified against SDK 0.0.17 offline; OAuth and a real Studio project still require app registration and consent.
+- R11: Nexus mapping/recovery is verified against SDK 0.0.17 offline. Audiotool app registration and browser consent are now complete, and a separate scratch Studio project was created and reopened with editable notes. Audio-result retrieval remains blocked by the provider's operation permissions; see `spikes/nexus-audio/RESULTS-2026-09-23.md`.
 
 ## Verification
 
@@ -49,6 +49,8 @@ The repair pass added migration `005_repair_recovery.sql` for lifecycle/effect/a
 | `pnpm test:e2e` | 2 Chromium tests pass; command exits cleanly in 40.0 s |
 | `pnpm build` | production Vite bundle and TypeScript build pass; large lazy SDK chunk warning only |
 | `pnpm test:course` | pass: 6 modules, 18 quizzes, desktop interaction and 390 px mobile layout |
+
+2026-09-23 Audiotool follow-up checks: `pnpm lint` pass; `pnpm typecheck` pass; `pnpm test` 7 files / 30 tests pass; `pnpm test:integration` 1 file / 18 tests pass; `pnpm build` pass with the existing large lazy SDK chunk warning; `git diff --check` pass. The added tests cover missing-refresh-token OAuth handoff and encrypted persistence. The native offline document probe passed. Live native readback, note revision and two render dispatches are documented separately; no live render artifact was retrieved. The earlier browser E2E suite was not rerun for this follow-up; consent and the changed export button were observed in the user's regular Chrome session.
 
 The browser test creates its own empty project and owned source, loses a generation acknowledgement, reloads/reconciles it, plays the real WAV, rejects an unsupported revision, completes the protected revision, A/B compares, restores, prepares the honest disabled export, displays needs-attention recovery, and checks stale navigation/drafts. The 390×844 test checks focused composer visibility, reduced motion and sheet focus return. Physical phone and non-Chromium browsers are not claimed.
 
@@ -66,7 +68,11 @@ After migrations `005`–`006`, `pnpm budget:status` reports:
 
 The authorized targeted runner attempted one source-analysis and one preview-critique step on retained audio. Both ended after dispatch with `TypeError`, zero provider telemetry and no request ID. They are now `uncertain`/unknown-cost, the job is terminal, and the runner refuses automatic replay. No OpenAI call or new render occurred. This does not verify successful Gemini analysis and it does not prove the provider billed zero.
 
-`AUDIOTOOL_CLIENT_ID` remains absent. Offline implementation is complete; no live Audiotool mutation was attempted. Nexus 0.0.17 exposes `unlisted`, not a private upload visibility option, so the first authorized test must confirm the account/privacy behavior as well as scope and editability.
+Audiotool configuration was added to the ignored root `.env` without changing other entries. The user completed browser consent in their regular browser. An SDK issue was found: a response without `refresh_token` is exported as the literal string `"undefined"`; the application now normalizes that to a non-refreshable grant before storing its encrypted server session. The app showed **Export editable stems** after reconnecting. The session will require reauthorization at expiry because no refresh token was issued.
+
+The isolated native test created scratch project `projects/ce63417a-32f5-4c24-9bf9-3fb0027deaec` with Heisenberg, a note region, four notes, master/mixer routing and a cable. A fresh process reopened it and read pitches `[60,64,67,72]`, then changed one note and read `[60,65,67,72]` from another fresh process. With Audiotool Studio closed, two authenticated `DocumentService.RenderAudio` requests returned distinct operation IDs. Regional operation lookup returned HTTP 501 (operation served by public API), and public operation lookup returned HTTP 403 (insufficient rights). No native output URL or playable audio was obtained; render completion and Studio-closed rendering remain **unverified**. This is an experimental direct RPC probe, not a supported production integration. The deterministic local renderer remains the working audio engine. Exact results and checkpoints are in `spikes/nexus-audio/RESULTS-2026-09-23.md`.
+
+No OpenAI or Gemini call was made for this native test. `pnpm budget:status` is unchanged at US$0.313556 spent-or-reserved and US$4.686444 remaining upper bound, with Gemini unknown liabilities still held. Audiotool billing telemetry is unavailable, so no exact vendor cost is asserted.
 
 ## Run and demonstrate
 
@@ -79,12 +85,13 @@ pnpm seed:demo
 pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`, create a room, upload an owned WAV, enter a direction, wait for the durable render, play it, enter `Simplify the drums in Groove; keep the melody.`, compare A/B, restore either version, then choose **Prepare Nexus handoff**. With no Audiotool registration, the app produces and validates the local four-stem manifest and truthfully reports `disabled`.
+Open `http://127.0.0.1:5173`, create a room, upload an owned WAV, enter a direction, wait for the durable render, play it, enter `Simplify the drums in Groove; keep the melody.`, compare A/B, restore either version, then choose **Prepare Nexus handoff**. Audiotool is connected in the current local session; no production export was dispatched during the native feasibility test. The existing local four-stem manifest remains available independently of remote export.
 
 Supported envelope: one 16-bar Sunroom instrumental, WAV input, drums/bass/melody/texture stems, one precise Groove drum simplification with melody protection, stem-level (not note-level) export editability.
 
 ## Genuine remaining user actions
 
-1. Register the Audiotool development app, add only `AUDIOTOOL_CLIENT_ID`, and complete browser consent before one explicitly authorized remote export; see `docs/USER-SETUP.md`.
-2. If desired, diagnose provider/network access before authorizing a new Gemini identity. The current terminal uncertain verifier must not be silently replayed.
-3. Perform a physical iOS/Android keyboard, microphone and safe-area check. Public deployment and submission remain later work.
+1. Ask Audiotool for the documented/supported render-result retrieval path and the permission needed for `OperationService.GetOperation` or an equivalent output endpoint. Do not refactor the production engine on the strength of accepted operation IDs alone.
+2. Reconnect Audiotool when this non-refreshable session expires; see `docs/USER-SETUP.md`. A production export has not yet been live-verified.
+3. If desired, diagnose provider/network access before authorizing a new Gemini identity. The current terminal uncertain verifier must not be silently replayed.
+4. Perform a physical iOS/Android keyboard, microphone and safe-area check. Public deployment and submission remain later work.

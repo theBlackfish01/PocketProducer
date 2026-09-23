@@ -1,6 +1,6 @@
 # Nexus / Audiotool integration contract
 
-Pinned SDK: `@audiotool/nexus@0.0.17`. Nexus creates an editable project from already-rendered stems; it is not a standalone renderer.
+Pinned SDK: `@audiotool/nexus@0.0.17`. Pocket Producer currently uses Nexus to create an editable project from already-rendered stems. A separate native rendering probe accepted two `RenderAudio` requests but could not retrieve their results; see [the 2026-09-23 evidence](../spikes/nexus-audio/RESULTS-2026-09-23.md).
 
 ## Time and fidelity
 
@@ -26,11 +26,11 @@ Operation identity is owner + revision + provider + `nexus-stem-v3`. `project_ex
 
 | Operation | SDK surface | Status |
 | --- | --- | --- |
-| OAuth/PKCE | `audiotool({ clientId, redirectUrl, scope })` | Browser branches tested; live consent pending. |
+| OAuth/PKCE | `audiotool({ clientId, redirectUrl, scope })` | Live browser consent and encrypted server handoff verified on 2026-09-23. The grant omitted a usable refresh token, so reconnect when it expires. |
 | Owner-bound session | `exportTokens()` → `createServerAuth()` | AES-256-GCM local persistence and refresh callback tested. |
 | Project | `projects.createProject` | Typed, checkpointed, mock verified. |
 | Stem upload | `samples.upload`, await `uploaded` then `ready` | Typed, checkpointed, readiness/timeout tested. SDK supports `unlisted`; private visibility is not claimed. |
 | Arrangement | `open/start/modify(insertSample)/stop` | Offline SDK and transport-boundary tests verify mapping/replay/uncertainty. |
 | Studio URL | `SyncedDocument.dawUrl` | Persisted only after known completion; never fabricated. |
 
-The installed examples identify `project:write`; no separate sample-upload scope declaration was found in the installed package. `AUDIOTOOL_CLIENT_ID` is absent, so live OAuth, grant sufficiency, remote privacy and Studio editability remain unverified. No remote export was attempted in this repair.
+The registered app requests `user:read project:write project:read sample:write sample:read preset:read preset:write`. Live project list/create and native document writes/readback succeeded. The production stem-upload/export path, remote privacy and Studio listening remain unverified. No stem export was attempted in this native render probe. The generated `RenderAudio` RPC is outside the public client surface; operation retrieval returned regional 501 and global 403, so native audio completion is unverified.
