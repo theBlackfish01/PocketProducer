@@ -11,10 +11,15 @@ const authenticateWithSdk: AudiotoolAuthenticator = async (config) => {
 }
 
 async function persistAuthenticated(result: Extract<AudiotoolOAuthResult, { status: "authenticated" }>): Promise<void> {
+  const exported = result.exportTokens()
+  // Nexus 0.0.17 stringifies a missing refresh_token to "undefined" in
+  // localStorage. A valid access token can still be used until it expires.
+  const refreshToken = exported.refreshToken === "undefined" || exported.refreshToken === "null" ? "" : exported.refreshToken
+  if (refreshToken !== "" && refreshToken.length < 16) throw new Error("Audiotool returned an invalid refresh token. Reconnect Audiotool to request a new session.")
   const response = await fetch("/api/v1/integrations/audiotool/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userName: result.userName, tokens: result.exportTokens() })
+    body: JSON.stringify({ userName: result.userName, tokens: { ...exported, refreshToken } })
   })
   if (!response.ok) throw new Error("Audiotool authorized the browser, but the private worker session could not be saved.")
 }

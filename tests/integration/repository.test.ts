@@ -129,6 +129,16 @@ describe("durable job repository", () => {
     expect(await audiotoolSessionStatus(ownerA)).toMatchObject({ connected: false, userName: null });
   });
 
+  it("keeps a usable short-lived Audiotool grant without pretending it can refresh", async () => {
+    const tokens = { accessToken: `access-${randomUUID()}`, refreshToken: "", expiresAt: Date.now() + 300_000 };
+    await saveAudiotoolSession(ownerA, "Short-lived grant", tokens);
+    expect(await loadAudiotoolSession(ownerA)).toEqual({ userName: "Short-lived grant", tokens });
+    expect(await audiotoolSessionStatus(ownerA)).toMatchObject({ connected: true });
+    await saveAudiotoolSession(ownerA, "Short-lived grant", { ...tokens, expiresAt: Date.now() - 1_000 });
+    expect(await audiotoolSessionStatus(ownerA)).toMatchObject({ connected: false });
+    await deleteAudiotoolSession(ownerA);
+  });
+
   it("deduplicates identical requests and rejects key reuse", async () => {
     const idempotencyKey = `test-${randomUUID()}`;
     const first = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey, request: { direction: "Warm and spacious" } });

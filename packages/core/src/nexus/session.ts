@@ -8,7 +8,7 @@ import type { AudiotoolExportClient } from "./adapter.js";
 
 const tokenSchema = z.object({
   accessToken: z.string().min(16).max(16_384),
-  refreshToken: z.string().min(16).max(16_384),
+  refreshToken: z.string().max(16_384).refine((value) => value === "" || value.length >= 16),
   expiresAt: z.number().int().positive()
 });
 
@@ -71,9 +71,11 @@ export async function loadAudiotoolSession(ownerId: string): Promise<{ userName:
 }
 
 export async function audiotoolSessionStatus(ownerId: string): Promise<{ connected: boolean; userName: string | null; expiresAt: string | null }> {
-  const result = await getPool().query("SELECT user_name,expires_at FROM audiotool_session WHERE owner_id=$1", [ownerId]);
+  const result = await getPool().query("SELECT user_name,expires_at,token_ciphertext,token_iv,token_tag FROM audiotool_session WHERE owner_id=$1", [ownerId]);
   const row = result.rows[0];
-  return row ? { connected: true, userName: String(row.user_name), expiresAt: new Date(row.expires_at).toISOString() } : { connected: false, userName: null, expiresAt: null };
+  if (!row) return { connected: false, userName: null, expiresAt: null };
+  const tokens = await decryptTokens(ownerId, row);
+  return { connected: Boolean(tokens.refreshToken) || tokens.expiresAt > Date.now() + 60_000, userName: String(row.user_name), expiresAt: new Date(row.expires_at).toISOString() };
 }
 
 export async function deleteAudiotoolSession(ownerId: string): Promise<void> {
@@ -107,6 +109,9 @@ export function createAudiotoolTokenRefreshHandler(ownerId: string, userName: st
 export async function createAudiotoolServerClient(ownerId: string, clientId: string): Promise<{ client: AudiotoolExportClient; awaitTokenPersistence(): Promise<void> } | null> {
   const session = await loadAudiotoolSession(ownerId);
   if (!session) return null;
+  if (!session.tokens.refreshToken && session.tokens.expiresAt <= Date.now() + 60_000) {
+    throw new Error("Audiotool access expired without a refresh token. Reconnect Audiotool in the browser.");
+  }
   const [nexusModule, nodeModule] = await Promise.all([import("@audiotool/nexus"), import("@audiotool/nexus/node")]);
   const refresh = createAudiotoolTokenRefreshHandler(ownerId, session.userName);
   const auth = nexusModule.createServerAuth({

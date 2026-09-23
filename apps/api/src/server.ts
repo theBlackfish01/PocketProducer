@@ -57,7 +57,7 @@ app.post("/api/v1/integrations/audiotool/session", async (request, reply) => {
   if (request.headers.origin !== config.APP_ORIGIN) throw Object.assign(new Error("Audiotool session handoff requires the configured loopback origin"), { statusCode: 403 });
   const body = z.object({
     userName: z.string().trim().min(1).max(160),
-    tokens: z.object({ accessToken: z.string().min(16).max(16_384), refreshToken: z.string().min(16).max(16_384), expiresAt: z.number().int().positive() })
+    tokens: z.object({ accessToken: z.string().min(16).max(16_384), refreshToken: z.string().max(16_384).refine((value) => value === "" || value.length >= 16), expiresAt: z.number().int().positive() })
   }).parse(request.body);
   await saveAudiotoolSession(ownerId, body.userName, body.tokens);
   return reply.status(204).send();
