@@ -1,6 +1,6 @@
 # Pocket Producer
 
-Pocket Producer is a loopback-first Listening Room for turning a source sound or written direction into a short instrumental, listening to real rendered audio, asking for a protected revision, comparing immutable versions, and preparing an editable-stem Nexus handoff.
+Pocket Producer is a loopback-first Listening Room. Its current workflow constructs expressive, editable native music from a direction, protects and revises parts, compares immutable versions, and can explicitly synchronize a Nexus project. Native audio rendering/playback is deliberately deferred. The earlier real-WAV create/listen/revise/compare workflow remains available under **Legacy audio**.
 
 This first milestone is deliberately local. It does not deploy publicly and it does not represent Gemini or Audiotool as live-verified merely because credentials are configured.
 
@@ -17,7 +17,7 @@ pnpm seed:demo
 pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`. Select **Sunroom demo**, audition the owned source, type a direction, and create. Then enter `Simplify the drums in Groove and keep the melody exactly.`, compare versions, audition A/B, and use the explicit restore action.
+Open `http://127.0.0.1:5173`, create a session, and in **Native construction** enter `Build an evolving 64-bar ambient journey with a slow lead and spacious transitions`. Inspect the sections, parts and native palette. Protect the Slow lead, target Soft pulse/Ascent, request `Vary the rhythmic phrase in the later section`, compare structural versions and restore explicitly. This fixture demonstration is audio-independent. For the preserved audio journey, choose **Legacy audio** and follow the previous Sunroom WAV flow.
 
 The root `.env` is loaded only by server code and remains ignored. Do not add secrets under `VITE_*`. For a no-cost deterministic run, launch the services with `FIXTURE_MODE=true`; live OpenAI creation requires the existing `OPENAI_API_KEY` and is fenced by `INITIAL_BUILD_API_BUDGET_USD` and `MAX_JOB_COST_USD`.
 
@@ -42,13 +42,15 @@ pnpm budget:status
 
 ## What is implemented
 
-- React/Vite Listening Room using owned shadcn source, Base UI, Tailwind, Lucide and one wavesurfer-backed playback controller.
+- React/Vite Listening Room using owned shadcn source, Base UI, Tailwind, Lucide and one wavesurfer-backed legacy playback controller, plus native arrangement/part/protection/compare views.
+- Native 960-PPQ schema v2 with reusable motifs, MIDI notes, Beatbox8 patterns, instrument/effect/automation state, source intervals and validated protected operations; immutable history and durable step replay.
+- Pinned Nexus capability discovery and offline native mapping/readback; checkpointed isolated remote sync with a strict unverified-live status. Native audio/Gemini and source upload mapping are deferred.
 - Fastify API, PostgreSQL canonical state and outbox/lease/fencing queue, independent worker, cancellation, retry and owner checks.
 - OpenAI Deep Agent on LangGraph with PostgreSQL checkpoints, scoped runtime skills and a validated arrangement plan.
 - Canonical tick composition, 48 kHz deterministic WAV renderer, per-part stems, measured audio facts and private content-addressed storage.
 - Protected drum simplification, canonical melody and artifact checks, immutable history, A/B audition and explicit restore.
 - Gemini source/preview adapter with structured critique, usage capture, one-repair ceiling and an honest unavailable state.
-- Nexus v3 four-track mapping with explicit 960→3840 PPQ conversion, browser PKCE/callback, encrypted owner-bound worker sessions, and durable per-step recovery. Live mutation remains blocked on app registration/OAuth; see [docs/USER-SETUP.md](docs/USER-SETUP.md).
+- Preserved Nexus v3 four-track stem mapping with explicit 960→3840 PPQ conversion, browser PKCE/callback, encrypted owner-bound worker sessions, and durable per-step recovery. Audiotool registration/consent previously succeeded; this assignment made no live Audiotool call. See [docs/USER-SETUP.md](docs/USER-SETUP.md).
 
 See [docs/STATUS.md](docs/STATUS.md), [docs/architecture.md](docs/architecture.md), [docs/design-system.md](docs/design-system.md), and [docs/testing.md](docs/testing.md).
 

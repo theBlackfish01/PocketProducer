@@ -1,5 +1,19 @@
 # Verification record
 
+## Native-construction verification (2026-09-23)
+
+Normal tests remain offline (`APP_ENV=test`, `FIXTURE_MODE=true`, keys blanked in child processes, dedicated `*_test` database). `vitest` files and Playwright workers run serially because their repository tests share one queue identity; concurrent files were observed to steal each other's jobs before this harness correction.
+
+- `pnpm check`: lint, strict typecheck, 8 unit files / 36 tests, and production build passed after native changes (Vite reports only its existing large lazy SDK chunk warning). The added music-hash test distinguishes motif-only edits from objective-text changes; the commit rejects objective-only revisions. Another test rejects unmapped device/effect knob values.
+- `pnpm test:integration`: 2 files / 23 tests passed. Native additions exercise durable tool-step replay after worker requeue, competing claim, immutable protected revision, explicit restore/head CAS, cancellation/failure/ownership, objective-only commit rejection, and a remote-create checkpoint surviving worker restart without a duplicate dispatch.
+- `pnpm test:e2e`: 4 Chromium tests passed in 51.1 s on the final run. The new journey constructs 64 bars and eight parts, protects a lead, varies a selected rhythm in a later section, compares/restores, reloads persisted state, searches Nexus capabilities, refuses native synchronization in fixture mode, and checks 390 px reduced-motion dialog focus return. The preserved legacy journey still uploads, plays, revises, compares and prepares a disabled offline handoff. E2E uses zero provider access. Physical phone and non-Chromium verification are not claimed.
+- Pinned Nexus offline validation reads back native synth/drum counts, note/region/pattern/effect/automation entities, routing and converted timing. No native audio is produced or measured by these tests.
+- A separate, explicit OpenAI foreground verification (not part of ordinary tests) succeeded in a new local room: two model calls, one `construct_native_blueprint` tool call expanding into 72 validated operations, 32 bars, eight native parts, immutable revision and offline SDK evidence. Observed cost for that successful job was US$0.124680. Before it, one sandboxed connection attempt failed with zero observed usage, and two foreground attempts exposed and corrected tool-turn budgeting/recursion issues; those two cost US$0.180250 combined. No Audiotool, Gemini or render call occurred in this assignment.
+
+Ignored screenshots: `.local/evidence/native-desktop.png` and `.local/evidence/native-mobile.png`, visually inspected for the Listening Room palette, arrangement/part hierarchy, mobile stacking, safe-area flow and no horizontal overflow. The title generator was changed to truncate at a word boundary after the first capture. Native screenshots represent fixture-mode structure, not heard audio or live Audiotool synchronization.
+
+## Earlier legacy audio/repair verification
+
 Updated 2026-09-21. Windows, Node 22.14, pnpm 11.19, PostgreSQL 17.6 in Docker, Playwright Chromium.
 
 ## Isolation contract

@@ -1,5 +1,25 @@
 # Live implementation status
 
+## Current assignment: native construction first (2026-09-23)
+
+The user explicitly deferred native rendering/playback and superseded the earlier render-first gate. The Listening Room now defaults to native construction; the existing Sunroom WAV workflow remains selectable as **Legacy audio** with its accepted data unchanged. `docs/adr/002-native-construction-first.md` is the current decision record. No Audiotool contact, remote export, native render probe, publication or deployment was made for this assignment.
+
+| Area | Implemented / verified | Remaining boundary |
+| --- | --- | --- |
+| Native music model | Schema v2, 960-PPQ sections, motifs/placements, MIDI notes, Beatbox8 patterns, instruments, effects, automation, source intervals, assumptions and protected dependencies; domain tests and SDK offline readback pass. A commit rejects objective-only revisions and motif-only edits appear in structural diffs. | No new native audio has been rendered or heard. Source placement is not audible use. |
+| Producer | Deep Agents/LangGraph with configured OpenAI model, scoped skills/workspace, discovery/inspection, validated batch and concise blueprint tools. A live isolated job used two model calls, applied one blueprint as 72 validated operations, and committed a 32-bar/eight-part revision. Fixture tests show a distinct 64-bar ambient direction and protected localized revision. | Live model quality is evidenced structurally, not by listening. Three earlier isolated jobs failed before commit: one sandboxed connection error with zero observed usage, then two foreground tool-turn/recursion failures with recorded cost. Their states are retained. |
+| Durable lifecycle | Migrations 007–009: immutable native revisions/head, ordered tool-step replay, per-version remote checkpoint. Owner/head/lease/cancel/source-hash checks, duplicate command handling, restart/contender and failed/cancelled preservation tests pass. | Remote reconciliation of a genuinely ambiguous Audiotool mutation still requires a human; no unsafe automatic overwrite. |
+| Nexus | Broad pinned SDK capability search and path inspection; validated local mapping of instruments, notes, drum patterns, routing, selected effects and automation. Explicit per-version sync command has create/apply/readback fencing and only exposes Studio link on verified hash match. | No native synchronization was dispatched live. Native sample upload/interval mapping is not supported, so source-bearing versions stay local. Prior `DocumentService.RenderAudio` result retrieval remains deferred. |
+| UI | Responsive editorial Listening Room with sections, part selection/protection, owned-source selection, capability search, direction/progress, structural versions/compare/restore and explicit audio-unavailable state. Legacy playback remains separate. | Physical-phone/non-Chromium tests and remote Studio verification remain open. |
+
+Final offline checks: `pnpm check` passed (8 unit files / 36 tests, lint, typecheck, build); `pnpm test:integration` passed (2 files / 23 tests, including the objective-only commit probe); `pnpm test:e2e` passed (4 Chromium tests, 51.1 s on the latest run, including fixture-mode native-sync refusal); `git diff --check` passed. Screenshots were inspected at `.local/evidence/native-desktop.png` and `.local/evidence/native-mobile.png`. The E2E screenshots are fixture structure, not a live provider claim.
+
+The last ledger read showed US$0.618486 known spent-or-reserved against the unchanged US$5 overall cap, including US$0.124680 for the successful native OpenAI job and US$0.180250 for two preceding paid native verification attempts. An earlier sandboxed connection failure had zero observed usage. The successful job stayed below the US$0.25 per-job limit. Existing Gemini effects retain unknown usage liability; US$4.381514 is only an upper bound on remaining capacity, not an exact balance. No new Gemini or Audiotool usage was incurred.
+
+Next safe work: implement owned-sample native upload/interval mapping, verify one explicitly authorized source-free native sync/readback with Audiotool after consent check, then design a separate render/Gemini phase when the user reopens audio work. Native rendering and playback are deliberately deferred now. No new credential is requested.
+
+## Preserved legacy repair/status history
+
 Updated: 2026-09-23 Asia/Karachi
 Milestone: second repair assignment, local create/listen/revise/compare/export-preparation slice
 Baseline inspected: runtime `010969f`, course update `25913b9`; newer work preserved

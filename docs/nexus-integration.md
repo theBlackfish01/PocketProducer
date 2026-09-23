@@ -1,6 +1,12 @@
 # Nexus / Audiotool integration contract
 
-Pinned SDK: `@audiotool/nexus@0.0.17`. Pocket Producer currently uses Nexus to create an editable project from already-rendered stems. A separate native rendering probe accepted two `RenderAudio` requests but could not retrieve their results; see [the 2026-09-23 evidence](../spikes/nexus-audio/RESULTS-2026-09-23.md).
+Pinned SDK: `@audiotool/nexus@0.0.17`. Current native construction maps instruments, notes, patterns, routing, effects and automation into a validated offline SDK document. The explicit native-sync command is implemented with per-version create/apply/readback checkpoints, but **was not dispatched live in this assignment**. It refuses source-bearing documents until owned-sample mapping exists. A distinct earlier legacy path creates an editable-stem project from rendered audio; its contract follows below. A separate historical native-render probe accepted two `RenderAudio` requests but could not retrieve results; [evidence](../spikes/nexus-audio/RESULTS-2026-09-23.md). Do not rerun it for native-construction work.
+
+## Native synchronization contract
+
+`nexus-native-v1` converts 960 canonical ticks per beat to Nexus 3840. Offline validation reads back tempo, signature, duration, instrument counts, note tuples, drum steps, effects, routing and automation before a native revision commits. The remote worker, when explicitly requested with authorization, persists `create_in_flight` *before* project creation, persists the returned project identity, then records `apply_in_flight` *before* document mutation. A fresh `open/start` readback must hash-match the validated local structure before the per-version checkpoint becomes `verified`. Interrupted creates are not recreated; interrupted writes are read-only reconciled and never blindly replayed. Nonempty remote targets are conflicts, not overwrite candidates. The UI exposes a Studio link only for a verified checkpoint of the selected native revision. This logic has offline/restart tests, not live-provider evidence.
+
+## Preserved four-stem export contract
 
 ## Time and fidelity
 

@@ -1,4 +1,12 @@
-# Initial architecture
+# Architecture — native construction is the current path
+
+As of 2026-09-23, the user deliberately deferred native rendering/playback. The current vertical slice is `Listening Room → owner-scoped API → durable native job → OpenAI Deep Agent/fixture tool executor → Zod-validated native document → pinned Nexus offline validation → immutable PostgreSQL version → explicit native synchronization`. `docs/adr/002-native-construction-first.md` records the decision. Audio/Gemini are a future boundary for these native versions; the working legacy WAV path below is preserved separately.
+
+`native_revision`, `native_project_head` and `native_job_step` hold native state, selected head and replayable tool operations. `native_revision_sync` holds per-version remote create/apply/readback checkpoints. A distinct project is made for each native version; a fresh SDK readback must match before the UI offers an Audiotool link. Source-bearing native versions remain local because source sample upload/interval mapping is not supported yet. Unknown remote outcomes are fenced rather than retried automatically. No live synchronization was run for this assignment.
+
+The producer sees only a pinned workspace, two project-local skills, searchable SDK metadata and bounded validated operations. It cannot edit arbitrary files, call remote SDK methods, change protected dependencies or claim audio quality. Fixture mode takes the same domain-operation path without provider access. The two demonstrated directions yield materially different 32/64-bar, eight-part structures rather than one hard-coded four-stem arrangement.
+
+## Preserved legacy audio architecture
 
 ## Runtime shape
 

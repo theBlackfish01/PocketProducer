@@ -25,6 +25,8 @@ The generated Slider wrapper was intentionally amended to forward the consumer's
 
 Music-specific composition lives above primitives: `AudioPlayer`, source pills/tray, arrangement sections, the direction composer and version comparison. wavesurfer.js receives the same `HTMLAudioElement` used by the transport and has interaction disabled, avoiding competing playback clocks. Playback identity is explicit (`source` or immutable `revision` plus ID); source and A/B audition cannot silently leave the transport pointing at the wrong bytes.
 
+The current native room reuses the same tokens and Base UI buttons/dialog/radio controls. Its editorial arrangement cards, protected part grid, source selection, capability search and structural version comparison are composed locally in `apps/web/src/features/native/native-room.tsx`. Native mode clears the playback controller; the existing audio room is explicitly labeled **Legacy audio** and reloads only its accepted artifact. A sync control appears only with saved Audiotool consent and no unresolved native source intervals. No new component package or second primitive family was introduced.
+
 ## Responsive and accessibility behavior
 
 At tablet width the left session rail becomes a Base UI sheet. Below 700px the player stacks, the section strip scrolls horizontally, the composer stays in document flow, and bottom padding includes `env(safe-area-inset-bottom)`. Reduced-motion media queries collapse animation and transition durations to `0.01ms`.
