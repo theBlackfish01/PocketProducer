@@ -25,6 +25,11 @@ try {
   if (owner) {
     const projectIds = (await client.query<{ id: string }>("SELECT id FROM project WHERE owner_id=$1", [owner])).rows.map((row) => row.id);
     if (projectIds.length) {
+      await client.query("DELETE FROM native_revision_sync WHERE project_id=ANY($1::uuid[])", [projectIds]);
+      await client.query("DELETE FROM native_sync WHERE project_id=ANY($1::uuid[])", [projectIds]);
+      await client.query("DELETE FROM native_project_head WHERE project_id=ANY($1::uuid[])", [projectIds]);
+      await client.query("UPDATE job SET result_native_revision_id=NULL WHERE project_id=ANY($1::uuid[])", [projectIds]);
+      await client.query("DELETE FROM native_revision WHERE project_id=ANY($1::uuid[])", [projectIds]);
       await client.query("UPDATE project SET current_revision_id=NULL WHERE id=ANY($1::uuid[])", [projectIds]);
       await client.query("UPDATE job SET result_revision_id=NULL,base_revision_id=NULL,expected_head_revision_id=NULL WHERE project_id=ANY($1::uuid[])", [projectIds]);
       await client.query("DELETE FROM project_export WHERE project_id=ANY($1::uuid[])", [projectIds]);

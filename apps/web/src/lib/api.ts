@@ -15,6 +15,15 @@ export interface Revision {
 export interface Job { id: string; project_id: string; kind: string; state: string; stage: string | null; error_code: string | null; error_message: string | null; result_revision_id: string | null; events?: Array<{ sequence: number; event_type: string; payload: Record<string, unknown> }> }
 export interface Analysis { id: string; revisionId: string | null; assetHash: string; status: string; provider: string; model: string; purpose: "source-analysis" | "preview-critique"; observations: string[]; uncertainty: string; modelCostUsd: number }
 export interface ProjectSnapshot { project: Project; assets: Asset[]; revisions: Version[]; analyses: Analysis[]; latestJob: Job | null; currentRevision: Revision | null }
+export interface NativeDocument {
+  schemaVersion: 2; title: string; direction: string; currentObjective: string; tempoBpm: number; meter: { numerator: number; denominator: number }; bars: number;
+  sections: Array<{ id: string; name: string; startBar: number; endBar: number; intent: string }>;
+  parts: Array<{ id: string; name: string; role: string; device: { type: string; parameters: Record<string, number> }; notes: unknown[]; placements: Array<{ id: string; motifId: string; startTick: number; repeats: number }>; sourceRegions: Array<{ id: string; assetId: string; sourceStartSeconds: number; sourceDurationSeconds: number }>; effects: Array<{ id: string; type: string }>; automation: Array<{ id: string; target: string; points: Array<{ tick: number; value: number }> }> }>;
+  motifs: Array<{ id: string; partId: string; name: string; notes: unknown[] }>;
+  protectedPartIds: string[]; protectedMotifIds: string[]; audio: { state: "deferred" | "unavailable" | "stale" };
+}
+export interface NativeVersion { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: { addedParts: string[]; removedParts: string[]; changedParts: string[]; addedSections: string[]; noteCount: number; protectedPartIds: string[] }; producer: Record<string, unknown>; createdAt: string }
+export interface NativeSnapshot { currentRevisionId: string | null; headVersion: number; current: NativeVersion | null; versions: NativeVersion[]; context: Record<string, unknown> | null; synchronization: { state: string; projectId: string | null; observedHash: string | null; url: string | null; revisionId: string | null; error: string | null }; legacyAudio: string }
 export interface AppStatus {
   providers: { openai: boolean; gemini: boolean; audiotool: boolean };
   uploadFormats: string[];
@@ -57,8 +66,14 @@ export const api = {
   listProjects: () => request<{ projects: Project[] }>("/projects"),
   createProject: (title: string) => request<{ project: Project }>("/projects", { method: "POST", body: JSON.stringify({ title }) }),
   snapshot: (id: string, signal?: AbortSignal) => request<ProjectSnapshot>(`/projects/${id}`, { signal }),
+  nativeSnapshot: (id: string, signal?: AbortSignal) => request<NativeSnapshot>(`/projects/${id}/native`, { signal }),
+  nativeCapabilities: (query = "") => request<{ version: string; totalEntities: number; matches: Array<{ type: string; family: string; purpose: string; writableInPocketProducer: boolean }> }>(`/native/capabilities?query=${encodeURIComponent(query)}`),
+  constructNative: (projectId: string, direction: string, sourceAssetIds: string[], idempotencyKey: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/constructions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, sourceAssetIds, expectedNativeHeadId: null }) }),
+  reviseNative: (projectId: string, input: { direction: string; baseNativeRevisionId: string; expectedNativeHeadId: string; targetPartId?: string; targetSectionId?: string; protectedPartIds: string[]; sourceAssetIds: string[] }, idempotencyKey: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/revisions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
+  selectNativeVersion: (projectId: string, revisionId: string, expectedNativeHeadId: string) => request(`/projects/${projectId}/native/select-version`, { method: "POST", body: JSON.stringify({ revisionId, expectedNativeHeadId }) }),
+  syncNative: (projectId: string, revisionId: string, idempotencyKey: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/synchronizations`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ baseNativeRevisionId: revisionId, expectedNativeHeadId: revisionId }) }),
   job: (id: string, signal?: AbortSignal) => request<Job>(`/jobs/${id}`, { signal }),
-  commandReceipt: (projectId: string, operation: "generation" | "revision" | "export", idempotencyKey: string, signal?: AbortSignal) => request<{ job: Job | null }>(`/projects/${projectId}/commands/${operation}/${encodeURIComponent(idempotencyKey)}`, { signal }),
+  commandReceipt: (projectId: string, operation: "generation" | "revision" | "export" | "native-generation" | "native-revision" | "native-sync", idempotencyKey: string, signal?: AbortSignal) => request<{ job: Job | null }>(`/projects/${projectId}/commands/${operation}/${encodeURIComponent(idempotencyKey)}`, { signal }),
   generate: (projectId: string, direction: string, idempotencyKey: string, sourceAssetId?: string) => request<{ jobId: string }>(`/projects/${projectId}/generations`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, sourceAssetId }) }),
   revise: (projectId: string, revisionId: string, direction: string, idempotencyKey: string) => request<{ jobId: string }>(`/projects/${projectId}/revisions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, baseRevisionId: revisionId, expectedHeadRevisionId: revisionId, protectedTrackIds: ["melody"], sectionId: "groove" }) }),
   cancel: (jobId: string) => request(`/jobs/${jobId}/cancel`, { method: "POST", body: "{}" }),

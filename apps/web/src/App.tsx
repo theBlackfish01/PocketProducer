@@ -7,6 +7,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Textarea } from "@/components/ui/textarea"
 import { AudioPlayer, usePlayback, type PlaybackItem } from "@/features/listening/audio-player"
+import { NativeRoom } from "@/features/native/native-room"
 import { api, type AppStatus, type Asset, type Job, type Project, type ProjectSnapshot, type Version } from "@/lib/api"
 import { beginAudiotoolConnection, finishAudiotoolCallback } from "@/lib/audiotool"
 import { startWavRecording, type RecordingSession } from "@/lib/record-wav"
@@ -72,6 +73,7 @@ export default function App() {
   const [job, setJob] = useState<Job | null>(null)
   const [exportResult, setExportResult] = useState<{ state: string; remote_url: string | null; error_message: string | null } | null>(null)
   const [compareOpen, setCompareOpen] = useState(false)
+  const [nativeMode, setNativeMode] = useState(true)
   const [sourcesOpen, setSourcesOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [selectedRevisionId, setSelectedRevisionId] = useState<string | null>(null)
@@ -450,9 +452,9 @@ export default function App() {
       <aside className="session-rail" aria-label="Session navigation"><div className="wordmark">Pocket <span>Producer</span></div>{navContent}<div className="rail-footer">Local listening room<br />Private development session</div></aside>
       <main className="main-area"><div className="main-inner">
         <div className="mobile-topbar"><div className="wordmark">Pocket <span>Producer</span></div><Button variant="ghost" size="icon" aria-label="Open sessions" onClick={() => setNavOpen(true)}><Menu /></Button></div>
-        <div className="topline"><span>Listening Room / {snapshot?.project.title ?? "Welcome"}</span><Button variant="outline" onClick={() => void (nexus.connection === "awaiting-authorization" ? connectAudiotool() : exportCurrent())} disabled={!currentRevision || busy}><Headphones /> {nexus.connection === "unconfigured" ? "Prepare Nexus handoff" : nexus.connection === "awaiting-authorization" ? "Connect Audiotool" : "Export editable stems"}</Button></div>
+        <div className="topline"><span>Listening Room / {snapshot?.project.title ?? "Welcome"}</span><div className="mode-switch" role="group" aria-label="Listening Room workflow"><Button variant={nativeMode ? "default" : "outline"} size="sm" aria-pressed={nativeMode} onClick={() => { playback.clear(); setNativeMode(true) }}>Native construction</Button><Button variant={!nativeMode ? "default" : "outline"} size="sm" aria-pressed={!nativeMode} onClick={() => { setNativeMode(false); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted) }}>Legacy audio</Button></div>{!nativeMode ? <Button variant="outline" onClick={() => void (nexus.connection === "awaiting-authorization" ? connectAudiotool() : exportCurrent())} disabled={!currentRevision || busy}><Headphones /> {nexus.connection === "unconfigured" ? "Prepare Nexus handoff" : nexus.connection === "awaiting-authorization" ? "Connect Audiotool" : "Export editable stems"}</Button> : null}</div>
 
-        {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot ? <>
+        {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot ? nativeMode ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} legacyVersionCount={snapshot.revisions.length} onAddSource={() => setSourcesOpen(true)} onLegacy={() => { setNativeMode(false); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted) }} /> : <>
           <header className="session-header"><div className="eyebrow"><span className="status-dot" /> {activeJob ? "Production in progress" : currentRevision ? "Ready to listen" : "New session"}</div><h1 className="session-title">{currentRevision?.title ?? snapshot.project.title}</h1><p className="session-deck">{currentRevision?.changeSummary ?? "Start with a sound or an idea. The producer will shape a short instrumental and keep every accepted version safe."}</p><p className="provider-status">Producer: {producerProvenance} · Audio critique: {currentAnalysis ? `${currentAnalysis.status} via ${currentAnalysis.model}` : providers.gemini ? "available when a render is made" : "unavailable; measured checks remain active"}</p></header>
           {exportResult ? <div className="job-status" role={exportResult.state === "failed" || exportResult.state === "uncertain" ? "alert" : "status"}><strong>Audiotool handoff: {exportResult.state.replaceAll("_", " ")}</strong><span>{exportResult.error_message ?? (exportResult.remote_url ? "Four editable audio stems are ready in Audiotool." : "The local four-stem mapping is preserved while this handoff progresses.")}</span>{exportResult.remote_url ? <Button className="mt-3" variant="outline" size="sm" onClick={() => window.open(exportResult.remote_url ?? "", "_blank", "noopener,noreferrer")}>Open Audiotool Studio</Button> : null}</div> : null}
           {audibleItem ? <>

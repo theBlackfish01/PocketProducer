@@ -1,0 +1,59 @@
+import { expect, test } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+
+const evidence = process.env.E2E_EVIDENCE_DIR ?? ".local/evidence";
+test.beforeAll(async () => { await mkdir(evidence, { recursive: true }); });
+
+test("native construct, protect, revise, compare and restore survives reload", async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto("/");
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("heading", { name: "Make a piece, not just a preview" })).toBeVisible();
+  const direction = page.getByRole("textbox", { name: "Musical direction for native construction" });
+  await direction.fill("Build an evolving 64-bar ambient journey with a slow lead and spacious transitions");
+  await page.getByRole("button", { name: "Construct native project" }).click();
+  await expect(page.getByRole("heading", { name: /ambient|journey|piece/i }).first()).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByText("64 bars · 8 parts")).toBeVisible({ timeout: 90_000 });
+  const projectId = (await (await page.request.get("/api/v1/projects")).json() as { projects: Array<{ id: string }> }).projects[0]!.id;
+  const currentNativeId = (await (await page.request.get(`/api/v1/projects/${projectId}/native`)).json() as { currentRevisionId: string }).currentRevisionId;
+  const forbiddenSync = await page.request.post(`/api/v1/projects/${projectId}/native/synchronizations`, { headers: { "Idempotency-Key": crypto.randomUUID() }, data: { baseNativeRevisionId: currentNativeId, expectedNativeHeadId: currentNativeId } });
+  expect(forbiddenSync.status()).toBe(409);
+  await expect(page.getByText("Audio preview coming later")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Play current version" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Protect Slow lead for the next revision" }).click();
+  await page.getByRole("button", { name: /Soft pulse.*beatbox8/i }).click();
+  await page.getByRole("button", { name: /Ascent.*Bars/i }).click();
+  await direction.fill("Vary the rhythmic phrase in the later section while preserving the slow lead");
+  await page.getByRole("button", { name: "Request native revision" }).click();
+  await expect(page.getByText("2 immutable native versions.")).toBeVisible({ timeout: 90_000 });
+  await page.getByRole("button", { name: "Compare" }).click();
+  const dialog = page.getByRole("dialog", { name: "Compare native structure" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("radio", { name: "Native version 1" }).click();
+  await expect(dialog.getByText("Protected: none")).toBeVisible();
+  await dialog.getByRole("button", { name: "Restore selected" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("1 immutable native versions.")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText("64 bars · 8 parts")).toBeVisible();
+  await page.getByPlaceholder("Find instruments, effects, tracks or automation").fill("beatbox8");
+  await expect(page.getByText("beatbox8", { exact: true }).first()).toBeVisible();
+  await page.screenshot({ path: `${evidence}/native-desktop.png`, fullPage: true });
+});
+
+test("native phone layout preserves direction focus and compare dialog return", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const direction = page.getByRole("textbox", { name: "Musical direction for native construction" });
+  await direction.focus();
+  const box = await direction.boundingBox();
+  expect(box).not.toBeNull();
+  expect((box?.x ?? 1_000) + (box?.width ?? 1_000)).toBeLessThanOrEqual(390);
+  await page.getByRole("button", { name: "Compare" }).click();
+  const dialog = page.getByRole("dialog", { name: "Compare native structure" });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Compare" })).toBeFocused();
+  await page.screenshot({ path: `${evidence}/native-mobile.png`, fullPage: true });
+});
