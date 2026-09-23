@@ -21,7 +21,7 @@ export interface JobRecord {
   id: string;
   ownerId: string;
   projectId: string;
-  kind: "generation" | "revision" | "export";
+  kind: "generation" | "revision" | "export" | "native-generation" | "native-revision" | "native-sync";
   state: string;
   stage: string | null;
   request: Record<string, unknown>;

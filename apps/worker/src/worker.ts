@@ -6,7 +6,7 @@ import {
   analyzePreview, appendAttemptEvent, attemptBoundedDrumRepair, canonicalHash, claimNextJob, closePool, commitCancelled, commitExportPreparation, commitRevision, compileArrangement, completeProviderEffect, compositionSourceLineage, createAudiotoolServerClient, decodeWav, dispatchOutbox, expireJob, exportManifestToAudiotool, exportResumeState, failJob, failProviderEffect,
   getConfig, getRevision, heartbeat, isCancelled, markEffectDispatched, needsAttentionJob, produceArrangement, protectedTrackHash, providerAvailability, recordExportProgress, requeueJob, reserveProviderEffect,
   measureDecodedWav, renderAssets, renderComposition, safeStoragePath, simplifyDrums, validateComposition, writeNexusManifest,
-  JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type SourceDescriptor
+  JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, commitNativeRevision, finishNativeSync, getNativeRevision, getPool, nativeDocumentSchema, nativeStructuralReadback, produceNative, requiresUnresolvedSourceMapping, seedNativeDocument, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeRemoteClient, type NativeSource, type SourceDescriptor
 } from "@pocket/core";
 
 const config = getConfig();
@@ -221,6 +221,121 @@ async function revision(job: JobRecord, signal: AbortSignal): Promise<void> {
   });
 }
 
+async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<void> {
+  const direction = typeof job.request.direction === "string" ? job.request.direction : "Construct an editable piece";
+  const baseId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : null;
+  const base = baseId ? (await getNativeRevision(job.ownerId, job.projectId, baseId)).document : seedNativeDocument(direction);
+  const protectedPartIds = Array.isArray(job.request.protectedPartIds) ? job.request.protectedPartIds.filter((value): value is string => typeof value === "string") : [];
+  const protectedBase = protectedPartIds.length ? applyNativeOperations(base, [{ kind: "protect", partIds: protectedPartIds, motifIds: [] }]) : base;
+  const session = new NativeToolSession(job, protectedBase);
+  const selected = Array.isArray(job.request.sourceAssetIds) ? job.request.sourceAssetIds.filter((value): value is string => typeof value === "string") : [];
+  const assets = selected.length ? await getPool().query<{ id: string; content_hash: string; duration_seconds: number }>("SELECT id,content_hash,duration_seconds FROM asset WHERE owner_id=$1 AND project_id=$2 AND kind='source' AND readiness='ready' AND id=ANY($3::uuid[])", [job.ownerId, job.projectId, selected]) : { rows: [] };
+  if (assets.rows.length !== selected.length) throw new Error("A selected source is no longer available");
+  const sources: NativeSource[] = assets.rows.map((row) => ({ assetId: row.id, assetHash: row.content_hash, durationSeconds: Number(row.duration_seconds), rights: "User-uploaded source; license not independently verified" }));
+  await stage(job, "discovering", "Checking native devices, protected material and current project context");
+  throwIfAborted(signal, "Native construction interrupted");
+  await stage(job, "constructing", "Building sections, instrument parts, motifs and automation");
+  const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), signal });
+  await checkpoint(job);
+  const document = nativeDocumentSchema.parse(session.document);
+  if (job.kind === "native-generation" && (document.parts.length < 6 || document.bars < 24)) throw new Error("Native producer did not construct the minimum useful multi-part arrangement");
+  await stage(job, "validating", "Validating native notes, pattern regions, routing and automation in the pinned SDK");
+  const offline = await validateNativeOffline(document);
+  await checkpoint(job);
+  await commitNativeRevision(job, document, produced.summary, { ...produced, offlineValidation: offline, audioState: "deferred" });
+}
+
+async function nativeSynchronization(job: JobRecord, signal: AbortSignal): Promise<void> {
+  const revisionId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : "";
+  const revision = await getNativeRevision(job.ownerId, job.projectId, revisionId);
+  if (requiresUnresolvedSourceMapping(revision.document)) throw new Error("Native source intervals have no supported sample mapping yet; local structure remains intact");
+  if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw new Error("Native synchronization is unavailable in fixture mode or without Audiotool configuration");
+  await stage(job, "validating", "Checking the selected native structure offline");
+  const local = await validateNativeOffline(revision.document);
+  const expectedHash = canonicalHash(local.structuralReadback);
+  await checkpoint(job);
+  const connection = await createAudiotoolServerClient(job.ownerId, config.AUDIOTOOL_CLIENT_ID);
+  if (!connection) throw new Error("Connect Audiotool before requesting native synchronization");
+  const client = connection.client as unknown as NativeRemoteClient;
+  const saved = await beginNativeSync(job, revision.documentHash);
+  if (saved.state === "verified") {
+    if (saved.observedHash !== expectedHash) throw new Error("Stored native readback hash differs from this mapping version");
+    if (!saved.remoteProjectName || !saved.remoteUrl) throw new Error("Verified native checkpoint lacks remote identity");
+    // Finalize a duplicated command without issuing a second remote mutation.
+    await finishNativeSync(job, saved.remoteProjectName, saved.remoteUrl, expectedHash, "verified");
+    return;
+  }
+  if (saved.state === "create_in_flight" && !saved.createdNow) {
+    await advanceNativeSync(job, "create_in_flight", "uncertain", { errorMessage: "A prior Audiotool project-create call may have succeeded; its identity needs reconciliation." });
+    await needsAttentionJob(job, "NATIVE_CREATE_OUTCOME_UNKNOWN", "A prior Audiotool project-create call may have succeeded; reconcile its identity before retrying.");
+    return;
+  }
+  if (["conflict", "uncertain", "failed"].includes(saved.state)) {
+    await needsAttentionJob(job, "NATIVE_SYNC_RECONCILIATION_REQUIRED", `Native synchronization checkpoint is ${saved.state}; inspect the remote project before any new mutation.`);
+    return;
+  }
+  let remoteName = saved.remoteProjectName;
+  if (saved.createdNow) {
+    await stage(job, "synchronizing", "Creating an isolated native Audiotool project");
+    throwIfAborted(signal, "Native synchronization interrupted");
+    try {
+      const created = await client.projects.createProject({ project: { displayName: `Pocket Producer · ${revision.document.title.slice(0, 72)} · v${revision.ordinal}` } });
+      if (created instanceof Error || !created.project?.name) throw new Error("Audiotool project creation did not return a durable identity");
+      remoteName = created.project.name;
+      await advanceNativeSync(job, "create_in_flight", "created", { remoteProjectName: created.project.name });
+    } catch {
+      await advanceNativeSync(job, "create_in_flight", "uncertain", { errorMessage: "Remote project creation may have succeeded; automatic retry is fenced." });
+      await needsAttentionJob(job, "NATIVE_CREATE_OUTCOME_UNKNOWN", "Remote project creation may have succeeded; automatic retry is fenced.");
+      return;
+    }
+  }
+  if (!remoteName) throw new Error("Native synchronization checkpoint has no remote project identity");
+  await stage(job, "synchronizing", "Writing notes, patterns, effects and routing to the isolated project");
+  const remote = await client.open(remoteName);
+  await remote.start();
+  let remoteUrl = remote.dawUrl;
+  try {
+    if (saved.state === "apply_in_flight") {
+      const observed = canonicalHash(nativeStructuralReadback(remote));
+      if (observed === expectedHash) {
+        await finishNativeSync(job, remoteName, remoteUrl, observed, "apply_in_flight");
+        return;
+      }
+      await advanceNativeSync(job, "apply_in_flight", "conflict", { remoteUrl, observedHash: observed, errorMessage: "Remote structure differs after an interrupted write; manual reconciliation required." });
+      await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "Remote structure differs after an interrupted write; no automatic overwrite was attempted.");
+      return;
+    }
+    if (saved.state === "created" || saved.createdNow) {
+      const initial = nativeStructuralReadback(remote);
+      if (initial.instruments.heisenberg + initial.instruments.pulverisateur + initial.instruments.gakki + initial.instruments.beatbox8 + initial.notes.length + initial.patterns.length > 0) {
+        await advanceNativeSync(job, "created", "conflict", { remoteUrl, observedHash: canonicalHash(initial), errorMessage: "The target project is not empty." });
+        await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "The isolated target project was not empty; no remote overwrite was attempted.");
+        return;
+      }
+      await advanceNativeSync(job, "created", "apply_in_flight", { remoteUrl });
+      try { await applyNativeSnapshot(remote, revision.document); }
+      catch {
+        await advanceNativeSync(job, "apply_in_flight", "uncertain", { remoteUrl, errorMessage: "Native document mutation may have committed; inspect before retrying." });
+        await needsAttentionJob(job, "NATIVE_APPLY_OUTCOME_UNKNOWN", "Native document mutation may have committed; automatic retry is fenced.");
+        return;
+      }
+    }
+  } finally { await remote.stop(); await connection.awaitTokenPersistence(); }
+  // A second open is a fresh server readback, not the optimistic local document state.
+  const readback = await client.open(remoteName);
+  await readback.start();
+  let observedHash: string;
+  try { remoteUrl = readback.dawUrl; observedHash = canonicalHash(nativeStructuralReadback(readback)); }
+  finally { await readback.stop(); await connection.awaitTokenPersistence(); }
+  if (observedHash !== expectedHash) {
+    await advanceNativeSync(job, "apply_in_flight", "conflict", { remoteUrl, observedHash, errorMessage: "Fresh remote readback differs from the validated local structure." });
+    await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "Fresh remote readback differs from the validated local structure.");
+    return;
+  }
+  await checkpoint(job);
+  await finishNativeSync(job, remoteName, remoteUrl, observedHash, "apply_in_flight");
+}
+
 async function exportRevision(job: JobRecord, signal: AbortSignal): Promise<void> {
   if (!job.baseRevisionId) throw new Error("Export job is missing its revision");
   const revision = await getRevision(job.ownerId, job.baseRevisionId);
@@ -312,13 +427,16 @@ export async function processJob(job: JobRecord): Promise<void> {
     await withLeaseMonitor(job, async (signal) => {
       if (job.kind === "generation") await generation(job, signal);
       else if (job.kind === "revision") await revision(job, signal);
-      else await exportRevision(job, signal);
+      else if (job.kind === "export") await exportRevision(job, signal);
+      else if (job.kind === "native-generation" || job.kind === "native-revision") await nativeConstruction(job, signal);
+      else if (job.kind === "native-sync") await nativeSynchronization(job, signal);
+      else throw new Error("Native synchronization is not yet enabled for this worker");
     });
   } catch (error) {
     if (error instanceof JobControlError && error.code === "CANCELLED") await commitCancelled(job);
     else if (error instanceof JobControlError && (error.code === "LEASE_LOST" || error.code === "MONITOR_UNAVAILABLE")) return;
     else if (error instanceof JobControlError && error.code === "DEADLINE_EXCEEDED") await expireJob(job);
-    else if (error instanceof Error && /outcome is not safely replayable|previous producer dispatch|EFFECT_(?:DISPATCHED|UNCERTAIN)/i.test(error.message)) {
+    else if (error instanceof Error && /outcome is not safely replayable|previous (?:native )?producer dispatch|NATIVE_STEP_REPLAY_CONFLICT|EFFECT_(?:DISPATCHED|UNCERTAIN)/i.test(error.message)) {
       await needsAttentionJob(job, "PROVIDER_OUTCOME_UNCERTAIN", error.message);
     } else if (job.attempts < 2 && error instanceof Error && /timeout|rate|ECONN|network|socket/i.test(error.message)) {
       const requeued = await requeueJob(job, "TRANSIENT_RETRY", error.message);

@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import {
   audiotoolSessionStatus, cancelJob, createJob, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  findCommandJob, insertAsset, jobSnapshot, listProjects, listRevisions, providerAvailability, requireProject, saveAudiotoolSession, selectRevision, storeImmutableAudio
+  createNativeJob, discoverNativeCapabilities, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeSnapshot, providerAvailability, requireProject, requiresUnresolvedSourceMapping, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio
 } from "@pocket/core";
 
 const config = getConfig();
@@ -36,6 +36,7 @@ app.get("/api/v1/status", async () => {
     providers: providerAvailability(config),
     capabilities: {
       producer: "openai-deep-agent-with-fixture-fallback",
+      nativeConstruction: "audio-independent-validated-native-v1",
       audioAnalysis: providerAvailability(config).gemini ? "configured" : "unavailable",
       audiotoolExport: !config.AUDIOTOOL_CLIENT_ID ? "unconfigured" : session.connected ? "authorized-not-live-verified" : "awaiting-user-authorization"
     },
@@ -79,6 +80,57 @@ app.post("/api/v1/projects", async (request, reply) => {
 app.get("/api/v1/projects/:projectId", async (request) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   return getProjectSnapshot(ownerId, projectId);
+});
+
+app.get("/api/v1/native/capabilities", async (request) => {
+  const { query, limit } = z.object({ query: z.string().max(80).default(""), limit: z.coerce.number().int().min(1).max(64).default(24) }).parse(request.query);
+  return discoverNativeCapabilities(query, limit);
+});
+
+app.get("/api/v1/native/capability", async (request) => {
+  const { path } = z.object({ path: z.string().max(160) }).parse(request.query);
+  return inspectNativeCapability(path);
+});
+
+app.get("/api/v1/projects/:projectId/native", async (request) => {
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  return nativeSnapshot(ownerId, projectId);
+});
+
+app.post("/api/v1/projects/:projectId/native/constructions", async (request, reply) => {
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  const body = z.object({ direction: z.string().trim().min(3).max(2_000), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null() }).parse(request.body);
+  const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
+  const job = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey, request: body, expectedHeadId: null });
+  return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
+});
+
+app.post("/api/v1/projects/:projectId/native/revisions", async (request, reply) => {
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  const body = z.object({ direction: z.string().trim().min(3).max(2_000), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(), targetSectionId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(), protectedPartIds: z.array(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/)).max(24).default([]), sourceAssetIds: z.array(idSchema).max(24).default([]) }).parse(request.body);
+  if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("Revise the currently selected native version; restore an older one first"), { statusCode: 409 });
+  const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
+  const job = await createNativeJob({ ownerId, projectId, kind: "native-revision", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId });
+  return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
+});
+
+app.post("/api/v1/projects/:projectId/native/select-version", async (request) => {
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  const body = z.object({ revisionId: idSchema, expectedNativeHeadId: idSchema }).parse(request.body);
+  await selectNativeRevision(ownerId, projectId, body.revisionId, body.expectedNativeHeadId);
+  return { selectedRevisionId: body.revisionId, synchronization: "local" };
+});
+
+app.post("/api/v1/projects/:projectId/native/synchronizations", async (request, reply) => {
+  if (!providerAvailability(config).audiotool) throw Object.assign(new Error("Native synchronization is unavailable in fixture mode or without Audiotool configuration"), { statusCode: 409 });
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  const body = z.object({ baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema }).parse(request.body);
+  if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("Synchronize the selected native version"), { statusCode: 409 });
+  const revision = await getNativeRevision(ownerId, projectId, body.baseNativeRevisionId);
+  if (requiresUnresolvedSourceMapping(revision.document)) throw Object.assign(new Error("Native source sample mapping is not yet supported; this version remains a local validated draft"), { statusCode: 422 });
+  const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
+  const job = await createNativeJob({ ownerId, projectId, kind: "native-sync", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId });
+  return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
 });
 
 app.post("/api/v1/projects/:projectId/assets", async (request, reply) => {
@@ -138,7 +190,7 @@ app.get("/api/v1/jobs/:jobId", async (request) => {
 app.get("/api/v1/projects/:projectId/commands/:operation/:idempotencyKey", async (request) => {
   const params = z.object({
     projectId: idSchema,
-    operation: z.enum(["generation", "revision", "export"]),
+    operation: z.enum(["generation", "revision", "export", "native-generation", "native-revision", "native-sync"]),
     idempotencyKey: z.string().min(8).max(160)
   }).parse(request.params);
   await requireProject(ownerId, params.projectId);

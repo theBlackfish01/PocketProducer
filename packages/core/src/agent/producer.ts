@@ -40,7 +40,7 @@ export interface SourceDescriptor {
   suggestedRole: "percussion" | "texture" | "none" | null;
 }
 
-function checkpoint(): Promise<PostgresSaver> {
+export function checkpoint(): Promise<PostgresSaver> {
   checkpointReady ??= (async () => {
     const saver = new PostgresSaver(getPool(), undefined, { schema: "public" });
     await saver.setup();
@@ -141,18 +141,18 @@ function usageFromLlmResult(result: LLMResult): { inputTokens: number; outputTok
   return totals;
 }
 
-class AccountedOpenAICalls extends BaseCallbackHandler {
+export class AccountedOpenAICalls extends BaseCallbackHandler {
   name = "pocket-producer-accounting";
   private readonly effects = new Map<string, string>();
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   costMicrousd = 0;
 
-  constructor(private readonly job: JobRecord, private readonly model: string, private readonly operationHash: string) {
+  constructor(private readonly job: JobRecord, private readonly model: string, private readonly operationHash: string, private readonly outputTokenBound = 900) {
     super({ raiseError: true, _awaitHandler: true });
   }
 
   override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
-    const request = boundOpenAiRequest(messages);
+    const request = boundOpenAiRequest(messages, this.outputTokenBound);
     const messageHash = canonicalHash(request.normalizedMessages);
     const reservation = await reserveProviderEffect({
       job: this.job,
@@ -193,7 +193,7 @@ class AccountedOpenAICalls extends BaseCallbackHandler {
   }
 }
 
-export function boundOpenAiRequest(messages: BaseMessage[][]): {
+export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound = 900): {
   normalizedMessages: unknown;
   inputTokenBound: number;
   outputTokenBound: number;
@@ -215,7 +215,7 @@ export function boundOpenAiRequest(messages: BaseMessage[][]): {
   if (inputTokenBound > configuredLimit) {
     throw new Error(`OPENAI_INPUT_LIMIT_EXCEEDED:${inputTokenBound}:${configuredLimit}`);
   }
-  return { normalizedMessages, inputTokenBound, outputTokenBound: 900 };
+  return { normalizedMessages, inputTokenBound, outputTokenBound };
 }
 
 const producerResultSchema = z.object({

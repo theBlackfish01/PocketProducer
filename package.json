@@ -28,6 +28,7 @@
     "test:live": "tsx scripts/live-provider-smoke.ts",
     "test:gemini-live": "tsx scripts/live-gemini-smoke.ts",
     "verify:demo": "tsx scripts/verify-demo.ts",
+    "verify:native-live": "tsx scripts/verify-native-live.ts",
     "budget:status": "tsx scripts/check-provider-budget.ts",
     "spike:nexus-native": "tsx packages/core/src/nexus/native-spike.ts",
     "spike:nexus-render": "tsx packages/core/src/nexus/render-probe.ts",
