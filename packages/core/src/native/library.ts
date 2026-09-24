@@ -80,7 +80,10 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
       const presets = requireClient().presets;
       const item = family === "drums" ? presets.gmDrums.find((value) => value.slug === slug) : presets.gmInstruments.find((value) => value.slug === slug);
       if (!item) throw new NativeLibraryError("not-found", "The requested GM sound is not in the pinned catalog");
-      return this.getPreset(item.id);
+      try {
+        const preset = family === "drums" ? await presets.getDrums(item as typeof presets.gmDrums[number]) : await presets.getInstrument(item as typeof presets.gmInstruments[number]);
+        return { metadata: normalizePreset(preset), preset };
+      } catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "GM sound lookup failed"); }
     }
   };
 }

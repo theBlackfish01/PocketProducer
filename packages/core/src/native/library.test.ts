@@ -67,4 +67,25 @@ describe("Audiotool resource boundary", () => {
     const historical = applyNativeOperations(seedNativeDocument("Historical sound"), [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: {}, preset: { name, displayName: meta.displayName, ownerName: meta.ownerName } } }]);
     await expect(resolveNativePresets(historical, library(original))).rejects.toThrow(/Historical preset/);
   });
+  it("includes a Gakki soundfont pointer in the accepted preset fingerprint", async () => {
+    const soundfontPreset = async (soundfontId: string): Promise<NativePreset> => {
+      const source = await createOfflineDocument({ validated: true });
+      let data: unknown;
+      await source.modify((t) => { data = t.createPresetFor(t.create("gakki", { soundfontId, gain: 0.6 })); });
+      return { entityType: "gakki", _presetName: "presets/gakki-pointer", data, meta: { name: "presets/gakki-pointer", displayName: "Gakki", ownerName: "users/fixture", tags: [] } } as unknown as NativePreset;
+    };
+    expect(nativePresetFingerprint(await soundfontPreset("11111111-1111-4111-8111-111111111111"))).not.toBe(nativePresetFingerprint(await soundfontPreset("22222222-2222-4222-8222-222222222222")));
+  });
+  it("uses the SDK's named GM helper instead of assuming a catalog ID is a preset fetch URL", async () => {
+    const sound = { id: "catalog-identifier", slug: "glass-keys", displayName: "Glass keys", category: "Keys", program: 11, tags: ["bright"] };
+    const returned = { entityType: "gakki", _presetName: "presets/resolved-gm", meta: { name: "presets/resolved-gm", displayName: "Glass keys", ownerName: "users/audiotool", tags: [] }, data: {} } as unknown as NativePreset;
+    let selectedSlug = "";
+    const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [], nextPageToken: "" }), get: () => Promise.resolve(new Error("missing")) }, presets: {
+      gmInstruments: [sound], gmDrums: [], getInstrument: (item: { slug: string }) => { selectedSlug = item.slug; return Promise.resolve(returned); },
+      get: () => Promise.reject(new Error("Generic preset lookup must not be used")), search: () => Promise.resolve([])
+    } } as unknown as NativeLibraryClient);
+    expect((await library.searchGmSounds("glass", "instrument")).sounds[0]?.slug).toBe("glass-keys");
+    expect((await library.getGmSound("glass-keys", "instrument")).metadata).toMatchObject({ name: "presets/resolved-gm", deviceType: "gakki", contentHash: nativePresetFingerprint(returned) });
+    expect(selectedSlug).toBe("glass-keys");
+  });
 });
