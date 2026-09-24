@@ -1,5 +1,11 @@
 # Verification record
 
+## Guided Listening Room redesign (2026-09-24)
+
+`pnpm check` passed: lint, strict typecheck, 12 unit files / 47 tests, and production build (only the existing large lazy SDK chunk warning). `pnpm test:integration` passed: 2 files / 32 tests. Final `pnpm test:e2e` passed: 5 Chromium journeys in 1.3 min after the copy/touch-target polish. All ordinary tests remain isolated fixture mode with zero provider access. The copy tests verify human progress/recovery labels and fact-derived arrangement summaries rather than exposing SDK prose.
+
+The browser journey now uploads and auditions a real owned WAV in Arrange, confirms the source seek control, switches to empty Playable audio without carrying source playback, protects a part, opens/closes its details with focus return, targets a different part and section, revises, compares/restores and reloads. The playable-audio journey still uploads, plays, seeks, revises, A/B compares, restores and exercises durable receipt and needs-attention recovery. Desktop and 390 px mobile captures under `.local/evidence/` were inspected after the hero-overlap correction. Both phone journeys assert no horizontal document overflow; the direction field, compare-dialog focus return, navigation sheet and reduced-motion emulation are checked. This does not establish physical keyboard/microphone behavior or Firefox/WebKit compatibility. Native arrangement playback/share and live Audiotool synchronization are not claimed by these screenshots or tests.
+
 ## Creative construction follow-up (2026-09-24)
 
 Final run: `pnpm check` passed (11 unit files / 44 tests, lint, strict types, build), `pnpm test:integration` passed (2 files / 32 tests) and `pnpm test:e2e` passed (5 Chromium journeys, 56.0 s). Ordinary tests have zero provider access. The contract double drives the real worker orchestration and validated offline Nexus document, not live Audiotool. Native desktop and 390 px screenshots under `.local/evidence/native-*.png` were inspected after the composer/palette/title changes. A native browser assertion was updated from the old protection string to the new pairwise comparison and then all five journeys passed. Physical-phone/non-Chromium verification remains open.
