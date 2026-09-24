@@ -12,6 +12,7 @@ export * from "./native/adapter.js";
 export * from "./native/model.js";
 export * from "./native/form.js";
 export * from "./native/resources.js";
+export * from "./native/library.js";
 export * from "./native/producer.js";
 export * from "./native/repository.js";
 export * from "./nexus/adapter.js";

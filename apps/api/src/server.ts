@@ -5,8 +5,8 @@ import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
 import {
-  audiotoolSessionStatus, cancelJob, createJob, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  createNativeJob, discoverNativeCapabilities, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeSnapshot, providerAvailability, requireProject, requiresUnresolvedSourceMapping, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio
+  audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createJob, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
+  createNativeJob, discoverNativeCapabilities, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeSnapshot, providerAvailability, requireProject, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
 } from "@pocket/core";
 
 const config = getConfig();
@@ -92,6 +92,24 @@ app.get("/api/v1/native/capability", async (request) => {
   return inspectNativeCapability(path);
 });
 
+app.get("/api/v1/native/library/samples", async (request) => {
+  const { query, pageToken } = z.object({ query: z.string().trim().min(1).max(80), pageToken: z.string().max(500).optional() }).parse(request.query);
+  if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
+  const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
+  if (!connection) throw Object.assign(new Error("Connect Audiotool before searching its sound library"), { statusCode: 409 });
+  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).searchSamples(query, pageToken); }
+  finally { await connection.awaitTokenPersistence(); }
+});
+
+app.get("/api/v1/native/library/presets", async (request) => {
+  const { deviceType, query } = z.object({ deviceType: z.enum(["heisenberg", "pulverisateur", "gakki", "beatbox8"]), query: z.string().max(80).default("") }).parse(request.query);
+  if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
+  const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
+  if (!connection) throw Object.assign(new Error("Connect Audiotool before searching its sound library"), { statusCode: 409 });
+  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).searchPresets(deviceType, query); }
+  finally { await connection.awaitTokenPersistence(); }
+});
+
 app.get("/api/v1/projects/:projectId/native", async (request) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   return nativeSnapshot(ownerId, projectId);
@@ -115,6 +133,12 @@ app.post("/api/v1/projects/:projectId/native/revisions", async (request, reply) 
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
 });
 
+app.post("/api/v1/projects/:projectId/native/requests/:jobId/continue", async (request, reply) => {
+  const { projectId, jobId } = z.object({ projectId: idSchema, jobId: idSchema }).parse(request.params);
+  await resumeNativePartialJob(ownerId, projectId, jobId);
+  return reply.status(202).send({ jobId });
+});
+
 app.post("/api/v1/projects/:projectId/native/select-version", async (request) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   const body = z.object({ revisionId: idSchema, expectedNativeHeadId: idSchema }).parse(request.body);
@@ -127,8 +151,7 @@ app.post("/api/v1/projects/:projectId/native/synchronizations", async (request, 
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   const body = z.object({ baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema }).parse(request.body);
   if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("Synchronize the selected native version"), { statusCode: 409 });
-  const revision = await getNativeRevision(ownerId, projectId, body.baseNativeRevisionId);
-  if (requiresUnresolvedSourceMapping(revision.document)) throw Object.assign(new Error("Native source sample mapping is not yet supported; this version remains a local validated draft"), { statusCode: 422 });
+  await getNativeRevision(ownerId, projectId, body.baseNativeRevisionId);
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId, projectId, kind: "native-sync", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });

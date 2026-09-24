@@ -2,9 +2,10 @@ import { createOfflineDocument } from "@audiotool/nexus/node";
 import { Ticks } from "@audiotool/nexus/utils";
 import type { SyncedDocument } from "@audiotool/nexus";
 import type { NexusEntity } from "@audiotool/nexus/document";
+import type { LibrarySample, NativePreset } from "./library.js";
 import { assertNativeDeviceMapping, materializedNotes, nativeDocumentSchema, type NativeDocument, type NativePart } from "./model.js";
 
-export const NATIVE_MAPPING_VERSION = "nexus-native-v2";
+export const NATIVE_MAPPING_VERSION = "nexus-native-v4";
 export const NEXUS_TICKS_PER_CANONICAL_TICK = Ticks.Beat / 960;
 export function toNexusTicks(canonicalTicks: number): number {
   const value = canonicalTicks * NEXUS_TICKS_PER_CANONICAL_TICK;
@@ -21,8 +22,25 @@ export interface NativeRemoteClient {
 }
 export type NativeSampleResources = Record<string, { sampleName: string; durationSeconds: number }>;
 const drumField = (pitch: number) => pitch === 36 ? "bassdrumIsActive" : pitch === 38 ? "snaredrumIsActive" : pitch === 42 ? "closedHihatIsActive" : pitch === 46 ? "openHihatIsActive" : null;
+function nestedDeviceParameters(type: NativePart["device"]["type"], values: Record<string, number>): Record<string, unknown> {
+  // The canonical schema is the write allow-list; this function only nests its
+  // validated dotted paths into the SDK constructor, never accepts raw SDK JSON.
+  const result: Record<string, unknown> = type === "heisenberg" ? { playModeIndex: 4, operatorA: { gain: 0.5 } } : {};
+  for (const [path, value] of Object.entries(values)) {
+    const segments = path.split(".");
+    let owner = result;
+    for (const segment of segments.slice(0, -1)) owner = (owner[segment] ??= {}) as Record<string, unknown>;
+    owner[segments.at(-1)!] = value;
+  }
+  return result;
+}
+function nativeField(root: unknown, path: string): { location: { entityId: string; entityType: string | undefined; fieldIndex: number[] } } | null {
+  let value = root;
+  for (const segment of path.split(".")) value = ((value as { fields?: Record<string, unknown> }).fields ?? value as Record<string, unknown>)[segment];
+  return value && typeof value === "object" && "location" in value ? value as ReturnType<typeof nativeField> : null;
+}
 
-export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocument, sourceSamples: NativeSampleResources = {}): Promise<{ mappedParts: number; noteEntities: number; patternRegions: number; automationEvents: number; unresolvedSources: string[] }> {
+export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocument, sourceSamples: NativeSampleResources = {}, presets: Record<string, NativePreset> = {}, librarySamples: Record<string, LibrarySample> = {}): Promise<{ mappedParts: number; noteEntities: number; patternRegions: number; automationEvents: number; unresolvedSources: string[] }> {
   const document = nativeDocumentSchema.parse(raw);
   assertNativeDeviceMapping(document);
   const unresolvedSources: string[] = [];
@@ -31,7 +49,7 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
   let automationEvents = 0;
   // This v1 adapter owns only documents it creates. It never deletes or rewrites
   // unknown entities in an existing Studio document.
-  if (doc.queryEntities.ofTypes("note", "beatbox8", "heisenberg", "pulverisateur", "gakki", "audioRegion", "audioDevice").get().length) throw new Error("Native target is not empty; inspect/reconcile external edits before applying a snapshot");
+  if (doc.queryEntities.ofTypes("note", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "beatbox8", "heisenberg", "pulverisateur", "gakki", "audioRegion", "audioTrack", "audioDevice", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerAuxRoute", "desktopAudioCable", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack").get().length) throw new Error("Native target is not empty; inspect/reconcile external edits before applying a snapshot");
   await doc.modify((t) => {
     const groove = t.create("groove", { functionIndex: 1, durationTicks: Ticks.Beat * 2, impact: 0, displayName: "Straight" });
     const config = t.entities.ofTypes("config").getOne() ?? t.create("config", { defaultGroove: groove.location });
@@ -41,8 +59,55 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
     const duration = toNexusTicks(document.bars * document.meter.numerator * 960 * 4 / document.meter.denominator);
     t.update(config.fields.durationTicks, duration);
     if (!t.entities.ofTypes("mixerMaster").getOne()) t.create("mixerMaster", {});
+    const groups = new Map((document.groups ?? []).map((group) => [group.id, t.create("mixerGroup", { displayParameters: { displayName: group.name }, faderParameters: { postGain: group.gain, panning: group.pan } })]));
+    for (const group of document.groups ?? []) if (group.parentId) t.create("mixerStripGrouping", { childStrip: groups.get(group.id)!.location, groupStrip: groups.get(group.parentId)!.location });
+    const reverbBus = document.reverbBus && t.create("mixerReverbAux", { displayParameters: { displayName: document.reverbBus.name }, roomSizeFactor: document.reverbBus.roomSize, preDelayTimeMs: document.reverbBus.preDelayMs, dampFactor: document.reverbBus.damp });
     for (const [index, part] of document.parts.entries()) {
+      const channel = t.create("mixerChannel", { preGain: part.gain, faderParameters: { panning: part.pan } });
+      if (part.groupId) t.create("mixerStripGrouping", { childStrip: channel.location, groupStrip: groups.get(part.groupId)!.location });
+      const sendTargets = new Map<string, unknown>();
+      for (const send of part.sends ?? []) {
+        if (!reverbBus || send.busId !== document.reverbBus?.id) throw new Error(`Unresolved return ${send.busId}`);
+        const route = t.create("mixerAuxRoute", { auxSend: channel.fields.auxSend.location, auxReceive: reverbBus.location, gain: send.gain });
+        sendTargets.set(send.busId, route.fields.gain);
+      }
+      const position = { displayName: part.name, positionX: 100 + (index % 4) * 240, positionY: 100 + Math.floor(index / 4) * 220 };
+      const parameters = part.device.parameters;
+      const deviceFields = nestedDeviceParameters(part.device.type, parameters);
+      const instrument = part.device.type === "audio" ? t.create("audioDevice", { ...position, gain: 1, panning: 0 })
+        : part.device.type === "heisenberg" ? t.create("heisenberg", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields })
+        : part.device.type === "pulverisateur" ? t.create("pulverisateur", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields })
+        : part.device.type === "gakki" ? t.create("gakki", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields })
+        : t.create("beatbox8", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields });
+      if (part.device.preset) {
+        const preset = presets[part.device.preset.name];
+        if (!preset || preset.entityType !== part.device.type || preset.meta.name !== part.device.preset.name || preset.meta.ownerName !== part.device.preset.ownerName) throw new Error(`Preset ${part.device.preset.name} is unresolved or no longer matches this instrument`);
+        t.applyPresetTo(instrument as never, preset);
+        for (const [path, value] of Object.entries(parameters)) {
+          let field: unknown = instrument.fields;
+          for (const segment of path.split(".")) field = ((field as { fields?: Record<string, unknown> }).fields ?? field as Record<string, unknown>)[segment];
+          if (!field || typeof field !== "object" || !("location" in field)) throw new Error(`Preset override ${path} does not resolve to a native field`);
+          t.update(field as never, value);
+        }
+      }
+      let output = instrument.fields.audioOutput.location;
+      let filterTarget: { location: typeof output } | null = null;
+      const effectTargets = new Map<string, unknown>();
+      for (const [effectIndex, effect] of part.effects.entries()) {
+        const fxPosition = { displayName: `${part.name} ${effect.type}`, positionX: position.positionX + 120 + effectIndex * 100, positionY: position.positionY + 80 };
+        const fx = effect.type === "stompboxDelay" ? t.create("stompboxDelay", { ...fxPosition, ...effect.parameters })
+          : effect.type === "stompboxReverb" ? t.create("stompboxReverb", { ...fxPosition, ...effect.parameters })
+          : effect.type === "stompboxCompressor" ? t.create("stompboxCompressor", { ...fxPosition, ...effect.parameters })
+          : effect.type === "stompboxParametricEqualizer" ? t.create("stompboxParametricEqualizer", { ...fxPosition, ...effect.parameters })
+          : t.create("autoFilter", { ...fxPosition, ...effect.parameters });
+        t.create("desktopAudioCable", { fromSocket: output, toSocket: fx.fields.audioInput.location });
+        output = fx.fields.audioOutput.location;
+        effectTargets.set(effect.id, fx.fields);
+        if (effect.type === "autoFilter") filterTarget = (fx as NexusEntity<"autoFilter">).fields.cutoffFrequencyHz;
+      }
+      t.create("desktopAudioCable", { fromSocket: output, toSocket: channel.fields.audioInput.location });
       if (part.device.type === "audio") {
+        const device = instrument as NexusEntity<"audioDevice">;
         for (const region of part.sourceRegions) {
           const resource = sourceSamples[region.assetId];
           if (!resource) { unresolvedSources.push(region.id); continue; }
@@ -53,41 +118,30 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
           if (region.sourceStartSeconds + region.sourceDurationSeconds > resource.durationSeconds + 0.001) throw new Error(`Selected interval exceeds ready sample ${region.assetId}`);
           if ((region.playbackMode ?? "once") === "once" && timelineTicks > selectedTicks) throw new Error(`One-shot ${region.id} exceeds its selected source interval`);
           const inserted = t.insertSample({ name: resource.sampleName, durationSeconds: resource.durationSeconds }, {
+            attachTo: device,
             sample: { bpm: document.tempoBpm, offsetTicks },
             region: { positionTicks: toNexusTicks(region.startTick), durationTicks: timelineTicks },
-            loop: { startTicks: offsetTicks, durationTicks: selectedTicks },
+            loop: (region.playbackMode ?? "once") === "loop" ? { startTicks: offsetTicks, durationTicks: selectedTicks } : false,
             displayName: `${part.name} · ${region.id}`
           });
           t.update(inserted.fields.gain, region.gain);
         }
-        continue;
-      }
-      const channel = t.create("mixerChannel", { preGain: part.gain, faderParameters: { panning: part.pan } });
-      const position = { displayName: part.name, positionX: 100 + (index % 4) * 240, positionY: 100 + Math.floor(index / 4) * 220 };
-      const parameters = part.device.parameters;
-      const instrument = part.device.type === "heisenberg" ? t.create("heisenberg", { ...position, gain: parameters.gain ?? part.gain, operatorA: { gain: parameters["operatorA.gain"] ?? 0.5 }, playModeIndex: 4,
-        ...(parameters.unisonoCount !== undefined ? { unisonoCount: parameters.unisonoCount } : {}),
-        ...(parameters["filter.cutoffFrequencyHz"] !== undefined ? { filter: { cutoffFrequencyHz: parameters["filter.cutoffFrequencyHz"] } } : {}),
-        ...(parameters["envelopeMain.attackTimeNormalized"] !== undefined ? { envelopeMain: { attackTimeNormalized: parameters["envelopeMain.attackTimeNormalized"] } } : {}) })
-        : part.device.type === "pulverisateur" ? t.create("pulverisateur", { ...position, gain: parameters.gain ?? part.gain,
-          ...(parameters["filter.cutoffFrequencyHz"] !== undefined || parameters["filter.resonance"] !== undefined ? { filter: { ...(parameters["filter.cutoffFrequencyHz"] !== undefined ? { cutoffFrequencyHz: parameters["filter.cutoffFrequencyHz"] } : {}), ...(parameters["filter.resonance"] !== undefined ? { resonance: parameters["filter.resonance"] } : {}) } } : {}) })
-        : part.device.type === "gakki" ? t.create("gakki", { ...position, gain: parameters.gain ?? part.gain })
-        : t.create("beatbox8", { ...position, gain: parameters.gain ?? part.gain });
-      let output = instrument.fields.audioOutput.location;
-      let filterTarget: { location: typeof output } | null = null;
-      for (const [effectIndex, effect] of part.effects.entries()) {
-        const fxPosition = { displayName: `${part.name} ${effect.type}`, positionX: position.positionX + 120 + effectIndex * 100, positionY: position.positionY + 80 };
-        const fx = effect.type === "stompboxDelay" ? t.create("stompboxDelay", { ...fxPosition, ...effect.parameters })
-          : effect.type === "stompboxReverb" ? t.create("stompboxReverb", { ...fxPosition, ...effect.parameters })
-          : effect.type === "stompboxCompressor" ? t.create("stompboxCompressor", { ...fxPosition, ...effect.parameters })
-          : effect.type === "stompboxParametricEqualizer" ? t.create("stompboxParametricEqualizer", { ...fxPosition, ...effect.parameters })
-          : t.create("autoFilter", { ...fxPosition, ...effect.parameters });
-        t.create("desktopAudioCable", { fromSocket: output, toSocket: fx.fields.audioInput.location });
-        output = fx.fields.audioOutput.location;
-        if (effect.type === "autoFilter") filterTarget = (fx as NexusEntity<"autoFilter">).fields.cutoffFrequencyHz;
-      }
-      t.create("desktopAudioCable", { fromSocket: output, toSocket: channel.fields.audioInput.location });
-      if (part.device.type === "beatbox8") {
+        for (const region of part.libraryRegions ?? []) {
+          const resource = librarySamples[region.sampleName];
+          if (!resource || resource.ownerName !== region.ownerName || Math.abs(resource.durationSeconds - region.durationSeconds) > 0.001) throw new Error(`Library sample ${region.sampleName} is unresolved or changed`);
+          const offsetTicks = Math.round(region.sourceStartSeconds * document.tempoBpm / 60 * Ticks.Beat);
+          const selectedTicks = Math.round(region.sourceDurationSeconds * document.tempoBpm / 60 * Ticks.Beat);
+          const timelineTicks = toNexusTicks(region.durationTicks);
+          if (region.playbackMode === "once" && timelineTicks > selectedTicks) throw new Error(`One-shot library region ${region.id} exceeds its selected interval`);
+          const inserted = t.insertSample({ name: resource.name, durationSeconds: resource.durationSeconds, ...(resource.bpm > 0 ? { bpm: resource.bpm } : {}) }, {
+            attachTo: device, sample: { bpm: document.tempoBpm, offsetTicks },
+            region: { positionTicks: toNexusTicks(region.startTick), durationTicks: timelineTicks },
+            loop: region.playbackMode === "loop" ? { startTicks: offsetTicks, durationTicks: selectedTicks } : false,
+            displayName: `${part.name} · ${region.displayName}`
+          });
+          t.update(inserted.fields.gain, region.gain);
+        }
+      } else if (part.device.type === "beatbox8") {
         const machine = instrument as NexusEntity<"beatbox8">;
         const phrases = document.motifs.filter((value) => value.partId === part.id);
         if (phrases.length > 5) throw new Error(`Beatbox8 part ${part.id} exceeds five native pattern slots`);
@@ -131,12 +185,17 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
         }
       }
       for (const curve of part.automation) {
-        const target = curve.target === "gain" ? channel.fields.preGain : curve.target === "pan" ? channel.fields.faderParameters.fields.panning : filterTarget;
-        if (!target) throw new Error(`Filter automation on ${part.id} requires an autoFilter effect`);
-        const automationTrack = t.create("automationTrack", { automatedParameter: target.location, orderAmongTracks: document.parts.length + automationEvents });
+        const effectMatch = /^effect\.([a-z][a-z0-9-]{0,63})\.([A-Za-z][A-Za-z0-9]*)$/.exec(curve.target);
+        const sendMatch = /^send\.([a-z][a-z0-9-]{0,63})\.gain$/.exec(curve.target);
+        const target = curve.target === "gain" ? channel.fields.preGain : curve.target === "pan" ? channel.fields.faderParameters.fields.panning : curve.target === "filter" ? filterTarget
+          : curve.target.startsWith("device.") ? nativeField(instrument.fields, curve.target.slice(7))
+          : effectMatch ? nativeField(effectTargets.get(effectMatch[1]!), effectMatch[2]!)
+          : sendMatch ? sendTargets.get(sendMatch[1]!) : null;
+        if (!target || typeof target !== "object" || !("location" in target)) throw new Error(`Automation ${curve.id} has no resolved native parameter target`);
+        const automationTrack = t.create("automationTrack", { automatedParameter: target.location as typeof channel.fields.preGain.location, orderAmongTracks: document.parts.length + automationEvents });
         const collection = t.create("automationCollection", {});
         t.create("automationRegion", { track: automationTrack.location, collection: collection.location, region: { displayName: `${part.name} ${curve.target}`, positionTicks: 0, durationTicks: duration, loopDurationTicks: duration } });
-        for (const point of curve.points) { t.create("automationEvent", { collection: collection.location, positionTicks: toNexusTicks(point.tick), value: point.value }); automationEvents += 1; }
+        for (const point of curve.points) { t.create("automationEvent", { collection: collection.location, positionTicks: toNexusTicks(point.tick), value: point.value, interpolation: point.interpolation === "step" || !point.interpolation ? 1 : 2, slope: point.interpolation === "sloped" ? point.slope ?? 0 : 0 }); automationEvents += 1; }
       }
     }
   });
@@ -144,9 +203,9 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
   return { mappedParts, noteEntities, patternRegions, automationEvents, unresolvedSources };
 }
 
-export async function validateNativeOffline(document: NativeDocument, sourceSamples: NativeSampleResources = {}) {
+export async function validateNativeOffline(document: NativeDocument, sourceSamples: NativeSampleResources = {}, presets: Record<string, NativePreset> = {}, librarySamples: Record<string, LibrarySample> = {}) {
   const offline = await createOfflineDocument({ validated: true });
-  const mapped = await applyNativeSnapshot(offline, document, sourceSamples);
+  const mapped = await applyNativeSnapshot(offline, document, sourceSamples, presets, librarySamples);
   return {
     mappingVersion: NATIVE_MAPPING_VERSION, nexusTicksPerBeat: Ticks.Beat,
     ...mapped,
@@ -171,7 +230,7 @@ export function nativeStructuralReadback(doc: Pick<SyncedDocument, "queryEntitie
   // Map every supported entity to a stable, type-local ordinal before reading
   // pointers. Keep actual socket field indexes: they distinguish routing ends
   // and automation targets. UI positions, labels and colors are not music.
-  const semanticTypes = ["config", "groove", "mixerMaster", "mixerChannel", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "audioDevice", "audioTrack", "audioRegion", "sample"] as const;
+  const semanticTypes = ["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerAuxRoute", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "audioDevice", "audioTrack", "audioRegion", "sample"] as const;
   const entities = doc.queryEntities.ofTypes(...semanticTypes).get();
   const ordinals = new Map<string, string>();
   const counts = new Map<string, number>();
@@ -208,6 +267,9 @@ export function nativeStructuralReadback(doc: Pick<SyncedDocument, "queryEntitie
       beatbox8: doc.queryEntities.ofTypes("beatbox8").get().length
     },
     channels: doc.queryEntities.ofTypes("mixerChannel").get().length,
+    groups: doc.queryEntities.ofTypes("mixerGroup").get().length,
+    groupLinks: doc.queryEntities.ofTypes("mixerStripGrouping").get().length,
+    sends: doc.queryEntities.ofTypes("mixerAuxRoute").get().length,
     cables: doc.queryEntities.ofTypes("desktopAudioCable").get().length,
     effects: doc.queryEntities.ofTypes("stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter").get().length,
     noteRegions: doc.queryEntities.ofTypes("noteRegion").get().length,

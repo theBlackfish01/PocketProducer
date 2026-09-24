@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { AIMessage, createOfflineDocument, fakeModel } from "@pocket/core/test-support";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { advanceNativeSync, applyNativeOperations, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createProject, dispatchOutbox, encodeWav, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, nativeSnapshot, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, requeueJob, reserveProviderEffect, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type JobRecord } from "@pocket/core";
+import { advanceNativeSync, applyNativeOperations, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type JobRecord, type NativeLibraryClient } from "@pocket/core";
 import { nativeSynchronization, processJob } from "@pocket/worker";
 
 const subject = `native-test-${randomUUID()}`;
@@ -71,6 +71,8 @@ describe("audio-independent native job lifecycle", () => {
       const result = await produceNative({ session, direction, mode: "generation", sources: [], scriptedModel: model });
       expect(result.provider).toBe("scripted-deep-agent");
       expect(model.callCount).toBe(3);
+      expect(JSON.stringify(model.calls[1]!.messages)).toContain("documentHash");
+      expect(JSON.stringify(model.calls[2]!.messages)).toContain("lead-call");
       expect(session.document.bars).toBe(12);
       expect(session.document.parts.map((part) => part.id)).toEqual(["lead"]);
       expect(session.document.parts[0]!.effects[0]!.parameters.feedbackFactor).toBe(0.24);
@@ -80,6 +82,51 @@ describe("audio-independent native job lifecycle", () => {
       expect(snapshot.current?.document.title).toBe("Chamber pulse");
       expect(snapshot.current?.document.meter.numerator).toBe(3);
       expect(snapshot.current?.producer.provider).toBe("scripted-deep-agent");
+    } finally { clearInterval(timer); }
+  }, 90_000);
+
+  it("keeps resource-search evidence in the next model input after a mutation", async () => {
+    const scratchId = (await createProject(ownerId, "Native context evidence")).id;
+    extraProjects.push(scratchId);
+    const direction = "A four-bar glass phrase";
+    const request = { direction, sourceAssetIds: [], expectedNativeHeadId: null };
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "search-after-compose", request, expectedHeadId: null });
+    const job = await claim(accepted.id, "native-context-worker");
+    const session = new NativeToolSession(job, seedNativeDocument(direction));
+    const form = { title: "Glass phrase", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "phrase", name: "Phrase", bars: 4 }], parts: [{ id: "glass", name: "Glass", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 2, pitch: 67, velocity: 0.6 }] }] };
+    const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respondWithTools([{ name: "search_native_resources", args: { query: "glass" } }]).respond(new AIMessage("The glass recipe was found after construction; no audio was heard."));
+    const timer = setInterval(() => { void heartbeat(job); }, 750);
+    try {
+      await produceNative({ session, direction, mode: "generation", sources: [], scriptedModel: model });
+      const afterMutation = JSON.stringify(model.calls[1]!.messages);
+      const afterSearch = JSON.stringify(model.calls[2]!.messages);
+      expect(afterSearch).toContain("soft-glass");
+      expect(afterSearch).toContain("Pocket Producer local parameter recipe");
+      expect(afterSearch).not.toBe(afterMutation);
+    } finally { clearInterval(timer); }
+  }, 90_000);
+
+  it("uses a searched Audiotool sample through production tools and trusted metadata resolution", async () => {
+    const scratchId = (await createProject(ownerId, "Native library source flow")).id;
+    extraProjects.push(scratchId);
+    const direction = "A four-bar melody with a later texture sample";
+    const request = { direction, sourceAssetIds: [], expectedNativeHeadId: null };
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "scripted-library-source", request, expectedHeadId: null });
+    const job = await claim(accepted.id, "library-source-worker");
+    const sample = { name: "samples/texture-001", displayName: "Long texture", ownerName: "users/fixture", durationSeconds: 14, bpm: 0, kind: "one-shot", visibility: "public", tags: ["texture"] };
+    const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [sample], nextPageToken: "" }), get: () => Promise.resolve(sample) }, presets: { search: () => Promise.resolve([]), get: () => Promise.resolve(new Error("missing")) } } as unknown as NativeLibraryClient);
+    const session = new NativeToolSession(job, seedNativeDocument(direction), true, library);
+    const form = { title: "Texture study", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
+    const region = { id: "texture-later", sampleName: sample.name, displayName: sample.displayName, ownerName: sample.ownerName, durationSeconds: sample.durationSeconds, bpm: 0, startTick: 3840, durationTicks: 1920, sourceStartSeconds: 5, sourceDurationSeconds: 3, playbackMode: "once", gain: 0.4, provenance: "audiotool-library" };
+    const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respondWithTools([{ name: "search_audiotool_samples", args: { query: "texture" } }]).respondWithTools([{ name: "apply_native_batch", args: { stepKey: "place-found-texture", operations: [{ kind: "addPart", part: { id: "source", name: "Texture source", role: "source", device: { type: "audio", parameters: {} }, gain: 0.5, pan: 0.2, notes: [], placements: [], sourceRegions: [], libraryRegions: [region], effects: [], automation: [] } }] } }]).respond(new AIMessage("Placed the returned later sample interval; audio remains unverified."));
+    const timer = setInterval(() => { void heartbeat(job); }, 750);
+    try {
+      const produced = await produceNative({ session, direction, mode: "generation", sources: [], scriptedModel: model });
+      expect(produced.provider).toBe("scripted-deep-agent");
+      expect(JSON.stringify(model.calls[2]!.messages)).toContain(sample.name);
+      expect(session.document.parts.find((part) => part.id === "source")?.libraryRegions?.[0]?.sourceStartSeconds).toBe(5);
+      const resource = await library.getSample(sample.name);
+      expect((await validateNativeOffline(session.document, {}, {}, { [sample.name]: resource })).readback.noteEntities).toBe(1);
     } finally { clearInterval(timer); }
   }, 90_000);
 
@@ -98,17 +145,89 @@ describe("audio-independent native job lifecycle", () => {
     const modelEffect = await reserveProviderEffect({ job: first, provider: "openai", step: "producer-model-call", idempotencyKey: "confirmed-call-before-crash", inputHash: "confirmed-call", model: getConfig().OPENAI_MODEL, promptVersion: "test", reservationMicrousd: 0 });
     await markEffectDispatched(modelEffect.id, first);
     expect(await completeProviderEffect({ effectId: modelEffect.id, job: first, output: { usage: { inputTokens: 0, outputTokens: 0 } }, actualCostMicrousd: 0 })).toBe("succeeded");
+    const completedResult = { summary: "A complete rhythmic study", provider: "scripted-deep-agent", model: "scripted", costUsd: 0, usage: { inputTokens: 0, outputTokens: 0 }, steps: beforeCrash.applied };
+    await recordNativeProducerCompletion(first, beforeCrash.document, beforeCrash.applied.length, completedResult);
     expect(await requeueJob(first, "PROCESS_EXIT", "Worker stopped after a confirmed batch")).toBe(true);
     const restarted = await claim(accepted.id, "native-after-crash");
     const resumed = new NativeToolSession(restarted, seedNativeDocument(direction));
     const model = fakeModel();
     const result = await produceNative({ session: resumed, direction, mode: "generation", sources: [], scriptedModel: model });
-    expect(result.provider).toBe("openai-deep-agent-recovered");
+    expect(result.provider).toBe("scripted-deep-agent");
     expect(model.callCount).toBe(0);
     expect(resumed.applied).toHaveLength(1);
     await commitNativeRevision(restarted, resumed.document, result.summary, result);
     expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts.length).toBeGreaterThan(1);
   }, 60_000);
+
+  it("continues a confirmed but unfinished ensemble instead of selecting its one-note sketch", async () => {
+    const scratchId = (await createProject(ownerId, "Unfinished native ensemble")).id;
+    extraProjects.push(scratchId);
+    const direction = "A 48-bar ensemble with drums, bass, harmony, lead and transitions";
+    const request = { direction, sourceAssetIds: [], expectedNativeHeadId: null };
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "unfinished-ensemble", request, expectedHeadId: null });
+    const first = await claim(accepted.id, "unfinished-before-crash");
+    const sketch = new NativeToolSession(first, seedNativeDocument(direction));
+    await sketch.apply("first-note", [{ kind: "addNotes", partId: "starting-voice", notes: [{ id: "first", startTick: 0, durationTicks: 960, pitch: 60, velocity: 0.7 }] }]);
+    const operationHash = canonicalHash({ version: "native-producer-v2", jobId: first.id, request: first.request, model: getConfig().OPENAI_MODEL });
+    const aggregate = await reserveProviderEffect({ job: first, provider: "openai", step: "native-producer-result", idempotencyKey: `native-producer:${operationHash}`, inputHash: operationHash, model: getConfig().OPENAI_MODEL, promptVersion: "native-producer-v2", reservationMicrousd: 0 });
+    await markEffectDispatched(aggregate.id, first);
+    const modelEffect = await reserveProviderEffect({ job: first, provider: "openai", step: "producer-model-call", idempotencyKey: "confirmed-incomplete-call", inputHash: "confirmed-incomplete", model: getConfig().OPENAI_MODEL, promptVersion: "test", reservationMicrousd: 0 });
+    await markEffectDispatched(modelEffect.id, first);
+    expect(await completeProviderEffect({ effectId: modelEffect.id, job: first, output: { usage: { inputTokens: 0, outputTokens: 0 } }, actualCostMicrousd: 0 })).toBe("succeeded");
+    expect((await nativeSnapshot(ownerId, scratchId)).current).toBeNull();
+    expect(await requeueJob(first, "PROCESS_EXIT", "Worker stopped before completing the ensemble")).toBe(true);
+    const resumedJob = await claim(accepted.id, "unfinished-after-crash");
+    const resumed = new NativeToolSession(resumedJob, seedNativeDocument(direction));
+    const roles = ["percussion", "bass", "harmony", "melody", "fx"] as const;
+    const operations = [
+      { kind: "setStructure", bars: 48, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 16, intent: "Establish" }, { id: "development", name: "Development", startBar: 16, endBar: 32, intent: "Contrast" }, { id: "release", name: "Release", startBar: 32, endBar: 48, intent: "Return" }] },
+      { kind: "removePart", partId: "starting-voice" },
+      ...roles.map((role, index) => ({ kind: "addPart", part: { id: `role-${role}`, name: role, role, device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, notes: [{ id: `note-${role}`, startTick: index * 960, durationTicks: 960, pitch: 48 + index * 5, velocity: 0.6 }], placements: [], sourceRegions: [], effects: [], automation: [] } }))
+    ];
+    const model = fakeModel().respondWithTools([{ name: "apply_native_batch", args: { stepKey: "finish-ensemble", operations } }]).respond(new AIMessage("The requested roles and length are now present structurally."));
+    const timer = setInterval(() => { void heartbeat(resumedJob); }, 750);
+    try {
+      const result = await produceNative({ session: resumed, direction, mode: "generation", sources: [], scriptedModel: model });
+      expect(model.callCount).toBe(2);
+      expect(result.provider).toBe("scripted-deep-agent");
+      expect(resumed.document.bars).toBe(48);
+      expect(resumed.document.parts).toHaveLength(5);
+      await commitNativeRevision(resumedJob, resumed.document, result.summary, result);
+      expect((await nativeSnapshot(ownerId, scratchId)).current?.document.bars).toBe(48);
+    } finally { clearInterval(timer); }
+  }, 90_000);
+
+  it("resumes a saved partial request under the same job ID without selecting the sketch", async () => {
+    const scratchId = (await createProject(ownerId, "Resumable native draft")).id;
+    extraProjects.push(scratchId);
+    const direction = "A 12-bar melody";
+    const request = { direction, sourceAssetIds: [], expectedNativeHeadId: null };
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "partial-resume-original-key", request, expectedHeadId: null });
+    const first = await claim(accepted.id, "partial-first-worker");
+    const sketch = new NativeToolSession(first, seedNativeDocument(direction));
+    await sketch.apply("first-note", [{ kind: "addNotes", partId: "starting-voice", notes: [{ id: "single", startTick: 0, durationTicks: 960, pitch: 60, velocity: 0.6 }] }]);
+    const aggregate = await reserveProviderEffect({ job: first, provider: "openai", step: "native-producer-result", idempotencyKey: `native-producer:${canonicalHash({ version: "native-producer-v2", jobId: first.id, request, model: getConfig().OPENAI_MODEL })}`, inputHash: canonicalHash({ version: "native-producer-v2", jobId: first.id, request, model: getConfig().OPENAI_MODEL }), model: getConfig().OPENAI_MODEL, promptVersion: "native-producer-v2", reservationMicrousd: 0 });
+    await markEffectDispatched(aggregate.id, first);
+    await needsAttentionJob(first, "NATIVE_PARTIAL", "Saved partial sketch; not selected");
+    expect((await nativeSnapshot(ownerId, scratchId)).current).toBeNull();
+    await resumeNativePartialJob(ownerId, scratchId, accepted.id);
+    const second = await claim(accepted.id, "partial-second-worker");
+    expect(second.id).toBe(first.id);
+    const resumed = new NativeToolSession(second, seedNativeDocument(direction));
+    const operations = [
+      { kind: "setStructure", bars: 12, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 12, intent: "Develop" }] },
+      { kind: "removePart", partId: "starting-voice" },
+      { kind: "addPart", part: { id: "melody", name: "Melody", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, notes: [{ id: "one", startTick: 0, durationTicks: 960, pitch: 64, velocity: 0.65 }], placements: [], sourceRegions: [], effects: [], automation: [] } }
+    ];
+    const model = fakeModel().respondWithTools([{ name: "apply_native_batch", args: { stepKey: "complete-original-request", operations } }]).respond(new AIMessage("The complete twelve-bar structure is ready; no audio was heard."));
+    const timer = setInterval(() => { void heartbeat(second); }, 750);
+    try {
+      const produced = await produceNative({ session: resumed, direction, mode: "generation", sources: [], scriptedModel: model });
+      expect(resumed.applied).toHaveLength(2);
+      await commitNativeRevision(second, resumed.document, produced.summary, produced);
+      expect((await nativeSnapshot(ownerId, scratchId)).current?.document.bars).toBe(12);
+    } finally { clearInterval(timer); }
+  }, 90_000);
 
   it("reconciles a duplicate receipt but permits a fresh key only after a definite failed command", async () => {
     const scratchId = (await createProject(ownerId, "Native retry contract")).id;
@@ -179,7 +298,7 @@ describe("audio-independent native job lifecycle", () => {
       const synchronized = await nativeSnapshot(ownerId, scratchId);
       expect(uploads).toBe(2);
       expect(opens).toBe(2);
-      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v2", revisionId: nativeRevisionId });
+      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v4", revisionId: nativeRevisionId });
       expect(synchronized.synchronization.verifiedAt).toBeTruthy();
       expect((await readyOwnedSampleResources(ownerId, scratchId, [firstId, secondId]))[firstId]?.sampleName).toBe("samples/offline-source-1");
       expect((await jobSnapshot(ownerId, syncJob.id)).state).toBe("succeeded");

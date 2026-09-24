@@ -6,7 +6,7 @@ import {
   analyzePreview, appendAttemptEvent, attemptBoundedDrumRepair, canonicalHash, claimNextJob, closePool, commitCancelled, commitExportPreparation, commitRevision, compileArrangement, completeProviderEffect, compositionSourceLineage, createAudiotoolServerClient, decodeWav, dispatchOutbox, expireJob, exportManifestToAudiotool, exportResumeState, failJob, failProviderEffect,
   getConfig, getRevision, heartbeat, isCancelled, markEffectDispatched, needsAttentionJob, produceArrangement, protectedTrackHash, providerAvailability, recordExportProgress, requeueJob, reserveProviderEffect,
   measureDecodedWav, profileOwnedSourceWav, renderAssets, renderComposition, safeStoragePath, simplifyDrums, validateComposition, writeNexusManifest,
-  JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeStructuralReadback, produceNative, readyOwnedSampleResources, seedNativeDocument, setNativeProtections, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeRemoteClient, type NativeSource, type SourceDescriptor
+  JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeLibraryClient, type NativeRemoteClient, type NativeSource, type SourceDescriptor
 } from "@pocket/core";
 
 const config = getConfig();
@@ -250,7 +250,9 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<
   const protectedBase = protectionChange && Array.isArray(protectionChange.expectedPartIds) && Array.isArray(protectionChange.desiredPartIds)
     ? setNativeProtections(base, protectionChange.expectedPartIds as string[], protectionChange.desiredPartIds as string[])
     : protectedPartIds.length ? applyNativeOperations(base, [{ kind: "protect", partIds: protectedPartIds, motifIds: [] }]) : base;
-  const session = new NativeToolSession(job, protectedBase);
+  const libraryConnection = !config.FIXTURE_MODE && config.AUDIOTOOL_CLIENT_ID ? await createAudiotoolServerClient(job.ownerId, config.AUDIOTOOL_CLIENT_ID) : null;
+  const library = libraryConnection ? createNativeLibrary(libraryConnection.client as unknown as NativeLibraryClient) : null;
+  const session = new NativeToolSession(job, protectedBase, true, library);
   const selected = Array.isArray(job.request.sourceAssetIds) ? job.request.sourceAssetIds.filter((value): value is string => typeof value === "string") : [];
   const assets = selected.length ? await getPool().query<{ id: string; name: string; content_hash: string; duration_seconds: number }>("SELECT id,name,content_hash,duration_seconds FROM asset WHERE owner_id=$1 AND project_id=$2 AND kind='source' AND readiness='ready' AND id=ANY($3::uuid[])", [job.ownerId, job.projectId, selected]) : { rows: [] };
   if (assets.rows.length !== selected.length) throw new Error("A selected source is no longer available");
@@ -262,26 +264,34 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<
   await stage(job, "discovering", "Checking native devices, protected material and current project context");
   throwIfAborted(signal, "Native construction interrupted");
   await stage(job, "constructing", "Building sections, instrument parts, motifs and automation");
-  const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), signal });
-  await checkpoint(job);
-  const document = nativeDocumentSchema.parse(session.document);
-  if (job.kind === "native-generation" && document.parts.every((part) => !part.notes.length && !part.placements.length && !part.sourceRegions.length)) throw new Error("Native producer returned no musical material");
-  await stage(job, "validating", "Validating native notes, pattern regions, routing and automation in the pinned SDK");
-  const offline = await validateNativeOffline(document);
-  await checkpoint(job);
-  await commitNativeRevision(job, document, produced.summary, { ...produced, offlineValidation: offline, audioState: "deferred" });
+  try {
+    const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), signal });
+    await checkpoint(job);
+    const document = nativeDocumentSchema.parse(session.document);
+    if (job.kind === "native-generation" && document.parts.every((part) => !part.notes.length && !part.placements.length && !part.sourceRegions.length)) throw new Error("Native producer returned no musical material");
+    await stage(job, "validating", "Validating native notes, pattern regions, routing and automation in the pinned SDK");
+    const presets = await resolveNativePresets(document, library);
+    const librarySamples = await resolveNativeSamples(document, library);
+    const offline = await validateNativeOffline(document, {}, presets, librarySamples);
+    await checkpoint(job);
+    await commitNativeRevision(job, document, produced.summary, { ...produced, offlineValidation: offline, audioState: "deferred" });
+  } finally { await libraryConnection?.awaitTokenPersistence(); }
 }
 
 export async function nativeSynchronization(job: JobRecord, signal: AbortSignal, offlineConnection?: { client: NativeRemoteClient; awaitTokenPersistence(): Promise<void> }): Promise<void> {
   const revisionId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : "";
   const revision = await getNativeRevision(job.ownerId, job.projectId, revisionId);
   if (!offlineConnection && (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID)) throw new Error("Native synchronization is unavailable in fixture mode or without Audiotool configuration");
-  await stage(job, "validating", "Checking the selected native structure and owned sources offline");
-  await validateNativeOffline(revision.document);
-  await checkpoint(job);
   const connection = offlineConnection ?? await createAudiotoolServerClient(job.ownerId, config.AUDIOTOOL_CLIENT_ID!);
   if (!connection) throw new Error("Connect Audiotool before requesting native synchronization");
+  try {
   const client = connection.client as unknown as NativeRemoteClient;
+  const library = createNativeLibrary(connection.client as unknown as NativeLibraryClient);
+  await stage(job, "validating", "Checking the selected native structure and owned sources offline");
+  const presets = await resolveNativePresets(revision.document, library);
+  const librarySamples = await resolveNativeSamples(revision.document, library);
+  await validateNativeOffline(revision.document, {}, presets, librarySamples);
+  await checkpoint(job);
   const saved = await beginNativeSync(job, revision.documentHash);
   let checkpointState = saved.state;
   if (saved.state === "create_in_flight" && !saved.createdNow) {
@@ -344,7 +354,7 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
   }
   const sourceSamples = await readyOwnedSampleResources(job.ownerId, job.projectId, sourceIds);
   if (Object.keys(sourceSamples).length !== sourceIds.length) throw new Error("Not all selected owned sources have a ready Audiotool sample identity");
-  const local = await validateNativeOffline(revision.document, sourceSamples);
+  const local = await validateNativeOffline(revision.document, sourceSamples, presets, librarySamples);
   if (local.unresolvedSources.length) throw new Error("Native source mapping remained incomplete after ready uploads");
   const expectedHash = canonicalHash(local.structuralReadback);
   if (saved.state === "verified") {
@@ -380,13 +390,13 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
     }
     if (saved.state === "created" || saved.createdNow) {
       const initial = nativeStructuralReadback(remote);
-      if (initial.semanticEntities.some((entity) => ["heisenberg", "pulverisateur", "gakki", "beatbox8", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "audioDevice", "audioTrack", "audioRegion", "sample", "automationTrack", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter"].includes(entity.type ?? ""))) {
+       if (initial.semanticEntities.some((entity) => ["heisenberg", "pulverisateur", "gakki", "beatbox8", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "audioDevice", "audioTrack", "audioRegion", "sample", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerAuxRoute", "desktopAudioCable", "automationTrack", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter"].includes(entity.type ?? ""))) {
         await advanceNativeSync(job, "created", "conflict", { remoteUrl, observedHash: canonicalHash(initial), errorMessage: "The target project is not empty." });
         await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "The isolated target project was not empty; no remote overwrite was attempted.");
         return;
       }
       await advanceNativeSync(job, "created", "apply_in_flight", { remoteUrl });
-      try { await applyNativeSnapshot(remote, revision.document, sourceSamples); }
+      try { await applyNativeSnapshot(remote, revision.document, sourceSamples, presets, librarySamples); }
       catch {
         await advanceNativeSync(job, "apply_in_flight", "uncertain", { remoteUrl, errorMessage: "Native document mutation may have committed; inspect before retrying." });
         await needsAttentionJob(job, "NATIVE_APPLY_OUTCOME_UNKNOWN", "Native document mutation may have committed; automatic retry is fenced.");
@@ -407,6 +417,7 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
   }
   await checkpoint(job);
   await finishNativeSync(job, remoteName, remoteUrl, observedHash, "apply_in_flight");
+  } finally { await connection.awaitTokenPersistence(); }
 }
 
 async function exportRevision(job: JobRecord, signal: AbortSignal): Promise<void> {
@@ -509,6 +520,9 @@ export async function processJob(job: JobRecord): Promise<void> {
     if (error instanceof JobControlError && error.code === "CANCELLED") await commitCancelled(job);
     else if (error instanceof JobControlError && (error.code === "LEASE_LOST" || error.code === "MONITOR_UNAVAILABLE")) return;
     else if (error instanceof JobControlError && error.code === "DEADLINE_EXCEEDED") await expireJob(job);
+    else if ((job.kind === "native-generation" || job.kind === "native-revision") && error instanceof Error && /^(NATIVE_INCOMPLETE|MODEL_CALL_LIMIT_EXCEEDED)/.test(error.message)) {
+      await needsAttentionJob(job, "NATIVE_PARTIAL", `The editable draft is unfinished and was not selected. Confirmed work is saved under this request. ${error.message}`);
+    }
     else if (error instanceof Error && /outcome is not safely replayable|previous (?:native )?producer dispatch|NATIVE_STEP_REPLAY_CONFLICT|EFFECT_(?:DISPATCHED|UNCERTAIN)/i.test(error.message)) {
       await needsAttentionJob(job, "PROVIDER_OUTCOME_UNCERTAIN", error.message);
     } else if (job.attempts < 2 && error instanceof Error && /timeout|rate|ECONN|network|socket/i.test(error.message)) {

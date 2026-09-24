@@ -73,6 +73,32 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
   finally { client.release(); }
 }
 
+export async function resumeNativePartialJob(ownerId: string, projectId: string, jobId: string): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const project = await client.query("SELECT 1 FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [projectId, ownerId]);
+    if (!project.rowCount) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
+    const result = await client.query<{ kind: string; state: string; error_code: string | null; request: Record<string, unknown> }>("SELECT kind,state,error_code,request FROM job WHERE id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [jobId, ownerId, projectId]);
+    const job = result.rows[0];
+    if (!job) throw Object.assign(new Error("Request not found"), { statusCode: 404 });
+    if (!["native-generation", "native-revision"].includes(job.kind) || job.state !== "needs_attention" || job.error_code !== "NATIVE_PARTIAL") throw Object.assign(new Error("Only an unfinished native draft can continue"), { statusCode: 409 });
+    const expectedHead = typeof job.request.expectedNativeHeadId === "string" ? job.request.expectedNativeHeadId : null;
+    if (await head(client, ownerId, projectId, true) !== expectedHead) throw Object.assign(new Error("The selected version changed; this saved draft cannot continue against a different head"), { statusCode: 409 });
+    const effects = await client.query<{ step: string; state: string; cost_status: string }>("SELECT step,state,cost_status FROM effect WHERE job_id=$1 FOR UPDATE", [jobId]);
+    if (effects.rows.some((effect) => effect.step === "producer-model-call" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A model outcome still needs reconciliation"), { statusCode: 409 });
+    const callCount = effects.rows.filter((effect) => effect.step === "producer-model-call").length;
+    if (callCount >= getConfig().MAX_MODEL_CALLS_PER_JOB) throw Object.assign(new Error("The request has reached its configured model-call limit; continuation needs an explicitly approved limit change"), { statusCode: 409 });
+    const unfinished = effects.rows.some((effect) => effect.step === "native-producer-result" && effect.state === "dispatched");
+    if (!unfinished) throw Object.assign(new Error("No safely resumable producer effect remains"), { statusCode: 409 });
+    await client.query("UPDATE job SET state='queued',stage=NULL,error_code=NULL,error_message=NULL,deadline_at=now()+make_interval(secs=>$2),updated_at=now() WHERE id=$1", [jobId, getConfig().MAX_JOB_SECONDS]);
+    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'continued',$2 FROM job WHERE id=$1", [jobId, { message: "Continuing confirmed native work under the original request and budget" }]);
+    await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
 function rowRevision(row: Record<string, unknown>): NativeRevisionRecord {
   return {
     id: String(row.id), parentRevisionId: typeof row.parent_revision_id === "string" ? row.parent_revision_id : null,
@@ -125,6 +151,49 @@ export async function loadConfirmedNativeModelCalls(jobId: string): Promise<Arra
   });
 }
 
+export async function nativeModelEffectsSafeToContinue(jobId: string): Promise<boolean> {
+  const result = await getPool().query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [jobId]);
+  return result.rows.every((row) => row.state === "succeeded" && row.cost_status === "observed");
+}
+
+export async function loadNativeProducerCompletion(jobId: string, documentHash: string, stepCount: number): Promise<unknown> {
+  const result = await getPool().query<{ result: unknown }>("SELECT result FROM native_producer_completion WHERE job_id=$1 AND document_hash=$2 AND step_count=$3", [jobId, documentHash, stepCount]);
+  return result.rows[0]?.result ?? null;
+}
+
+export async function recordNativeProducerCompletion(job: JobRecord, document: NativeDocument, stepCount: number, result: unknown): Promise<void> {
+  if (stepCount < 1) throw new Error("A producer cannot complete without a confirmed musical step");
+  const documentHash = canonicalHash(document);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertSyncLease(client, job);
+    const saved = await client.query<{ document_hash: string; step_count: number; result: unknown }>(
+      "SELECT document_hash,step_count,result FROM native_producer_completion WHERE job_id=$1 FOR UPDATE", [job.id]
+    );
+    if (saved.rows[0]) {
+      if (saved.rows[0].document_hash !== documentHash || saved.rows[0].step_count !== stepCount || canonicalHash(saved.rows[0].result) !== canonicalHash(result)) throw new Error("NATIVE_COMPLETION_CONFLICT");
+    } else await client.query("INSERT INTO native_producer_completion(job_id,document_hash,step_count,result) VALUES($1,$2,$3,$4)", [job.id, documentHash, stepCount, JSON.stringify(result)]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
+export async function adoptUnfinishedNativeProducerEffect(job: JobRecord, effectId: string): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertSyncLease(client, job);
+    const effect = await client.query<{ state: string; step: string; reservation_microusd: string }>("SELECT state,step,reservation_microusd::text FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE", [effectId, job.id]);
+    if (effect.rows[0]?.state !== "dispatched" || effect.rows[0].step !== "native-producer-result" || Number(effect.rows[0].reservation_microusd) !== 0) throw new Error("Native aggregate effect cannot be adopted");
+    const calls = await client.query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' FOR UPDATE", [job.id]);
+    if (calls.rows.some((row) => row.state !== "succeeded" || row.cost_status !== "observed")) throw new Error("Unknown native model outcome prevents continuation");
+    await client.query("UPDATE effect SET attempt_id=$3,lease_generation=$4,updated_at=now() WHERE id=$1 AND job_id=$2", [effectId, job.id, job.attemptId, job.leaseGeneration]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
 export async function recoverConfirmedNativeProducerResult(job: JobRecord, effectId: string, output: unknown): Promise<void> {
   const client = await getPool().connect();
   try {
@@ -132,6 +201,8 @@ export async function recoverConfirmedNativeProducerResult(job: JobRecord, effec
     await assertSyncLease(client, job);
     const effect = await client.query<{ state: string; step: string; reservation_microusd: string }>("SELECT state,step,reservation_microusd::text FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE", [effectId, job.id]);
     if (effect.rows[0]?.state !== "dispatched" || effect.rows[0].step !== "native-producer-result" || Number(effect.rows[0].reservation_microusd) !== 0) throw new Error("Native aggregate effect is not recoverable");
+    const completed = await client.query<{ document_hash: string; step_count: number; result: unknown }>("SELECT document_hash,step_count,result FROM native_producer_completion WHERE job_id=$1 FOR UPDATE", [job.id]);
+    if (!completed.rows[0] || canonicalHash(completed.rows[0].result) !== canonicalHash((output as { result?: unknown })?.result)) throw new Error("Native creative turn has no matching durable completion evidence");
     const calls = await client.query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' FOR UPDATE", [job.id]);
     if (!calls.rows.length || calls.rows.some((row) => row.state !== "succeeded" || row.cost_status !== "observed")) throw new Error("A native model call outcome is not confirmed; explicit reconciliation is required");
     await client.query("UPDATE effect SET state='succeeded',output=$3,cost_status='observed',actual_cost_microusd=0,cost_usd=0,attempt_id=$4,lease_generation=$5,completed_at=now(),updated_at=now() WHERE id=$1 AND job_id=$2", [effectId, job.id, output, job.attemptId, job.leaseGeneration]);

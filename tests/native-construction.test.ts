@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { applyNativeOperations, canonicalHash, discoverNativeCapabilities, fixtureConstruct, fixtureRevise, inspectNativeCapability, materializedNotes, nativeDiff, nativeMusicHash, NativeToolSession, pinnedContext, protectedPartHash, seedNativeDocument, toNexusTicks, validateNativeOffline, type JobRecord } from "@pocket/core";
+import { analyzeNativeSection, applyNativeOperations, canonicalHash, discoverNativeCapabilities, fixtureConstruct, fixtureRevise, inspectNativeCapability, materializedNotes, nativeDiff, nativeMusicHash, NativeToolSession, pinnedContext, protectedPartHash, seedNativeDocument, toNexusTicks, validateNativeOffline, type JobRecord } from "@pocket/core";
 
 function session(direction: string) { return new NativeToolSession({} as JobRecord, seedNativeDocument(direction), false); }
 
 describe("native construction contracts", () => {
+  it("reports sounding notes crossing a section boundary separately from new onsets", () => {
+    const base = seedNativeDocument("A held transition over the boundary");
+    const document = applyNativeOperations(base, [
+      { kind: "setStructure", bars: 8, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "Hold" }, { id: "arrival", name: "Arrival", startBar: 4, endBar: 8, intent: "Enter" }] },
+      { kind: "addNotes", partId: "starting-voice", notes: [{ id: "held", startTick: 14400, durationTicks: 3840, pitch: 67, velocity: 0.72 }] }
+    ]);
+    const arrival = analyzeNativeSection(document, "arrival", "starting-voice").parts[0]!;
+    expect(arrival.soundingNotes).toBe(1);
+    expect(arrival.newOnsets).toBe(0);
+    expect(arrival.noteRange).toEqual([67, 67]);
+    expect(arrival.notePreview).toHaveLength(1);
+  });
   it("keeps generated editorial titles on a word boundary", () => {
     const title = seedNativeDocument("Build an evolving 64-bar ambient journey with a slow lead and spacious transitions into a final release").title;
     expect(title.length).toBeLessThanOrEqual(42);

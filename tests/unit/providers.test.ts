@@ -177,7 +177,7 @@ describe("optional provider boundaries", () => {
       open: () => Promise.reject(new Error("must not open"))
     };
     const projectResume: Partial<AudiotoolExportCheckpoint> = { remoteProjectId: "projects/known", project: { state: "succeeded", remoteId: "projects/known" }, uploadedSamples: {}, uploads: {}, arrangement: { state: "never_dispatched" } };
-    await expect(exportManifestToAudiotool({ client: lostReady, manifest, title: "Lost ready", timeoutMs: 1_000, resume: projectResume, checkpoint: (value) => { readinessCheckpoint = structuredClone(value); return Promise.resolve(); } })).rejects.toMatchObject({ kind: "uncertain", step: "upload:drums:ready" });
+    await expect(exportManifestToAudiotool({ client: lostReady, manifest, title: "Lost ready", timeoutMs: 5_000, resume: projectResume, checkpoint: (value) => { readinessCheckpoint = structuredClone(value); return Promise.resolve(); } })).rejects.toMatchObject({ kind: "uncertain", step: "upload:drums:ready" });
     expect(readinessCheckpoint?.uploads.drums?.state).toBe("uncertain");
     if (!readinessCheckpoint) throw new Error("Expected a durable readiness checkpoint");
     await expect(exportManifestToAudiotool({ client: lostReady, manifest, title: "Lost ready replay", resume: readinessCheckpoint })).rejects.toMatchObject({ kind: "uncertain" });
