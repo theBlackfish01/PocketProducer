@@ -5,8 +5,8 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   analyzePreview, appendAttemptEvent, attemptBoundedDrumRepair, canonicalHash, claimNextJob, closePool, commitCancelled, commitExportPreparation, commitRevision, compileArrangement, completeProviderEffect, compositionSourceLineage, createAudiotoolServerClient, decodeWav, dispatchOutbox, expireJob, exportManifestToAudiotool, exportResumeState, failJob, failProviderEffect,
   getConfig, getRevision, heartbeat, isCancelled, markEffectDispatched, needsAttentionJob, produceArrangement, protectedTrackHash, providerAvailability, recordExportProgress, requeueJob, reserveProviderEffect,
-  measureDecodedWav, renderAssets, renderComposition, safeStoragePath, simplifyDrums, validateComposition, writeNexusManifest,
-  JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, commitNativeRevision, finishNativeSync, getNativeRevision, getPool, nativeDocumentSchema, nativeStructuralReadback, produceNative, requiresUnresolvedSourceMapping, seedNativeDocument, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeRemoteClient, type NativeSource, type SourceDescriptor
+  measureDecodedWav, profileOwnedSourceWav, renderAssets, renderComposition, safeStoragePath, simplifyDrums, validateComposition, writeNexusManifest,
+  JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeStructuralReadback, produceNative, readyOwnedSampleResources, seedNativeDocument, setNativeProtections, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeRemoteClient, type NativeSource, type SourceDescriptor
 } from "@pocket/core";
 
 const config = getConfig();
@@ -72,6 +72,21 @@ function throwIfAborted(signal: AbortSignal, fallback: string): void {
   if (!signal.aborted) return;
   if (signal.reason instanceof JobControlError) throw signal.reason;
   throw new JobControlError("CANCELLED", fallback);
+}
+
+async function boundedNativeWait<T>(run: () => Promise<T>, job: JobRecord, signal: AbortSignal, step: string): Promise<T> {
+  throwIfAborted(signal, `${step} interrupted`);
+  const remaining = new Date(job.deadlineAt).getTime() - Date.now();
+  if (remaining <= 0) throw new JobControlError("DEADLINE_EXCEEDED", `${step} exceeded the job deadline`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const limit = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${step} timed out after dispatch; outcome requires reconciliation`)), Math.min(remaining, 60_000));
+    onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new JobControlError("CANCELLED", `${step} interrupted`));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try { return await Promise.race([run(), limit]); }
+  finally { if (timer) clearTimeout(timer); if (onAbort) signal.removeEventListener("abort", onAbort); }
 }
 
 async function generation(job: JobRecord, signal: AbortSignal): Promise<void> {
@@ -146,7 +161,12 @@ async function generation(job: JobRecord, signal: AbortSignal): Promise<void> {
   const finalPreviewBytes = await readFile(render.previewPath);
   const finalPreviewHash = createHash("sha256").update(finalPreviewBytes).digest("hex");
   const sourceLineage = compositionSourceLineage(composition);
-  const sourceWasAudible = Boolean(sourceAssetId && sourceLineage.referencedSourceAssetIds.includes(sourceAssetId) && (sourceAnalysis?.measured.nonSilentRatio ?? 0) >= 0.01);
+  // The legacy renderer uses the beginning of each source file for every event.
+  // Whole-file source analysis can be non-silent while that actual excerpt is
+  // silent, so inspect the rendered source-only texture stem instead.
+  const textureStem = render.stems.texture;
+  const sourceStemSignal = textureStem ? measureDecodedWav(decodeWav(await readFile(textureStem))).nonSilentRatio : 0;
+  const sourceWasAudible = Boolean(sourceAssetId && sourceLineage.referencedSourceAssetIds.includes(sourceAssetId) && sourceStemSignal >= 0.001);
   await commitRevision(job, {
     composition, previewPath: render.previewPath, stems: render.stems, waveformPeaks: render.waveformPeaks, durationSeconds: render.durationSeconds,
     previewHash: finalPreviewHash, peak: render.peak, rms: render.rms, nonSilentRatio: render.nonSilentRatio, title: producer.plan.title,
@@ -225,46 +245,45 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<
   const direction = typeof job.request.direction === "string" ? job.request.direction : "Construct an editable piece";
   const baseId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : null;
   const base = baseId ? (await getNativeRevision(job.ownerId, job.projectId, baseId)).document : seedNativeDocument(direction);
+  const protectionChange = job.request.protectionChange && typeof job.request.protectionChange === "object" ? job.request.protectionChange as { expectedPartIds?: unknown; desiredPartIds?: unknown } : null;
   const protectedPartIds = Array.isArray(job.request.protectedPartIds) ? job.request.protectedPartIds.filter((value): value is string => typeof value === "string") : [];
-  const protectedBase = protectedPartIds.length ? applyNativeOperations(base, [{ kind: "protect", partIds: protectedPartIds, motifIds: [] }]) : base;
+  const protectedBase = protectionChange && Array.isArray(protectionChange.expectedPartIds) && Array.isArray(protectionChange.desiredPartIds)
+    ? setNativeProtections(base, protectionChange.expectedPartIds as string[], protectionChange.desiredPartIds as string[])
+    : protectedPartIds.length ? applyNativeOperations(base, [{ kind: "protect", partIds: protectedPartIds, motifIds: [] }]) : base;
   const session = new NativeToolSession(job, protectedBase);
   const selected = Array.isArray(job.request.sourceAssetIds) ? job.request.sourceAssetIds.filter((value): value is string => typeof value === "string") : [];
-  const assets = selected.length ? await getPool().query<{ id: string; content_hash: string; duration_seconds: number }>("SELECT id,content_hash,duration_seconds FROM asset WHERE owner_id=$1 AND project_id=$2 AND kind='source' AND readiness='ready' AND id=ANY($3::uuid[])", [job.ownerId, job.projectId, selected]) : { rows: [] };
+  const assets = selected.length ? await getPool().query<{ id: string; name: string; content_hash: string; duration_seconds: number }>("SELECT id,name,content_hash,duration_seconds FROM asset WHERE owner_id=$1 AND project_id=$2 AND kind='source' AND readiness='ready' AND id=ANY($3::uuid[])", [job.ownerId, job.projectId, selected]) : { rows: [] };
   if (assets.rows.length !== selected.length) throw new Error("A selected source is no longer available");
-  const sources: NativeSource[] = assets.rows.map((row) => ({ assetId: row.id, assetHash: row.content_hash, durationSeconds: Number(row.duration_seconds), rights: "User-uploaded source; license not independently verified" }));
+  const sources: NativeSource[] = await Promise.all(assets.rows.map(async (row) => {
+    const bytes = await readFile(safeStoragePath(job.ownerId, job.projectId, "sources", `${row.content_hash}.wav`));
+    if (createHash("sha256").update(bytes).digest("hex") !== row.content_hash) throw new Error("Selected owned source bytes no longer match their accepted hash");
+    return { assetId: row.id, name: row.name, assetHash: row.content_hash, durationSeconds: Number(row.duration_seconds), rights: "User-uploaded source; license not independently verified", profile: profileOwnedSourceWav(bytes) };
+  }));
   await stage(job, "discovering", "Checking native devices, protected material and current project context");
   throwIfAborted(signal, "Native construction interrupted");
   await stage(job, "constructing", "Building sections, instrument parts, motifs and automation");
   const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), signal });
   await checkpoint(job);
   const document = nativeDocumentSchema.parse(session.document);
-  if (job.kind === "native-generation" && (document.parts.length < 6 || document.bars < 24)) throw new Error("Native producer did not construct the minimum useful multi-part arrangement");
+  if (job.kind === "native-generation" && document.parts.every((part) => !part.notes.length && !part.placements.length && !part.sourceRegions.length)) throw new Error("Native producer returned no musical material");
   await stage(job, "validating", "Validating native notes, pattern regions, routing and automation in the pinned SDK");
   const offline = await validateNativeOffline(document);
   await checkpoint(job);
   await commitNativeRevision(job, document, produced.summary, { ...produced, offlineValidation: offline, audioState: "deferred" });
 }
 
-async function nativeSynchronization(job: JobRecord, signal: AbortSignal): Promise<void> {
+export async function nativeSynchronization(job: JobRecord, signal: AbortSignal, offlineConnection?: { client: NativeRemoteClient; awaitTokenPersistence(): Promise<void> }): Promise<void> {
   const revisionId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : "";
   const revision = await getNativeRevision(job.ownerId, job.projectId, revisionId);
-  if (requiresUnresolvedSourceMapping(revision.document)) throw new Error("Native source intervals have no supported sample mapping yet; local structure remains intact");
-  if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw new Error("Native synchronization is unavailable in fixture mode or without Audiotool configuration");
-  await stage(job, "validating", "Checking the selected native structure offline");
-  const local = await validateNativeOffline(revision.document);
-  const expectedHash = canonicalHash(local.structuralReadback);
+  if (!offlineConnection && (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID)) throw new Error("Native synchronization is unavailable in fixture mode or without Audiotool configuration");
+  await stage(job, "validating", "Checking the selected native structure and owned sources offline");
+  await validateNativeOffline(revision.document);
   await checkpoint(job);
-  const connection = await createAudiotoolServerClient(job.ownerId, config.AUDIOTOOL_CLIENT_ID);
+  const connection = offlineConnection ?? await createAudiotoolServerClient(job.ownerId, config.AUDIOTOOL_CLIENT_ID!);
   if (!connection) throw new Error("Connect Audiotool before requesting native synchronization");
   const client = connection.client as unknown as NativeRemoteClient;
   const saved = await beginNativeSync(job, revision.documentHash);
-  if (saved.state === "verified") {
-    if (saved.observedHash !== expectedHash) throw new Error("Stored native readback hash differs from this mapping version");
-    if (!saved.remoteProjectName || !saved.remoteUrl) throw new Error("Verified native checkpoint lacks remote identity");
-    // Finalize a duplicated command without issuing a second remote mutation.
-    await finishNativeSync(job, saved.remoteProjectName, saved.remoteUrl, expectedHash, "verified");
-    return;
-  }
+  let checkpointState = saved.state;
   if (saved.state === "create_in_flight" && !saved.createdNow) {
     await advanceNativeSync(job, "create_in_flight", "uncertain", { errorMessage: "A prior Audiotool project-create call may have succeeded; its identity needs reconciliation." });
     await needsAttentionJob(job, "NATIVE_CREATE_OUTCOME_UNKNOWN", "A prior Audiotool project-create call may have succeeded; reconcile its identity before retrying.");
@@ -279,10 +298,11 @@ async function nativeSynchronization(job: JobRecord, signal: AbortSignal): Promi
     await stage(job, "synchronizing", "Creating an isolated native Audiotool project");
     throwIfAborted(signal, "Native synchronization interrupted");
     try {
-      const created = await client.projects.createProject({ project: { displayName: `Pocket Producer · ${revision.document.title.slice(0, 72)} · v${revision.ordinal}` } });
+      const created = await boundedNativeWait(() => client.projects.createProject({ project: { displayName: `Pocket Producer · ${revision.document.title.slice(0, 72)} · v${revision.ordinal}` } }), job, signal, "native project create");
       if (created instanceof Error || !created.project?.name) throw new Error("Audiotool project creation did not return a durable identity");
       remoteName = created.project.name;
       await advanceNativeSync(job, "create_in_flight", "created", { remoteProjectName: created.project.name });
+      checkpointState = "created";
     } catch {
       await advanceNativeSync(job, "create_in_flight", "uncertain", { errorMessage: "Remote project creation may have succeeded; automatic retry is fenced." });
       await needsAttentionJob(job, "NATIVE_CREATE_OUTCOME_UNKNOWN", "Remote project creation may have succeeded; automatic retry is fenced.");
@@ -290,6 +310,59 @@ async function nativeSynchronization(job: JobRecord, signal: AbortSignal): Promi
     }
   }
   if (!remoteName) throw new Error("Native synchronization checkpoint has no remote project identity");
+  const sourceIds = revision.document.sourceAssetIds;
+  for (const assetId of sourceIds) {
+    const asset = await getPool().query<{ content_hash: string; duration_seconds: number; name: string }>("SELECT content_hash,duration_seconds,name FROM asset WHERE id=$1 AND owner_id=$2 AND project_id=$3 AND kind='source' AND readiness='ready'", [assetId, job.ownerId, job.projectId]);
+    if (!asset.rows[0]) throw new Error(`Owned source ${assetId} is no longer ready`);
+    const row = asset.rows[0];
+    const upload = await beginOwnedSampleUpload(job, assetId, row.content_hash);
+    if (upload.state === "ready") continue;
+    if (!upload.createdNow) {
+      await advanceNativeSync(job, checkpointState, "uncertain", { errorMessage: `Upload for source ${assetId} has no confirmed ready outcome; no retry was attempted.` });
+      await needsAttentionJob(job, "NATIVE_SAMPLE_OUTCOME_UNKNOWN", `Upload for source ${assetId} requires reconciliation before synchronization.`);
+      return;
+    }
+    await stage(job, "synchronizing", `Uploading owned source ${assetId.slice(0, 8)} with durable identity`);
+    try {
+      throwIfAborted(signal, "Native sample upload interrupted");
+      const bytes = await readFile(safeStoragePath(job.ownerId, job.projectId, "sources", `${row.content_hash}.wav`));
+      if (createHash("sha256").update(bytes).digest("hex") !== row.content_hash) throw new Error("Owned source bytes no longer match the accepted hash");
+      const result = await boundedNativeWait(() => client.samples.upload({ file: Uint8Array.from(bytes).buffer, displayName: `Pocket Producer · ${row.name.slice(0, 72)}`, bpm: revision.document.tempoBpm, kind: "loop", visibility: "unlisted", tags: ["pocket-producer", "owned-source", revision.id] }, signal), job, signal, "native sample upload acceptance");
+      if (result instanceof Error) throw result;
+      const uploaded = await boundedNativeWait(() => result.uploaded, job, signal, "native sample bytes");
+      if (uploaded instanceof Error) throw uploaded;
+      const ready = await boundedNativeWait(() => result.ready, job, signal, "native sample readiness");
+      if (ready instanceof Error) throw ready;
+      await finishOwnedSampleUpload(job, assetId, ready.name, Number(ready.durationSeconds ?? row.duration_seconds));
+      await checkpoint(job);
+    } catch (error) {
+      await markOwnedSampleUncertain(job, assetId, error instanceof Error ? error.message : "Unknown upload outcome");
+      await advanceNativeSync(job, checkpointState, "uncertain", { errorMessage: `Owned source ${assetId} upload outcome is uncertain; automatic retry is fenced.` });
+      await needsAttentionJob(job, "NATIVE_SAMPLE_OUTCOME_UNKNOWN", `Owned source ${assetId} upload outcome is uncertain; automatic retry is fenced.`);
+      return;
+    }
+  }
+  const sourceSamples = await readyOwnedSampleResources(job.ownerId, job.projectId, sourceIds);
+  if (Object.keys(sourceSamples).length !== sourceIds.length) throw new Error("Not all selected owned sources have a ready Audiotool sample identity");
+  const local = await validateNativeOffline(revision.document, sourceSamples);
+  if (local.unresolvedSources.length) throw new Error("Native source mapping remained incomplete after ready uploads");
+  const expectedHash = canonicalHash(local.structuralReadback);
+  if (saved.state === "verified") {
+    if (!saved.remoteProjectName || !saved.remoteUrl) throw new Error("Verified native checkpoint lacks remote identity");
+    const fresh = await client.open(saved.remoteProjectName);
+    await fresh.start();
+    let observed: string;
+    let url: string;
+    try { observed = canonicalHash(nativeStructuralReadback(fresh)); url = fresh.dawUrl; }
+    finally { await fresh.stop(); await connection.awaitTokenPersistence(); }
+    if (observed !== expectedHash) {
+      await advanceNativeSync(job, "verified", "conflict", { remoteUrl: url, observedHash: observed, errorMessage: "Fresh Studio readback differs from the saved native version; no overwrite was attempted." });
+      await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "Fresh Studio readback differs from the saved native version; no overwrite was attempted.");
+      return;
+    }
+    await finishNativeSync(job, saved.remoteProjectName, url, observed, "verified");
+    return;
+  }
   await stage(job, "synchronizing", "Writing notes, patterns, effects and routing to the isolated project");
   const remote = await client.open(remoteName);
   await remote.start();
@@ -307,13 +380,13 @@ async function nativeSynchronization(job: JobRecord, signal: AbortSignal): Promi
     }
     if (saved.state === "created" || saved.createdNow) {
       const initial = nativeStructuralReadback(remote);
-      if (initial.instruments.heisenberg + initial.instruments.pulverisateur + initial.instruments.gakki + initial.instruments.beatbox8 + initial.notes.length + initial.patterns.length > 0) {
+      if (initial.semanticEntities.some((entity) => ["heisenberg", "pulverisateur", "gakki", "beatbox8", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "audioDevice", "audioTrack", "audioRegion", "sample", "automationTrack", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter"].includes(entity.type ?? ""))) {
         await advanceNativeSync(job, "created", "conflict", { remoteUrl, observedHash: canonicalHash(initial), errorMessage: "The target project is not empty." });
         await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "The isolated target project was not empty; no remote overwrite was attempted.");
         return;
       }
       await advanceNativeSync(job, "created", "apply_in_flight", { remoteUrl });
-      try { await applyNativeSnapshot(remote, revision.document); }
+      try { await applyNativeSnapshot(remote, revision.document, sourceSamples); }
       catch {
         await advanceNativeSync(job, "apply_in_flight", "uncertain", { remoteUrl, errorMessage: "Native document mutation may have committed; inspect before retrying." });
         await needsAttentionJob(job, "NATIVE_APPLY_OUTCOME_UNKNOWN", "Native document mutation may have committed; automatic retry is fenced.");

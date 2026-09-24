@@ -263,7 +263,7 @@ describe("durable job repository", () => {
     const first = await reserveProviderEffect({ job: attempt, provider: "openai", step: "mock-call", idempotencyKey: "call:one", inputHash: "input-one", model: "gpt-6-astra", promptVersion: "test", reservationMicrousd: 10_000 });
     await markEffectDispatched(first.id, attempt);
     expect(await completeProviderEffect({ effectId: first.id, job: attempt, output: { result: "kept" }, actualCostMicrousd: 1_234, providerRequestId: "request-one" })).toBe("succeeded");
-    expect(await completeProviderEffect({ effectId: first.id, job: attempt, output: { result: "must-not-replace" }, actualCostMicrousd: 9_999 })).toBe("succeeded");
+    await expect(completeProviderEffect({ effectId: first.id, job: attempt, output: { result: "must-not-replace" }, actualCostMicrousd: 9_999 })).rejects.toThrow(/USAGE_CONFLICT/);
     await failProviderEffect({ effectId: first.id, job: attempt, errorClass: "LateGenericFailure", uncertain: false });
     const one = await getPool().query("SELECT state,output,actual_cost_microusd FROM effect WHERE id=$1", [first.id]);
     expect(one.rows[0]).toMatchObject({ state: "succeeded", output: { result: "kept" } });
@@ -273,7 +273,7 @@ describe("durable job repository", () => {
     await markEffectDispatched(late.id, attempt);
     await getPool().query("UPDATE job SET lease_until=now()-interval '1 second' WHERE id=$1", [attempt.id]);
     expect(await completeProviderEffect({ effectId: late.id, job: attempt, output: { usage: { totalTokens: 44 } }, actualCostMicrousd: 321 })).toBe("uncertain");
-    expect(await completeProviderEffect({ effectId: late.id, job: attempt, output: { usage: { totalTokens: 99 } }, actualCostMicrousd: 999 })).toBe("uncertain");
+    await expect(completeProviderEffect({ effectId: late.id, job: attempt, output: { usage: { totalTokens: 99 } }, actualCostMicrousd: 999 })).rejects.toThrow(/USAGE_CONFLICT/);
     const lateRow = await getPool().query("SELECT state,output,actual_cost_microusd,cost_status FROM effect WHERE id=$1", [late.id]);
     expect(lateRow.rows[0]).toMatchObject({ state: "uncertain", output: { usage: { totalTokens: 44 } }, cost_status: "observed" });
     expect(Number(lateRow.rows[0]?.actual_cost_microusd)).toBe(321);

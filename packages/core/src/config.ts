@@ -29,6 +29,7 @@ const configSchema = z.object({
   JOB_LEASE_SECONDS: z.coerce.number().int().min(3).max(300).default(45),
   MAX_MODEL_CALLS_PER_JOB: z.coerce.number().int().min(0).max(12).default(4),
   MAX_OPENAI_INPUT_TOKENS: z.coerce.number().int().min(1_000).max(128_000).default(16_000),
+  NATIVE_MODEL_OUTPUT_TOKENS: z.coerce.number().int().min(400).max(4_000).default(1_200),
   // This milestone implements one original render plus at most one repair and
   // one critique of the original candidate. Reject unsupported higher values.
   MAX_RENDER_ATTEMPTS_PER_JOB: z.coerce.number().int().min(1).max(2).default(2),

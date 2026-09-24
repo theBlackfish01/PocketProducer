@@ -6,7 +6,7 @@ function session(direction: string) { return new NativeToolSession({} as JobReco
 describe("native construction contracts", () => {
   it("keeps generated editorial titles on a word boundary", () => {
     const title = seedNativeDocument("Build an evolving 64-bar ambient journey with a slow lead and spacious transitions into a final release").title;
-    expect(title.length).toBeLessThanOrEqual(80);
+    expect(title.length).toBeLessThanOrEqual(42);
     expect(title).not.toMatch(/transitio…$/);
   });
   it("rejects device or effect values that the pinned mapper would silently drop", () => {
@@ -18,7 +18,8 @@ describe("native construction contracts", () => {
     const result = await discoverNativeCapabilities("instrument", 32);
     expect(result.totalEntities).toBeGreaterThan(60);
     expect(result.matches.some((value) => value.type === "heisenberg")).toBe(true);
-    expect((await discoverNativeCapabilities("audioRegion")).matches[0]?.writableInPocketProducer).toBe(false);
+    expect((await discoverNativeCapabilities("audioRegion")).matches[0]?.writableInPocketProducer).toBe(true);
+    expect((await discoverNativeCapabilities("audioRegion")).matches[0]?.operationContract.prerequisite).toMatch(/Owned ready WAV/);
     const detail = await inspectNativeCapability("/beatbox8Pattern/length");
     expect(detail.schema.type).toBe("primitive");
     expect(toNexusTicks(960)).toBe(3840);
@@ -66,9 +67,22 @@ describe("native construction contracts", () => {
     const base = draft.document;
     const objectiveOnly = applyNativeOperations(base, [{ kind: "setObjective", objective: "Say this differently" }]);
     expect(nativeMusicHash(objectiveOnly)).toBe(nativeMusicHash(base));
+    const labelsOnly = applyNativeOperations(base, [{ kind: "setTitle", title: "New label" }, { kind: "setStructure", bars: base.bars, sections: base.sections.map((section) => ({ ...section, name: `${section.name} renamed`, intent: "New annotation" })) }]);
+    expect(nativeMusicHash(labelsOnly)).toBe(nativeMusicHash(base));
     const motif = base.motifs.find((value) => value.partId === "bass-drive")!;
     const changed = applyNativeOperations(base, [{ kind: "replaceMotif", motif: { ...motif, notes: motif.notes.map((value, index) => index === 0 ? { ...value, pitch: value.pitch + 1 } : value) } }]);
     expect(nativeMusicHash(changed)).not.toBe(nativeMusicHash(base));
     expect(nativeDiff(base, changed).changedParts).toContain("bass-drive");
+  });
+
+  it("rejects Beatbox8 changes the boolean-step mapper cannot faithfully express", async () => {
+    const draft = session("A driving rhythmic sketch");
+    await fixtureConstruct(draft, draft.document.direction, []);
+    const base = draft.document;
+    const part = base.parts.find((value) => value.id === "kick-grid")!;
+    const motif = base.motifs.find((value) => value.partId === part.id)!;
+    expect(() => applyNativeOperations(base, [{ kind: "replacePlacements", partId: part.id, placements: part.placements.map((placement, index) => index === 0 ? { ...placement, transpose: 2 } : placement) }])).toThrow(/Beatbox8/);
+    expect(() => applyNativeOperations(base, [{ kind: "replaceMotif", motif: { ...motif, notes: motif.notes.map((note, index) => index === 0 ? { ...note, velocity: 0.5 } : note) } }])).toThrow(/Beatbox8/);
+    expect(() => applyNativeOperations(base, [{ kind: "replaceMotif", motif: { ...motif, notes: motif.notes.map((note, index) => index === 0 ? { ...note, pitch: 40 } : note) } }])).toThrow(/Beatbox8/);
   });
 });

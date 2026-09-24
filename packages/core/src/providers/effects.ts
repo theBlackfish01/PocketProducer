@@ -124,26 +124,33 @@ export async function markEffectDispatched(effectId: string, job: JobRecord): Pr
 }
 
 export async function completeProviderEffect(input: { effectId: string; job: JobRecord; output: unknown; actualCostMicrousd: number; providerRequestId?: string }): Promise<"succeeded" | "uncertain"> {
+  if (!Number.isSafeInteger(input.actualCostMicrousd) || input.actualCostMicrousd < 0) throw new Error("Invalid provider usage amount");
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     await lockBudget(client);
-    const effect = await client.query<{ reservation_microusd: string; actual_cost_microusd: string; state: EffectState; attempt_id: string | null }>(
-      "SELECT reservation_microusd::text,actual_cost_microusd::text,state,attempt_id FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE",
+    const effect = await client.query<{ reservation_microusd: string; actual_cost_microusd: string; cost_status: string; provider_request_id: string | null; state: EffectState; attempt_id: string | null }>(
+      "SELECT reservation_microusd::text,actual_cost_microusd::text,cost_status,provider_request_id,state,attempt_id FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE",
       [input.effectId, input.job.id]
     );
     const row = effect.rows[0];
     if (!row || row.attempt_id !== input.job.attemptId) throw new Error("Provider effect attempt identity mismatch");
+    if (row.provider_request_id && input.providerRequestId && row.provider_request_id !== input.providerRequestId) throw new Error("PROVIDER_REQUEST_ID_CONFLICT");
+    const priorActual = Number(row.actual_cost_microusd);
+    if (["succeeded", "failed", "uncertain"].includes(row.state) && row.cost_status === "observed" && priorActual !== input.actualCostMicrousd) throw new Error("PROVIDER_USAGE_CONFLICT");
     if (row.state === "succeeded") {
       await client.query("COMMIT");
       return "succeeded";
     }
     if (row.state === "failed" || row.state === "uncertain") {
+      if (row.cost_status !== "observed" || (!row.provider_request_id && input.providerRequestId)) {
+        await client.query("UPDATE effect SET actual_cost_microusd=$2::bigint,cost_usd=($2::bigint)::numeric/1000000,cost_status='observed',provider_request_id=COALESCE($3,provider_request_id),updated_at=now() WHERE id=$1", [input.effectId, input.actualCostMicrousd, input.providerRequestId ?? null]);
+        await client.query("UPDATE job SET actual_cost_microusd=actual_cost_microusd+$2,actual_cost_usd=(actual_cost_microusd+$2)::numeric/1000000 WHERE id=$1", [input.job.id, input.actualCostMicrousd - priorActual]);
+      }
       await client.query("COMMIT");
       return "uncertain";
     }
     const reservation = Number(row.reservation_microusd);
-    const priorActual = Number(row.actual_cost_microusd);
     const active = await client.query(
       `SELECT 1 FROM job WHERE id=$1 AND lease_owner=$2 AND lease_generation=$3 AND attempt_id=$4
        AND state='running' AND cancellation_requested_at IS NULL AND lease_until>now() AND deadline_at>now() FOR UPDATE`,

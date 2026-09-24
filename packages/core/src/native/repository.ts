@@ -5,6 +5,8 @@ import { getConfig } from "../config.js";
 import { getPool } from "../db/pool.js";
 import { JobControlError, type JobRecord } from "../db/repository.js";
 import { nativeDiff, nativeDocumentSchema, nativeMusicHash, pinnedContext, type NativeDocument, type NativeOperation } from "./model.js";
+import { NATIVE_MAPPING_VERSION } from "./adapter.js";
+import type { NativeSampleResources } from "./adapter.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
@@ -24,6 +26,15 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
       await client.query("COMMIT");
       return { id: existing.rows[0].id, duplicate: true };
     }
+    const priorSameRequest = await client.query<{ id: string; state: string }>(
+      "SELECT id,state FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND request=$4::jsonb ORDER BY created_at DESC LIMIT 1",
+      [input.ownerId, input.projectId, input.kind, JSON.stringify(input.request)]
+    );
+    if (priorSameRequest.rows[0]?.state === "needs_attention") throw Object.assign(new Error("Prior native command needs reconciliation; a new key cannot bypass it"), { statusCode: 409 });
+    if (["failed", "cancelled"].includes(priorSameRequest.rows[0]?.state ?? "")) {
+      const unknown = await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND (state IN ('dispatched','uncertain') OR cost_status='unknown') LIMIT 1", [priorSameRequest.rows[0]!.id]);
+      if (unknown.rowCount) throw Object.assign(new Error("Prior provider outcome or cost is uncertain; reconcile it before a fresh attempt"), { statusCode: 409 });
+    }
     const project = await client.query("SELECT id FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [input.projectId, input.ownerId]);
     if (project.rowCount !== 1) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
     const current = await head(client, input.ownerId, input.projectId, true);
@@ -33,6 +44,13 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     if (input.kind === "native-sync") {
       const activeSync = await client.query("SELECT 1 FROM job WHERE owner_id=$1 AND project_id=$2 AND kind='native-sync' AND state IN ('queued','running','cancel_requested') AND request->>'baseNativeRevisionId'=$3", [input.ownerId, input.projectId, current]);
       if (activeSync.rowCount) throw Object.assign(new Error("A native synchronization for this version is already active"), { statusCode: 409 });
+      const unresolved = await client.query("SELECT state FROM native_revision_sync WHERE revision_id=$1 AND owner_id=$2 AND project_id=$3", [current, input.ownerId, input.projectId]);
+      if (["create_in_flight", "apply_in_flight", "uncertain", "conflict"].includes(String(unresolved.rows[0]?.state ?? ""))) throw Object.assign(new Error("Native remote outcome requires reconciliation before another synchronization command"), { statusCode: 409 });
+      const sourceIds = await client.query<{ asset_id: string }>("SELECT ids.source_id::uuid AS asset_id FROM native_revision r, jsonb_array_elements_text(r.document->'sourceAssetIds') AS ids(source_id) WHERE r.id=$1 AND r.owner_id=$2", [current, input.ownerId]);
+      if (sourceIds.rows.length) {
+        const uncertainSample = await client.query("SELECT 1 FROM native_sample_upload WHERE owner_id=$1 AND project_id=$2 AND asset_id=ANY($3::uuid[]) AND state IN ('in_flight','uncertain') LIMIT 1", [input.ownerId, input.projectId, sourceIds.rows.map((row) => row.asset_id)]);
+        if (uncertainSample.rowCount) throw Object.assign(new Error("An owned sample upload has an unknown remote outcome; reconcile before synchronizing"), { statusCode: 409 });
+      }
     }
     const assetIds = Array.isArray(input.request.sourceAssetIds) ? input.request.sourceAssetIds : [];
     if (assetIds.length > 24 || assetIds.some((value) => typeof value !== "string")) throw Object.assign(new Error("Invalid source selection"), { statusCode: 422 });
@@ -76,15 +94,16 @@ export async function nativeSnapshot(ownerId: string, projectId: string) {
   const [headResult, versions, sync] = await Promise.all([
     getPool().query("SELECT revision_id,version FROM native_project_head WHERE owner_id=$1 AND project_id=$2", [ownerId, projectId]),
     getPool().query("SELECT * FROM native_revision WHERE owner_id=$1 AND project_id=$2 ORDER BY ordinal DESC", [ownerId, projectId]),
-    getPool().query("SELECT revision_id,state,remote_project_name,remote_url,observed_hash,error_message,updated_at FROM native_sync WHERE owner_id=$1 AND project_id=$2", [ownerId, projectId])
+    getPool().query("SELECT revision_id,state,remote_project_name,remote_url,observed_hash,mapping_version,verified_at,error_message,updated_at FROM native_sync WHERE owner_id=$1 AND project_id=$2", [ownerId, projectId])
   ]);
   const currentId = headResult.rows[0]?.revision_id ? String(headResult.rows[0].revision_id) : null;
   const current = currentId ? versions.rows.find((value) => String(value.id) === currentId) : null;
-  const remote = sync.rows[0] ? { state: String(sync.rows[0].state), projectId: sync.rows[0].remote_project_name ? String(sync.rows[0].remote_project_name) : null, observedHash: sync.rows[0].observed_hash ? String(sync.rows[0].observed_hash) : null, url: sync.rows[0].remote_url ? String(sync.rows[0].remote_url) : null, revisionId: String(sync.rows[0].revision_id), error: sync.rows[0].error_message ? String(sync.rows[0].error_message) : null } : { state: "local", projectId: null, observedHash: null, url: null, revisionId: null, error: null };
+  const remote = sync.rows[0] ? { state: String(sync.rows[0].state), projectId: sync.rows[0].remote_project_name ? String(sync.rows[0].remote_project_name) : null, observedHash: sync.rows[0].observed_hash ? String(sync.rows[0].observed_hash) : null, mappingVersion: sync.rows[0].mapping_version ? String(sync.rows[0].mapping_version) : null, verifiedAt: sync.rows[0].verified_at ? new Date(sync.rows[0].verified_at).toISOString() : null, url: sync.rows[0].remote_url ? String(sync.rows[0].remote_url) : null, revisionId: String(sync.rows[0].revision_id), error: sync.rows[0].error_message ? String(sync.rows[0].error_message) : null } : { state: "local", projectId: null, observedHash: null, mappingVersion: null, verifiedAt: null, url: null, revisionId: null, error: null };
   return {
     currentRevisionId: currentId, headVersion: Number(headResult.rows[0]?.version ?? 0),
     current: current ? rowRevision(current) : null,
     versions: versions.rows.map(rowRevision),
+    comparisons: current ? Object.fromEntries(versions.rows.map((value) => [String(value.id), nativeDiff(nativeDocumentSchema.parse(current.document), nativeDocumentSchema.parse(value.document))])) : {},
     context: current ? pinnedContext(nativeDocumentSchema.parse(current.document), currentId, remote) : null,
     synchronization: remote,
     legacyAudio: "Legacy audio, if present, belongs only to its separate four-stem version; native construction has no preview."
@@ -94,6 +113,31 @@ export async function nativeSnapshot(ownerId: string, projectId: string) {
 export async function loadNativeSteps(jobId: string): Promise<Array<{ key: string; operations: NativeOperation[]; resultHash: string }>> {
   const result = await getPool().query("SELECT step_key,operations,result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal", [jobId]);
   return result.rows.map((row) => ({ key: String(row.step_key), operations: row.operations as NativeOperation[], resultHash: String(row.result_hash) }));
+}
+
+export async function loadConfirmedNativeModelCalls(jobId: string): Promise<Array<{ usage: { inputTokens: number; outputTokens: number }; costMicrousd: number }> | null> {
+  const result = await getPool().query<{ state: string; cost_status: string; output: unknown; actual_cost_microusd: string }>("SELECT state,cost_status,output,actual_cost_microusd::text FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [jobId]);
+  if (!result.rows.length || result.rows.some((row) => row.state !== "succeeded" || row.cost_status !== "observed")) return null;
+  return result.rows.map((row) => {
+    const usage = row.output && typeof row.output === "object" && "usage" in row.output ? (row.output).usage : null;
+    if (!usage || typeof usage !== "object" || !("inputTokens" in usage) || !("outputTokens" in usage) || typeof usage.inputTokens !== "number" || typeof usage.outputTokens !== "number") throw new Error("Confirmed model effect has no trusted usage evidence");
+    return { usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }, costMicrousd: Number(row.actual_cost_microusd) };
+  });
+}
+
+export async function recoverConfirmedNativeProducerResult(job: JobRecord, effectId: string, output: unknown): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertSyncLease(client, job);
+    const effect = await client.query<{ state: string; step: string; reservation_microusd: string }>("SELECT state,step,reservation_microusd::text FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE", [effectId, job.id]);
+    if (effect.rows[0]?.state !== "dispatched" || effect.rows[0].step !== "native-producer-result" || Number(effect.rows[0].reservation_microusd) !== 0) throw new Error("Native aggregate effect is not recoverable");
+    const calls = await client.query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' FOR UPDATE", [job.id]);
+    if (!calls.rows.length || calls.rows.some((row) => row.state !== "succeeded" || row.cost_status !== "observed")) throw new Error("A native model call outcome is not confirmed; explicit reconciliation is required");
+    await client.query("UPDATE effect SET state='succeeded',output=$3,cost_status='observed',actual_cost_microusd=0,cost_usd=0,attempt_id=$4,lease_generation=$5,completed_at=now(),updated_at=now() WHERE id=$1 AND job_id=$2", [effectId, job.id, output, job.attemptId, job.leaseGeneration]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
 }
 
 export async function saveNativeStep(job: JobRecord, key: string, operations: NativeOperation[], document: NativeDocument): Promise<void> {
@@ -133,7 +177,11 @@ export async function commitNativeRevision(job: JobRecord, document: NativeDocum
     const current = await head(client, job.ownerId, job.projectId, true);
     const parent = expected ? await client.query("SELECT * FROM native_revision WHERE id=$1 AND owner_id=$2 AND project_id=$3", [expected, job.ownerId, job.projectId]) : null;
     if (expected && !parent?.rows[0]) throw new Error("Native base revision vanished");
-    if (parent?.rows[0] && nativeMusicHash(nativeDocumentSchema.parse(parent.rows[0].document)) === nativeMusicHash(valid)) throw new Error("Native revision changed no musical structure");
+    if (parent?.rows[0] && nativeMusicHash(nativeDocumentSchema.parse(parent.rows[0].document)) === nativeMusicHash(valid)) {
+      const oldLocks = nativeDocumentSchema.parse(parent.rows[0].document).protectedPartIds;
+      const changedLocks = canonicalHash(oldLocks) !== canonicalHash(valid.protectedPartIds);
+      if (!changedLocks || !job.request.protectionChange) throw new Error("Native revision changed no musical structure or user-authorized protection");
+    }
     for (const region of valid.parts.flatMap((part) => part.sourceRegions)) {
       const asset = await client.query<{ content_hash: string; duration_seconds: number }>("SELECT content_hash,duration_seconds FROM asset WHERE id=$1 AND owner_id=$2 AND project_id=$3 AND kind='source' AND readiness='ready'", [region.assetId, job.ownerId, job.projectId]);
       if (asset.rows[0]?.content_hash !== region.assetHash) throw new Error("Source hash or ownership changed before native commit");
@@ -149,7 +197,8 @@ export async function commitNativeRevision(job: JobRecord, document: NativeDocum
     const selected = current === expected;
     if (selected) {
       await client.query("INSERT INTO native_project_head(owner_id,project_id,revision_id) VALUES($1,$2,$3) ON CONFLICT(project_id) DO UPDATE SET revision_id=EXCLUDED.revision_id,version=native_project_head.version+1,updated_at=now()", [job.ownerId, job.projectId, revisionId]);
-      await client.query("INSERT INTO native_sync(owner_id,project_id,revision_id,state) VALUES($1,$2,$3,'local') ON CONFLICT(project_id) DO UPDATE SET revision_id=EXCLUDED.revision_id,state='local',remote_project_name=NULL,remote_url=NULL,observed_hash=NULL,error_message=NULL,updated_at=now()", [job.ownerId, job.projectId, revisionId]);
+      if (job.kind === "native-generation") await client.query("UPDATE project SET title=$3,updated_at=now() WHERE id=$1 AND owner_id=$2 AND title='Untitled listening room'", [job.projectId, job.ownerId, valid.title]);
+      await client.query("INSERT INTO native_sync(owner_id,project_id,revision_id,state) VALUES($1,$2,$3,'local') ON CONFLICT(project_id) DO UPDATE SET revision_id=EXCLUDED.revision_id,state='local',remote_project_name=NULL,remote_url=NULL,observed_hash=NULL,mapping_version=NULL,verified_at=NULL,error_message=NULL,updated_at=now()", [job.ownerId, job.projectId, revisionId]);
     }
     await client.query("UPDATE job SET state='succeeded',stage=NULL,result_native_revision_id=$2,lease_owner=NULL,attempt_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id, revisionId]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [job.id]);
@@ -171,6 +220,8 @@ export async function selectNativeRevision(ownerId: string, projectId: string, r
       remote_project_name=(SELECT remote_project_name FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),
       remote_url=(SELECT remote_url FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),
       observed_hash=(SELECT observed_hash FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),
+      mapping_version=(SELECT mapping_version FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),
+      verified_at=(SELECT verified_at FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),
       error_message=(SELECT error_message FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),updated_at=now()
       WHERE owner_id=$1 AND project_id=$2`, [ownerId, projectId, revisionId]);
     await client.query("COMMIT");
@@ -179,6 +230,38 @@ export async function selectNativeRevision(ownerId: string, projectId: string, r
 }
 
 export interface NativeRemoteCheckpoint { state: "create_in_flight" | "created" | "apply_in_flight" | "verified" | "conflict" | "uncertain" | "failed"; createdNow: boolean; remoteProjectName: string | null; remoteUrl: string | null; expectedDocumentHash: string; observedHash: string | null; errorMessage: string | null }
+
+export async function beginOwnedSampleUpload(job: JobRecord, assetId: string, assetHash: string): Promise<{ state: "in_flight" | "ready" | "uncertain"; createdNow: boolean; sampleName: string | null; durationSeconds: number | null }> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertSyncLease(client, job);
+    const asset = await client.query<{ content_hash: string; duration_seconds: number }>("SELECT content_hash,duration_seconds FROM asset WHERE id=$1 AND owner_id=$2 AND project_id=$3 AND kind='source' AND readiness='ready' FOR UPDATE", [assetId, job.ownerId, job.projectId]);
+    if (asset.rows[0]?.content_hash !== assetHash) throw new Error("Owned source hash changed before native upload");
+    const prior = await client.query<{ state: "in_flight" | "ready" | "uncertain"; asset_hash: string; sample_name: string | null; duration_seconds: number | null }>("SELECT state,asset_hash,sample_name,duration_seconds FROM native_sample_upload WHERE asset_id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [assetId, job.ownerId, job.projectId]);
+    if (prior.rows[0] && prior.rows[0].asset_hash !== assetHash) throw new Error("Native sample identity changed for owned source");
+    if (!prior.rows[0]) await client.query("INSERT INTO native_sample_upload(asset_id,owner_id,project_id,asset_hash,state,dispatch_job_id) VALUES($1,$2,$3,$4,'in_flight',$5)", [assetId, job.ownerId, job.projectId, assetHash, job.id]);
+    await client.query("COMMIT");
+    return prior.rows[0] ? { state: prior.rows[0].state, createdNow: false, sampleName: prior.rows[0].sample_name, durationSeconds: prior.rows[0].duration_seconds } : { state: "in_flight", createdNow: true, sampleName: null, durationSeconds: Number(asset.rows[0].duration_seconds) };
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
+export async function finishOwnedSampleUpload(job: JobRecord, assetId: string, sampleName: string, durationSeconds: number): Promise<void> {
+  if (!/^samples\/[a-zA-Z0-9-]{1,120}$/.test(sampleName) || !Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error("Invalid ready sample metadata");
+  const result = await getPool().query("UPDATE native_sample_upload SET state='ready',sample_name=$4,duration_seconds=$5,error_message=NULL,updated_at=now() WHERE asset_id=$1 AND owner_id=$2 AND project_id=$3 AND dispatch_job_id=$6 AND state IN ('in_flight','uncertain')", [assetId, job.ownerId, job.projectId, sampleName, durationSeconds, job.id]);
+  if (result.rowCount !== 1) throw new Error("Native sample upload checkpoint changed before ready outcome");
+}
+
+export async function markOwnedSampleUncertain(job: JobRecord, assetId: string, reason: string): Promise<void> {
+  await getPool().query("UPDATE native_sample_upload SET state='uncertain',error_message=$4,updated_at=now() WHERE asset_id=$1 AND owner_id=$2 AND project_id=$3 AND dispatch_job_id=$5 AND state='in_flight'", [assetId, job.ownerId, job.projectId, reason.slice(0, 300), job.id]);
+}
+
+export async function readyOwnedSampleResources(ownerId: string, projectId: string, assetIds: string[]): Promise<NativeSampleResources> {
+  if (!assetIds.length) return {};
+  const result = await getPool().query<{ asset_id: string; sample_name: string; duration_seconds: number }>("SELECT asset_id,sample_name,duration_seconds FROM native_sample_upload WHERE owner_id=$1 AND project_id=$2 AND asset_id=ANY($3::uuid[]) AND state='ready'", [ownerId, projectId, assetIds]);
+  return Object.fromEntries(result.rows.map((row) => [row.asset_id, { sampleName: row.sample_name, durationSeconds: Number(row.duration_seconds) }]));
+}
 
 async function assertSyncLease(client: pg.PoolClient, job: JobRecord) {
   const result = await client.query("SELECT 1 FROM job WHERE id=$1 AND owner_id=$2 AND state='running' AND lease_generation=$3 AND attempt_id=$4 AND lease_owner=$5 AND lease_until>now() AND deadline_at>now() AND cancellation_requested_at IS NULL FOR UPDATE", [job.id, job.ownerId, job.leaseGeneration, job.attemptId, job.leaseOwner]);
@@ -229,9 +312,9 @@ export async function finishNativeSync(job: JobRecord, remoteProjectName: string
     await client.query("BEGIN");
     await assertSyncLease(client, job);
     const revisionId = String(job.request.baseNativeRevisionId);
-    const updated = await client.query("UPDATE native_revision_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND state=$7 RETURNING revision_id", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, expectedState]);
+    const updated = await client.query("UPDATE native_revision_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$8,verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND state=$7 RETURNING revision_id", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, expectedState, NATIVE_MAPPING_VERSION]);
     if (updated.rowCount !== 1) throw new Error("NATIVE_SYNC_CHECKPOINT_CONFLICT");
-    await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash]);
+    await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$7,verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, NATIVE_MAPPING_VERSION]);
     await client.query("UPDATE job SET state='succeeded',stage=NULL,lease_owner=NULL,attempt_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [job.id]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence-1,'succeeded',$2 FROM job WHERE id=$1", [job.id, { nativeRevisionId: revisionId, remoteProjectName, synchronization: "verified" }]);

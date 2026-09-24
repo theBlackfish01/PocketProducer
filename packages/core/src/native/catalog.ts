@@ -2,9 +2,10 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSchemaLocationDetails, schemaPathToSchemaLocation, type SchemaPath } from "@audiotool/nexus/document";
+import { nativeParameterRanges } from "./model.js";
 
 export const NATIVE_CATALOG_VERSION = "nexus-0.0.17-schema-v1";
-const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent"]);
+const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
 const musicalMeaning: Record<string, { family: string; purpose: string; caveat?: string }> = {
   heisenberg: { family: "instrument", purpose: "Subtractive synth for basses, pads and leads." },
   pulverisateur: { family: "instrument", purpose: "Alternate pitched synth voice for contrasting timbres." },
@@ -14,8 +15,10 @@ const musicalMeaning: Record<string, { family: string; purpose: string; caveat?:
   beatbox8Pattern: { family: "drums", purpose: "Reusable drum-machine rhythm pattern." },
   note: { family: "notes", purpose: "Editable pitch, velocity, onset and duration in a note collection." },
   noteRegion: { family: "arrangement", purpose: "Places a reusable note collection on a track." },
-  audioRegion: { family: "sources", purpose: "Places a source clip with a selected interval; placement does not prove audibility.", caveat: "Discoverable; native source upload and interval mapping remain deferred." },
-  sample: { family: "sources", purpose: "Native sample reference; use only an owned or authorized sample identifier.", caveat: "Discoverable; Pocket Producer does not upload native samples yet." },
+  audioRegion: { family: "sources", purpose: "Places a ready owned sample with source offset and selected once/loop interval; placement does not prove audibility.", caveat: "Offline SDK-mapped; remote upload/readback not live-verified in this pass." },
+  sample: { family: "sources", purpose: "Ready owned sample identity supplied by a fenced server upload.", caveat: "Never model-authored; remote upload/readback not live-verified in this pass." },
+  audioDevice: { family: "routing", purpose: "Playback device and channel path created by the pinned sample insertion helper." },
+  audioTrack: { family: "arrangement", purpose: "Timeline track for one or more ready owned sample regions." },
   mixerChannel: { family: "routing", purpose: "Part channel with gain and pan routing." },
   desktopAudioCable: { family: "routing", purpose: "Connects an instrument or effect output to a compatible audio input." },
   stompboxDelay: { family: "effect", purpose: "Time-based repeats; timing and feedback need bounded parameter checks." },
@@ -25,6 +28,16 @@ const musicalMeaning: Record<string, { family: string; purpose: string; caveat?:
   autoFilter: { family: "effect", purpose: "Filter movement and modulation." },
   automationEvent: { family: "automation", purpose: "A time-addressed parameter value in a native automation collection." }
 };
+
+export function nativeOperationContract(root: string) {
+  const parameters = root in nativeParameterRanges ? nativeParameterRanges[root as keyof typeof nativeParameterRanges] : null;
+  const operations = root === "sample" || root === "audioRegion" || root === "audioTrack" || root === "audioDevice"
+    ? ["create via ready owned sample mapping", "inspect", "readback"]
+    : root === "mixerChannel" || root === "desktopAudioCable" ? ["create validated part route", "inspect", "readback"]
+      : parameters ? ["create", "replace/edit mapped parameters", "remove via part/effect operation", "inspect", "readback"]
+        : writable.has(root) ? ["create through validated domain operation", "inspect", "readback"] : ["inspect SDK schema only"];
+  return { operations, mappedParameters: parameters, prerequisite: root === "sample" || root === "audioRegion" ? "Owned ready WAV; upload outcome must be known before remote application" : null, offlineVerified: writable.has(root), liveVerified: false };
+}
 
 let rootsPromise: Promise<string[]> | undefined;
 async function schemaRoots(): Promise<string[]> {
@@ -42,7 +55,7 @@ async function schemaRoots(): Promise<string[]> {
 export async function discoverNativeCapabilities(query = "", limit = 24) {
   const normalized = query.trim().toLowerCase();
   const roots = await schemaRoots();
-  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length, matches: roots.filter((type) => !normalized || `${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""}`.toLowerCase().includes(normalized)).slice(0, Math.max(1, Math.min(64, limit))).map((type) => ({ type, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
+  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length, matches: roots.filter((type) => !normalized || `${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""}`.toLowerCase().includes(normalized)).slice(0, Math.max(1, Math.min(64, limit))).map((type) => ({ type, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), operationContract: nativeOperationContract(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
 }
 
 export async function inspectNativeCapability(path: string) {
@@ -50,5 +63,5 @@ export async function inspectNativeCapability(path: string) {
   const root = path.split("/")[1]!;
   if (!(await schemaRoots()).includes(root)) throw new Error("Nexus entity is not in the pinned schema");
   const details = getSchemaLocationDetails(schemaPathToSchemaLocation(path as SchemaPath));
-  return { version: NATIVE_CATALOG_VERSION, path, musical: musicalMeaning[root] ?? { family: "other", purpose: "Not yet curated for construction", caveat: "Discovery does not imply writable support" }, writableInPocketProducer: writable.has(root), schema: details };
+  return { version: NATIVE_CATALOG_VERSION, path, musical: musicalMeaning[root] ?? { family: "other", purpose: "Not yet curated for construction", caveat: "Discovery does not imply writable support" }, writableInPocketProducer: writable.has(root), operationContract: nativeOperationContract(root), schema: details };
 }
