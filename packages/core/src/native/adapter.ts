@@ -112,34 +112,40 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
           const resource = sourceSamples[region.assetId];
           if (!resource) { unresolvedSources.push(region.id); continue; }
           if (!/^samples\/[a-zA-Z0-9-]{1,120}$/.test(resource.sampleName) || !Number.isFinite(resource.durationSeconds) || resource.durationSeconds <= 0) throw new Error(`Invalid ready sample identity for ${region.assetId}`);
-          const offsetTicks = Math.round(region.sourceStartSeconds * document.tempoBpm / 60 * Ticks.Beat);
-          const selectedTicks = Math.round(region.sourceDurationSeconds * document.tempoBpm / 60 * Ticks.Beat);
+          const rate = region.playbackRate ?? 1;
+          const offsetTicks = Math.round(region.sourceStartSeconds / rate * document.tempoBpm / 60 * Ticks.Beat);
+          const selectedTicks = Math.round(region.sourceDurationSeconds / rate * document.tempoBpm / 60 * Ticks.Beat);
           const timelineTicks = toNexusTicks(region.durationTicks);
           if (region.sourceStartSeconds + region.sourceDurationSeconds > resource.durationSeconds + 0.001) throw new Error(`Selected interval exceeds ready sample ${region.assetId}`);
           if ((region.playbackMode ?? "once") === "once" && timelineTicks > selectedTicks) throw new Error(`One-shot ${region.id} exceeds its selected source interval`);
           const inserted = t.insertSample({ name: resource.sampleName, durationSeconds: resource.durationSeconds }, {
             attachTo: device,
-            sample: { bpm: document.tempoBpm, offsetTicks },
+            sample: { ...(region.playbackRate === undefined ? { bpm: document.tempoBpm } : { musicDurationTicks: Math.max(1, Math.round(resource.durationSeconds / rate * document.tempoBpm / 60 * Ticks.Beat)) }), offsetTicks },
             region: { positionTicks: toNexusTicks(region.startTick), durationTicks: timelineTicks },
             loop: (region.playbackMode ?? "once") === "loop" ? { startTicks: offsetTicks, durationTicks: selectedTicks } : false,
             displayName: `${part.name} · ${region.id}`
           });
           t.update(inserted.fields.gain, region.gain);
+          if (region.stretchMode) t.update(inserted.fields.timestretchMode, region.stretchMode === "resample" ? 1 : 2);
+          if (region.pitchShiftSemitones !== undefined) t.update(inserted.fields.pitchShiftSemitones, region.pitchShiftSemitones);
         }
         for (const region of part.libraryRegions ?? []) {
           const resource = librarySamples[region.sampleName];
           if (!resource || resource.ownerName !== region.ownerName || Math.abs(resource.durationSeconds - region.durationSeconds) > 0.001) throw new Error(`Library sample ${region.sampleName} is unresolved or changed`);
-          const offsetTicks = Math.round(region.sourceStartSeconds * document.tempoBpm / 60 * Ticks.Beat);
-          const selectedTicks = Math.round(region.sourceDurationSeconds * document.tempoBpm / 60 * Ticks.Beat);
+          const rate = region.playbackRate ?? 1;
+          const offsetTicks = Math.round(region.sourceStartSeconds / rate * document.tempoBpm / 60 * Ticks.Beat);
+          const selectedTicks = Math.round(region.sourceDurationSeconds / rate * document.tempoBpm / 60 * Ticks.Beat);
           const timelineTicks = toNexusTicks(region.durationTicks);
           if (region.playbackMode === "once" && timelineTicks > selectedTicks) throw new Error(`One-shot library region ${region.id} exceeds its selected interval`);
           const inserted = t.insertSample({ name: resource.name, durationSeconds: resource.durationSeconds, ...(resource.bpm > 0 ? { bpm: resource.bpm } : {}) }, {
-            attachTo: device, sample: { bpm: document.tempoBpm, offsetTicks },
+            attachTo: device, sample: { ...(region.playbackRate === undefined ? { bpm: document.tempoBpm } : { musicDurationTicks: Math.max(1, Math.round(resource.durationSeconds / rate * document.tempoBpm / 60 * Ticks.Beat)) }), offsetTicks },
             region: { positionTicks: toNexusTicks(region.startTick), durationTicks: timelineTicks },
             loop: region.playbackMode === "loop" ? { startTicks: offsetTicks, durationTicks: selectedTicks } : false,
             displayName: `${part.name} · ${region.displayName}`
           });
           t.update(inserted.fields.gain, region.gain);
+          if (region.stretchMode) t.update(inserted.fields.timestretchMode, region.stretchMode === "resample" ? 1 : 2);
+          if (region.pitchShiftSemitones !== undefined) t.update(inserted.fields.pitchShiftSemitones, region.pitchShiftSemitones);
         }
       } else if (part.device.type === "beatbox8") {
         const machine = instrument as NexusEntity<"beatbox8">;

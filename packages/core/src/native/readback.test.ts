@@ -97,6 +97,26 @@ describe("semantic native readback", () => {
     expect(canonicalHash(nativeStructuralReadback(second))).not.toBe(firstHash);
   });
 
+  it("maps bounded source speed and stretch mode through SDK sample insertion", async () => {
+    const assetId = "11111111-1111-4111-8111-111111111111";
+    const base = seedNativeDocument("Speed up an owned clip");
+    const region = { id: "sped-clip", assetId, assetHash: "a".repeat(64), startTick: 0, durationTicks: 3840, sourceStartSeconds: 2, sourceDurationSeconds: 5, playbackMode: "once" as const, playbackRate: 2, stretchMode: "resample" as const, gain: 0.7, rights: "Owned test sound" };
+    const document = applyNativeOperations(base, [{ kind: "removePart", partId: "starting-voice" }, { kind: "addPart", part: { id: "clip", name: "Clip", role: "source", device: { type: "audio", parameters: {} }, gain: 0.8, pan: 0, notes: [], placements: [], sourceRegions: [region], effects: [], automation: [] } }]);
+    const source = { [assetId]: { sampleName: "samples/owned-test", durationSeconds: 10 } };
+    const sped = await createOfflineDocument({ validated: true });
+    await applyNativeSnapshot(sped, document, source);
+    expect(sped.queryEntities.ofTypes("audioRegion").getOne()!.fields.timestretchMode.value).toBe(1);
+    const normal = await createOfflineDocument({ validated: true });
+    const unchanged = applyNativeOperations(document, [{ kind: "replaceSource", partId: "clip", region: { ...region, playbackRate: 1, stretchMode: "preservePitch" } }]);
+    await applyNativeSnapshot(normal, unchanged, source);
+    expect(normal.queryEntities.ofTypes("audioRegion").getOne()!.fields.timestretchMode.value).toBe(2);
+    const spedEnd = Math.max(...sped.queryEntities.ofTypes("automationEvent").get().map((event) => event.fields.positionTicks.value));
+    const normalEnd = Math.max(...normal.queryEntities.ofTypes("automationEvent").get().map((event) => event.fields.positionTicks.value));
+    expect(spedEnd).toBeLessThan(normalEnd);
+    expect(canonicalHash(nativeStructuralReadback(sped))).not.toBe(canonicalHash(nativeStructuralReadback(normal)));
+    expect(() => applyNativeOperations(document, [{ kind: "replaceSource", partId: "clip", region: { ...region, stretchMode: "resample", pitchShiftSemitones: 3 } }])).toThrow(/Pitch shifting needs preservePitch/);
+  });
+
   it("maps a resolved library sample's later interval and rejects an unresolved identity", async () => {
     const base = seedNativeDocument("Use a later library texture");
     const region = { id: "later-texture", sampleName: "samples/library-texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 14, bpm: 0, startTick: 3840, durationTicks: 1920, sourceStartSeconds: 4, sourceDurationSeconds: 3, playbackMode: "once" as const, gain: 0.35, provenance: "audiotool-library" as const };
