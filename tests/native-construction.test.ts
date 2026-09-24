@@ -16,6 +16,25 @@ describe("native construction contracts", () => {
     expect(arrival.noteRange).toEqual([67, 67]);
     expect(arrival.notePreview).toHaveLength(1);
   });
+  it("develops one motif instance without rewriting its shared source or kept material", async () => {
+    const base = seedNativeDocument("Let the returning phrase answer the opening");
+    const built = applyNativeOperations(base, [
+      { kind: "setStructure", bars: 8, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "Introduce" }, { id: "return", name: "Return", startBar: 4, endBar: 8, intent: "Answer" }] },
+      { kind: "defineMotif", motif: { id: "call", partId: "starting-voice", name: "Call", lengthTicks: 3840, notes: [{ id: "a", startTick: 0, durationTicks: 480, pitch: 60, velocity: 0.7 }, { id: "b", startTick: 960, durationTicks: 480, pitch: 64, velocity: 0.8 }] } },
+      { kind: "placeMotif", partId: "starting-voice", placement: { id: "first", motifId: "call", startTick: 0, repeats: 1, transpose: 0 } },
+      { kind: "placeMotif", partId: "starting-voice", placement: { id: "answer", motifId: "call", startTick: 15360, repeats: 1, transpose: 0 } },
+      { kind: "protect", partIds: [], motifIds: ["call"] }
+    ]);
+    const varied = applyNativeOperations(built, [{ kind: "varyMotifInstance", partId: "starting-voice", placementId: "answer", newMotifId: "answer-variation", name: "Answer variation", pitchShiftSemitones: 5, timeShiftTicks: 240, durationFactor: 0.75, velocityFactor: 0.9 }]);
+    expect(varied.motifs.find((value) => value.id === "call")?.notes).toEqual(built.motifs.find((value) => value.id === "call")?.notes);
+    expect(varied.parts[0]?.placements.map((value) => value.motifId)).toEqual(["call", "answer-variation"]);
+    expect(materializedNotes(varied, "starting-voice").map((value) => value.pitch)).toEqual([60, 64, 65, 69]);
+    expect(nativeMusicHash(varied)).not.toBe(nativeMusicHash(built));
+    expect((await validateNativeOffline(varied)).readback.noteEntities).toBe(4);
+    expect(() => applyNativeOperations(built, [{ kind: "varyMotifInstance", partId: "starting-voice", placementId: "answer", newMotifId: "bad", name: "Bad", velocityFactor: 1.5 }])).toThrow(/velocity range/);
+    const kept = applyNativeOperations(built, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
+    expect(() => applyNativeOperations(kept, [{ kind: "varyMotifInstance", partId: "starting-voice", placementId: "answer", newMotifId: "forbidden", name: "Forbidden", pitchShiftSemitones: 2 }])).toThrow(/Protected part/);
+  });
   it("keeps generated editorial titles on a word boundary", () => {
     const title = seedNativeDocument("Build an evolving 64-bar ambient journey with a slow lead and spacious transitions into a final release").title;
     expect(title.length).toBeLessThanOrEqual(42);

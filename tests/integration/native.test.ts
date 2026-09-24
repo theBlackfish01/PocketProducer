@@ -497,8 +497,8 @@ describe("audio-independent native job lifecycle", () => {
     const accepted = await createNativeJob({ ownerId, projectId, kind: "native-revision", idempotencyKey: "scripted-targeted-instance", request, expectedHeadId: base.id });
     const job = await claim(accepted.id);
     const session = new NativeToolSession(job, base.document);
-    const motif = { ...original, id: "soft-pulse-bloom-sparse", name: "Sparse Bloom pulse", notes: original.notes.filter((_event, index) => index % 2 === 0) };
-    const operations = [{ kind: "defineMotif", motif }, { kind: "replacePlacements", partId: "soft-pulse", placements: part.placements.map((value) => value.id === oldFourth.id ? { ...value, motifId: motif.id } : value) }];
+    const motifId = "soft-pulse-bloom-sparse";
+    const operations = [{ kind: "varyMotifInstance", partId: "soft-pulse", placementId: oldFourth.id, newMotifId: motifId, name: "Sparse Bloom pulse", omitEvery: 2 }];
     const model = fakeModel()
       .respondWithTools([{ name: "inspect_native_part", args: { partId: "soft-pulse" } }])
       .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "sparse-bloom-instance", operations } }])
@@ -509,7 +509,7 @@ describe("audio-independent native job lifecycle", () => {
       const produced = await produceNative({ session, direction: request.direction, mode: "revision", sources: [], targetPartId: "soft-pulse", targetSectionId: "section-2", scriptedModel: model });
       expect(model.callCount).toBe(4);
       expect(session.document.parts.find((value) => value.id === "soft-pulse")!.placements.find((value) => value.id === oldThird.id)!.motifId).toBe(original.id);
-      expect(session.document.parts.find((value) => value.id === "soft-pulse")!.placements.find((value) => value.id === oldFourth.id)!.motifId).toBe(motif.id);
+      expect(session.document.parts.find((value) => value.id === "soft-pulse")!.placements.find((value) => value.id === oldFourth.id)!.motifId).toBe(motifId);
       expect(protectedPartHash(session.document, "lead")).toBe(protectedPartHash(base.document, "lead"));
       expect(protectedPartHash(session.document, "wide-pad")).toBe(protectedPartHash(base.document, "wide-pad"));
       await commitNativeRevision(job, session.document, produced.summary, produced);

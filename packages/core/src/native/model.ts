@@ -160,6 +160,7 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("addPart"), part }),
   z.object({ kind: z.literal("defineMotif"), motif }),
   z.object({ kind: z.literal("replaceMotif"), motif }),
+  z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
   z.object({ kind: z.literal("placeMotif"), partId: id, placement: part.shape.placements.unwrap().element }),
   z.object({ kind: z.literal("replacePlacements"), partId: id, placements: part.shape.placements.unwrap() }),
   z.object({ kind: z.literal("addNotes"), partId: id, notes: z.array(note).min(1).max(256) }),
@@ -246,6 +247,21 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "addPart": next.parts.push(op.part); break;
       case "defineMotif": next.motifs.push(op.motif); break;
       case "replaceMotif": { const index = next.motifs.findIndex((value) => value.id === op.motif.id); if (index < 0) throw new Error(`Unknown motif ${op.motif.id}`); next.motifs[index] = op.motif; break; }
+      case "varyMotifInstance": {
+        const item = findPart(op.partId);
+        const placement = item.placements.find((value) => value.id === op.placementId);
+        if (!placement) throw new Error(`Unknown placement ${op.placementId} on ${op.partId}`);
+        const source = next.motifs.find((value) => value.id === placement.motifId && value.partId === op.partId);
+        if (!source || !source.notes.length) throw new Error("A nonempty source motif is required for local variation");
+        if (next.motifs.some((value) => value.id === op.newMotifId)) throw new Error(`Motif ID ${op.newMotifId} already exists`);
+        const pitchShift = op.pitchShiftSemitones ?? 0, timeShift = op.timeShiftTicks ?? 0, durationFactor = op.durationFactor ?? 1, velocityFactor = op.velocityFactor ?? 1;
+        if (!pitchShift && !timeShift && durationFactor === 1 && velocityFactor === 1 && !op.omitEvery) throw new Error("A motif variation must change musical material");
+        const notes = source.notes.filter((_, index) => !op.omitEvery || (index + 1) % op.omitEvery !== 0).map((value) => ({ ...value, pitch: value.pitch + pitchShift, startTick: value.startTick + timeShift, durationTicks: Math.max(1, Math.round(value.durationTicks * durationFactor)), velocity: Number((value.velocity * velocityFactor).toFixed(4)) }));
+        if (!notes.length || notes.some((value) => value.startTick < 0 || value.startTick + value.durationTicks > source.lengthTicks || value.pitch < 0 || value.pitch > 127 || value.velocity < 0.01 || value.velocity > 1)) throw new Error("Motif variation exceeds the original phrase bounds, MIDI range or velocity range");
+        next.motifs.push({ ...source, id: op.newMotifId, name: op.name, notes });
+        placement.motifId = op.newMotifId;
+        break;
+      }
       case "placeMotif": findPart(op.partId).placements.push(op.placement); break;
       case "replacePlacements": findPart(op.partId).placements = op.placements; break;
       case "addNotes": findPart(op.partId).notes.push(...op.notes); break;
