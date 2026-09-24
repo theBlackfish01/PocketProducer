@@ -1,5 +1,11 @@
 # Verification record
 
+## Post-`69baa7a` native reliability follow-up (2026-09-24)
+
+Ordinary checks use fixture/scripted providers and the dedicated `_test` database with credentials excluded. Final runs passed `pnpm check` (lint, types, 14 unit files / 70 tests, build), `pnpm test:integration` (2 files / 44 tests), and `pnpm test:e2e` (seven Chromium journeys, rerun after partial-card polish; desktop/tablet/phone/partial-draft captures). No provider request was dispatched. `pnpm budget:status` read the existing ledger without spending.
+
+New production-path tests emit concurrent mutations and mixed tool calls through the actual Deep Agent wrapper, inspect the next model input, commit/restart/replay, exercise cancellation and corrupt a disposable historical step to confirm fail-closed detection. Other tests run a library-only job through the worker, drift a real SDK preset payload under unchanged metadata before synchronization, and compare independent SDK pointers/values for sidechain, master, shared delay/send automation and Beatbox8 voice shaping. Unit tests cover negative/optional role language, sectional-versus-total duration, and section edits that preserve crossing/outside material. Browser captures are emulated viewports and do not prove real-device input, native audio or live Audiotool.
+
 ## Post-`cb64447` native construction pass (2026-09-24)
 
 `pnpm check` passed lint, strict typecheck, 13 unit files / 61 tests and production Vite build (existing large lazy SDK chunk warning). `pnpm test:integration` passed 2 files / 37 tests on the isolated PostgreSQL database with migration 012 applied, including expired optional Audiotool-library handling. `pnpm test:e2e` passed six Chromium journeys in the final 1.1-minute run. No ordinary test can access provider credentials. No live OpenAI/Gemini/Audiotool request was dispatched for this pass.

@@ -1,10 +1,16 @@
 import type { AudiotoolClient } from "@audiotool/nexus";
 import type { NativeDocument } from "./model.js";
+import { canonicalHash } from "../domain/composition.js";
 
 export type NativeLibraryClient = Pick<AudiotoolClient, "samples" | "presets">;
 export type NativePreset = Awaited<ReturnType<NativeLibraryClient["presets"]["get"]>>;
 export interface LibrarySample { kind: "sample"; name: string; displayName: string; ownerName: string; durationSeconds: number; bpm: number; sampleKind: "one-shot" | "loop"; visibility: "public" | "unlisted"; tags: string[] }
-export interface LibraryPreset { kind: "preset"; name: string; displayName: string; ownerName: string; deviceType: string; tags: string[] }
+export interface LibraryPreset { kind: "preset"; name: string; displayName: string; ownerName: string; deviceType: string; tags: string[]; contentHash: string }
+
+export function nativePresetFingerprint(preset: NativePreset): string {
+  if (!preset.data || typeof preset.data !== "object") throw new NativeLibraryError("invalid", "Preset has no inspectable configuration data");
+  return canonicalHash({ deviceType: preset.entityType, data: preset.data });
+}
 
 export class NativeLibraryError extends Error {
   readonly statusCode: number;
@@ -21,6 +27,8 @@ export interface NativeLibrary {
   getSample(name: string): Promise<LibrarySample>;
   searchPresets(deviceType: NativePresetType, query: string): Promise<{ presets: LibraryPreset[]; provenance: "Audiotool preset metadata" }>;
   getPreset(name: string): Promise<{ metadata: LibraryPreset; preset: NativePreset }>;
+  searchGmSounds(query: string, family: "instrument" | "drums"): Promise<{ sounds: Array<{ id: string; slug: string; displayName: string; category: string; program: number; description?: string }>; provenance: "Pinned Nexus GM catalog; selection still requires a live preset fetch" }>;
+  getGmSound(slug: string, family: "instrument" | "drums"): Promise<{ metadata: LibraryPreset; preset: NativePreset }>;
 }
 
 export function createNativeLibrary(client: NativeLibraryClient | null): NativeLibrary {
@@ -33,7 +41,7 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
   const normalizePreset = (value: NativePreset): LibraryPreset => {
     const type = value.entityType;
     if (!presetName.test(value.meta.name) || !allowedPresetTypes.some((candidate) => candidate === type)) throw new NativeLibraryError("invalid", "Preset is not compatible with a supported native instrument");
-    return { kind: "preset", name: value.meta.name, displayName: value.meta.displayName, ownerName: value.meta.ownerName, deviceType: type, tags: [...value.meta.tags] };
+    return { kind: "preset", name: value.meta.name, displayName: value.meta.displayName, ownerName: value.meta.ownerName, deviceType: type, tags: [...value.meta.tags], contentHash: nativePresetFingerprint(value) };
   };
   return {
     async searchSamples(query: string, pageToken = "") {
@@ -59,6 +67,20 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
       if (!presetName.test(name)) throw new NativeLibraryError("invalid", "Invalid preset identifier");
       try { const preset = await requireClient().presets.get(name); return { metadata: normalizePreset(preset), preset }; }
       catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "Preset lookup failed"); }
+    },
+    searchGmSounds(query: string, family: "instrument" | "drums") {
+      if (query.length > 80) throw new NativeLibraryError("invalid", "Use a short sound search query");
+      const presets = requireClient().presets;
+      const items = family === "drums" ? presets.gmDrums : presets.gmInstruments;
+      const needle = query.trim().toLowerCase();
+      const sounds = items.filter((item) => !needle || `${item.displayName} ${item.category} ${item.tags.join(" ")} ${item.description ?? ""}`.toLowerCase().includes(needle)).slice(0, 16).map((item) => ({ id: item.id, slug: item.slug, displayName: item.displayName, category: item.category, program: item.program, ...(item.description ? { description: item.description } : {}) }));
+      return Promise.resolve({ sounds, provenance: "Pinned Nexus GM catalog; selection still requires a live preset fetch" as const });
+    },
+    async getGmSound(slug: string, family: "instrument" | "drums") {
+      const presets = requireClient().presets;
+      const item = family === "drums" ? presets.gmDrums.find((value) => value.slug === slug) : presets.gmInstruments.find((value) => value.slug === slug);
+      if (!item) throw new NativeLibraryError("not-found", "The requested GM sound is not in the pinned catalog");
+      return this.getPreset(item.id);
     }
   };
 }
@@ -71,6 +93,8 @@ export async function resolveNativePresets(document: NativeDocument, library: Na
     if (result[reference.name]) continue;
     const resolved = await library!.getPreset(reference.name);
     if (resolved.metadata.deviceType !== type || resolved.metadata.displayName !== reference.displayName || resolved.metadata.ownerName !== reference.ownerName) throw new NativeLibraryError("invalid", `Preset ${reference.name} changed or is no longer compatible`);
+    if (!reference.contentHash) throw new NativeLibraryError("invalid", `Historical preset ${reference.name} has no accepted configuration fingerprint; explicitly reselect it in a new revision before synchronization`);
+    if (resolved.metadata.contentHash !== reference.contentHash) throw new NativeLibraryError("invalid", `Preset ${reference.name} configuration changed; explicitly choose the new sound in a revision`);
     result[reference.name] = resolved.preset;
   }
   return result;

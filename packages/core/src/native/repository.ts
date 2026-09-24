@@ -136,9 +136,38 @@ export async function nativeSnapshot(ownerId: string, projectId: string) {
   };
 }
 
-export async function loadNativeSteps(jobId: string): Promise<Array<{ key: string; operations: NativeOperation[]; resultHash: string }>> {
-  const result = await getPool().query("SELECT step_key,operations,result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal", [jobId]);
-  return result.rows.map((row) => ({ key: String(row.step_key), operations: row.operations as NativeOperation[], resultHash: String(row.result_hash) }));
+export async function nativeDraftView(ownerId: string, projectId: string, jobId: string) {
+  const found = await getPool().query<{ kind: string; state: string; error_code: string | null; request: Record<string, unknown> }>(
+    "SELECT j.kind,j.state,j.error_code,j.request FROM job j JOIN project p ON p.id=j.project_id WHERE j.id=$1 AND j.owner_id=$2 AND p.owner_id=$2 AND j.project_id=$3 AND p.deleted_at IS NULL",
+    [jobId, ownerId, projectId]
+  );
+  const row = found.rows[0];
+  if (!row || !["native-generation", "native-revision"].includes(row.kind)) throw Object.assign(new Error("Native request not found"), { statusCode: 404 });
+  const request = row.request;
+  const baseRevisionId = typeof request.baseNativeRevisionId === "string" ? request.baseNativeRevisionId : null;
+  const direction = typeof request.direction === "string" ? request.direction : "Construct an editable piece";
+  const { NativeToolSession, seedNativeDocument } = await import("./producer.js");
+  const { applyNativeOperations, setNativeProtections } = await import("./model.js");
+  const base = baseRevisionId ? (await getNativeRevision(ownerId, projectId, baseRevisionId)).document : seedNativeDocument(direction);
+  const protectionChange = request.protectionChange && typeof request.protectionChange === "object" ? request.protectionChange as { expectedPartIds?: unknown; desiredPartIds?: unknown } : null;
+  const requestedLocks = Array.isArray(request.protectedPartIds) ? request.protectedPartIds.filter((value): value is string => typeof value === "string") : [];
+  const start = protectionChange && Array.isArray(protectionChange.expectedPartIds) && Array.isArray(protectionChange.desiredPartIds)
+    ? setNativeProtections(base, protectionChange.expectedPartIds as string[], protectionChange.desiredPartIds as string[])
+    : requestedLocks.length ? applyNativeOperations(base, [{ kind: "protect", partIds: requestedLocks, motifIds: [] }]) : base;
+  const session = new NativeToolSession({ id: jobId, request } as JobRecord, start);
+  await session.replay();
+  const currentHead = await getPool().query<{ revision_id: string }>("SELECT revision_id FROM native_project_head WHERE owner_id=$1 AND project_id=$2", [ownerId, projectId]);
+  const expectedHead = typeof request.expectedNativeHeadId === "string" ? request.expectedNativeHeadId : null;
+  const headMatches = (currentHead.rows[0]?.revision_id ?? null) === expectedHead;
+  const effects = await getPool().query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [jobId]);
+  const canContinue = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effects.rows.length < getConfig().MAX_MODEL_CALLS_PER_JOB && effects.rows.every((effect) => effect.state === "succeeded" && effect.cost_status === "observed");
+  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : effects.rows.length >= getConfig().MAX_MODEL_CALLS_PER_JOB ? "This request has used its configured model-call allowance." : effects.rows.some((effect) => effect.state !== "succeeded" || effect.cost_status !== "observed") ? "A provider outcome needs reconciliation before continuation." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
+  return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, canContinue, continuationReason };
+}
+
+export async function loadNativeSteps(jobId: string): Promise<Array<{ key: string; operations: NativeOperation[]; predecessorHash: string | null; resultHash: string }>> {
+  const result = await getPool().query("SELECT step_key,operations,predecessor_hash,result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal", [jobId]);
+  return result.rows.map((row) => ({ key: String(row.step_key), operations: row.operations as NativeOperation[], predecessorHash: typeof row.predecessor_hash === "string" ? row.predecessor_hash : null, resultHash: String(row.result_hash) }));
 }
 
 export async function loadConfirmedNativeModelCalls(jobId: string): Promise<Array<{ usage: { inputTokens: number; outputTokens: number }; costMicrousd: number }> | null> {
@@ -211,7 +240,7 @@ export async function recoverConfirmedNativeProducerResult(job: JobRecord, effec
   finally { client.release(); }
 }
 
-export async function saveNativeStep(job: JobRecord, key: string, operations: NativeOperation[], document: NativeDocument): Promise<void> {
+export async function saveNativeStep(job: JobRecord, key: string, operations: NativeOperation[], predecessorHash: string, document: NativeDocument): Promise<void> {
   if (!/^[a-z0-9-]{1,96}$/.test(key)) throw new Error("Invalid native step key");
   const operationHash = canonicalHash(operations);
   const resultHash = canonicalHash(document);
@@ -220,12 +249,13 @@ export async function saveNativeStep(job: JobRecord, key: string, operations: Na
     await client.query("BEGIN");
     const active = await client.query("SELECT 1 FROM job WHERE id=$1 AND owner_id=$2 AND state='running' AND lease_generation=$3 AND attempt_id=$4 AND lease_owner=$5 AND lease_until>now() AND deadline_at>now() AND cancellation_requested_at IS NULL FOR UPDATE", [job.id, job.ownerId, job.leaseGeneration, job.attemptId, job.leaseOwner]);
     if (active.rowCount !== 1) throw new JobControlError("LEASE_LOST", "Native step lost its lease or was cancelled");
-    const prior = await client.query<{ operation_hash: string; result_hash: string }>("SELECT operation_hash,result_hash FROM native_job_step WHERE job_id=$1 AND step_key=$2", [job.id, key]);
+    const prior = await client.query<{ operation_hash: string; result_hash: string; predecessor_hash: string | null }>("SELECT operation_hash,result_hash,predecessor_hash FROM native_job_step WHERE job_id=$1 AND step_key=$2", [job.id, key]);
     if (prior.rows[0]) {
-      if (prior.rows[0].operation_hash !== operationHash || prior.rows[0].result_hash !== resultHash) throw new Error("NATIVE_STEP_REPLAY_CONFLICT");
+      if (prior.rows[0].operation_hash !== operationHash || prior.rows[0].result_hash !== resultHash || (prior.rows[0].predecessor_hash && prior.rows[0].predecessor_hash !== predecessorHash)) throw new Error("NATIVE_STEP_REPLAY_CONFLICT");
     } else {
-      const ordinal = await client.query<{ next: number }>("SELECT COALESCE(MAX(ordinal),0)+1 AS next FROM native_job_step WHERE job_id=$1", [job.id]);
-      await client.query("INSERT INTO native_job_step(job_id,step_key,ordinal,operation_hash,operations,result_hash,result) VALUES($1,$2,$3,$4,$5,$6,$7)", [job.id, key, ordinal.rows[0]!.next, operationHash, JSON.stringify(operations), resultHash, JSON.stringify({ documentHash: resultHash, applied: operations.length })]);
+      const latest = await client.query<{ ordinal: number; result_hash: string }>("SELECT ordinal,result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal DESC LIMIT 1", [job.id]);
+      if (latest.rows[0] && latest.rows[0].result_hash !== predecessorHash) throw new Error("NATIVE_STEP_PREDECESSOR_CONFLICT");
+      await client.query("INSERT INTO native_job_step(job_id,step_key,ordinal,predecessor_hash,operation_hash,operations,result_hash,result) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [job.id, key, (latest.rows[0]?.ordinal ?? 0) + 1, predecessorHash, operationHash, JSON.stringify(operations), resultHash, JSON.stringify({ documentHash: resultHash, applied: operations.length })]);
     }
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }

@@ -103,6 +103,27 @@ test("native phone layout preserves direction focus and compare dialog return", 
   await page.screenshot({ path: `${evidence}/native-mobile.png`, fullPage: true });
 });
 
+test("saved partial work stays separate from the selected version and explains an exhausted continuation", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("A sparse 12-bar theme for a structural draft review");
+  await page.getByRole("button", { name: "Create arrangement" }).click();
+  await expect(page.getByText(/1 saved version/)).toBeVisible({ timeout: 90_000 });
+  const projectId = (await (await page.request.get("/api/v1/projects")).json() as { projects: Array<{ id: string }> }).projects[0]!.id;
+  const selected = await (await page.request.get(`/api/v1/projects/${projectId}/native`)).json() as { currentRevisionId: string; current: { document: Record<string, unknown> } };
+  const jobId = crypto.randomUUID();
+  await page.route(`**/api/v1/jobs/${jobId}`, async (route) => route.fulfill({ json: { id: jobId, project_id: projectId, kind: "native-revision", state: "needs_attention", stage: "partial", error_code: "NATIVE_PARTIAL", error_message: null, result_revision_id: null, events: [] } }));
+  await page.route(`**/api/v1/projects/${projectId}/native/requests/${jobId}/draft`, async (route) => route.fulfill({ json: { jobId, state: "needs_attention", selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 2, document: { ...selected.current.document, title: "Unselected draft" }, documentHash: "fixture-draft-hash", canContinue: false, continuationReason: "This request has used its configured model-call allowance." } }));
+  await page.evaluate(({ key, receipt }) => localStorage.setItem(key, JSON.stringify(receipt)), { key: `pocket-producer:native-receipt:${projectId}`, receipt: { operation: "native-revision", key: crypto.randomUUID(), jobId, signature: selected.currentRevisionId } });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Work in progress" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Unfinished arrangement preview" })).toContainText("Not your current version · 2 confirmed changes");
+  await expect(page.getByText("This request has used its configured model-call allowance.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue saved draft" })).toHaveCount(0);
+  await expect(page.getByText(/1 saved version/)).toBeVisible();
+  await page.screenshot({ path: `${evidence}/native-partial.png`, fullPage: true });
+});
+
 test("tablet progressively discloses a large arrangement without horizontal overflow", async ({ page }) => {
   await page.goto("/");
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();

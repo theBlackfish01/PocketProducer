@@ -2,7 +2,7 @@ import { createOfflineDocument } from "@audiotool/nexus/node";
 import { describe, expect, it } from "vitest";
 import { canonicalHash } from "../domain/composition.js";
 import { applyNativeSnapshot, nativeStructuralReadback, toNexusTicks } from "./adapter.js";
-import type { NativePreset } from "./library.js";
+import { nativePresetFingerprint, type NativePreset } from "./library.js";
 import { applyNativeOperations } from "./model.js";
 import { seedNativeDocument } from "./producer.js";
 
@@ -52,6 +52,52 @@ describe("semantic native readback", () => {
     expect(() => applyNativeOperations(routed, [{ kind: "upsertGroup", group: { id: "voices", name: "Voices", gain: 0.8, pan: -0.2 } }])).toThrow(/Protected part/);
     expect(() => applyNativeOperations(routed, [{ kind: "setReverbBus", bus: { id: "room", name: "Shared room", roomSize: 0.2, preDelayMs: 90, damp: 0.32 } }])).toThrow(/Protected part/);
     expect(() => applyNativeOperations(base, [{ kind: "routePart", partId: "starting-voice", groupId: "missing" }])).toThrow();
+  });
+  it("routes a bounded group sidechain and master strip with protected shared dependencies", async () => {
+    const base = seedNativeDocument("A ducked pad over a pulse");
+    const pulse = { id: "pulse", name: "Pulse", role: "bass" as const, device: { type: "pulverisateur" as const, parameters: {} }, gain: 0.6, pan: 0, notes: [{ id: "onset", startTick: 0, durationTicks: 480, pitch: 36, velocity: 0.9 }], placements: [], sourceRegions: [], effects: [], automation: [] };
+    const compressor = { thresholdDb: -22, ratio: 3, attackMs: 8, releaseMs: 180, makeupGainDb: 1, detectionModeIndex: 2 as const, isActive: true };
+    const routed = applyNativeOperations(base, [
+      { kind: "addPart", part: pulse },
+      { kind: "upsertGroup", group: { id: "pad-bus", name: "Pad bus", gain: 0.78, pan: 0, compressor, sidechainFromPartId: "pulse" } },
+      { kind: "routePart", partId: "starting-voice", groupId: "pad-bus" },
+      { kind: "setMaster", master: { gain: 0.82, pan: 0.1, limiterEnabled: true } },
+      { kind: "protect", partIds: ["starting-voice"], motifIds: [] }
+    ]);
+    const offline = await createOfflineDocument({ validated: true });
+    await applyNativeSnapshot(offline, routed);
+    const group = offline.queryEntities.ofTypes("mixerGroup").getOne()!;
+    const master = offline.queryEntities.ofTypes("mixerMaster").getOne()!;
+    const cable = offline.queryEntities.ofTypes("mixerSideChainCable").getOne()!;
+    expect(group.fields.compressor.fields.thresholdDb.value).toBeCloseTo(-22);
+    expect(group.fields.compressor.fields.ratio.value).toBeCloseTo(3);
+    expect(cable.fields.to.value).toEqual(group.fields.compressor.fields.sideChainInput.location);
+    expect(master.fields.postGain.value).toBeCloseTo(0.82);
+    expect(master.fields.limiterEnabled.value).toBe(true);
+    expect(() => applyNativeOperations(routed, [{ kind: "setMaster", master: { gain: 0.5, pan: 0, limiterEnabled: false } }])).toThrow(/Protected part/);
+    expect(() => applyNativeOperations(routed, [{ kind: "addNotes", partId: "pulse", notes: [{ id: "extra", startTick: 960, durationTicks: 480, pitch: 36, velocity: 0.9 }] }])).toThrow(/Protected part/);
+    expect(() => applyNativeOperations(base, [{ kind: "upsertGroup", group: { id: "self", name: "Self", gain: 0.7, pan: 0, compressor, sidechainFromPartId: "starting-voice" } }, { kind: "routePart", partId: "starting-voice", groupId: "self" }])).toThrow(/cannot be sidechained/);
+  });
+  it("maps distinct shared room and delay returns with independent send automation", async () => {
+    const base = seedNativeDocument("A lead with shared space and echoes");
+    const routed = applyNativeOperations(base, [
+      { kind: "setReverbBus", bus: { id: "room", name: "Room", roomSize: 0.64, preDelayMs: 45, damp: 0.4 } },
+      { kind: "setDelayBus", bus: { id: "echo", name: "Echo", feedbackFactor: 0.4, stepCount: 3, stepLengthIndex: 2 } },
+      { kind: "setSend", partId: "starting-voice", busId: "room", gain: 0.2 },
+      { kind: "setSend", partId: "starting-voice", busId: "echo", gain: 0.35 },
+      { kind: "addAutomation", partId: "starting-voice", automation: { id: "echo-rise", target: "send.echo.gain", points: [{ tick: 0, value: 0.1 }, { tick: 3840, value: 0.8 }] } }
+    ]);
+    const doc = await createOfflineDocument({ validated: true });
+    await applyNativeSnapshot(doc, routed);
+    expect(doc.queryEntities.ofTypes("mixerReverbAux").get()).toHaveLength(1);
+    const echo = doc.queryEntities.ofTypes("mixerDelayAux").getOne()!;
+    expect(echo.fields.feedbackFactor.value).toBeCloseTo(0.4);
+    expect(echo.fields.stepCount.value).toBe(3);
+    expect(doc.queryEntities.ofTypes("mixerAuxRoute").get()).toHaveLength(2);
+    expect(doc.queryEntities.ofTypes("automationTrack").get()).toHaveLength(1);
+    expect(() => applyNativeOperations(routed, [{ kind: "removeDelayBus" }])).toThrow(/unavailable return/);
+    const kept = applyNativeOperations(routed, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
+    expect(() => applyNativeOperations(kept, [{ kind: "setDelayBus", bus: { id: "echo", name: "Echo", feedbackFactor: 0.7, stepCount: 3, stepLengthIndex: 2 } }])).toThrow(/Protected part/);
   });
   it("maps device, effect and send automation to their SDK parameters with curve shape", async () => {
     const base = seedNativeDocument("Develop an animated routed voice");
@@ -166,6 +212,17 @@ describe("semantic native readback", () => {
     expect(synth.fields.filter.fields.resonance.value).toBeCloseTo(1.31);
     expect(() => applyNativeOperations(base, [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: { unisonoCount: 1, unisonoDetuneSemitones: 0.5 } } }])).toThrow();
   });
+  it("maps drum-machine voice shaping while keeping its step grid boolean", async () => {
+    const base = seedNativeDocument("A shaped drum pulse");
+    const document = applyNativeOperations(base, [{ kind: "setDevice", partId: "starting-voice", device: { type: "beatbox8", parameters: { accentAmount: 0.32, "bassdrum.tone": 0.21, "bassdrum.decay": 0.7, "snaredrum.snappy": 0.43 } } }]);
+    const offline = await createOfflineDocument({ validated: true });
+    await applyNativeSnapshot(offline, document);
+    const drums = offline.queryEntities.ofTypes("beatbox8").getOne()!;
+    expect(drums.fields.accentAmount.value).toBeCloseTo(0.32);
+    expect(drums.fields.bassdrum.fields.tone.value).toBeCloseTo(0.21);
+    expect(drums.fields.bassdrum.fields.decay.value).toBeCloseTo(0.7);
+    expect(drums.fields.snaredrum.fields.snappy.value).toBeCloseTo(0.43);
+  });
 
   it("applies an SDK preset then retains an explicit canonical parameter override", async () => {
     const source = await createOfflineDocument({ validated: true });
@@ -174,7 +231,7 @@ describe("semantic native readback", () => {
     const name = "presets/fixture-sound";
     const preset = { entityType: "heisenberg", _presetName: name, data, meta: { name, displayName: "Fixture sound", ownerName: "users/fixture", tags: [] } } as unknown as NativePreset;
     const base = seedNativeDocument("Use a chosen synth sound");
-    const document = applyNativeOperations(base, [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: { "operatorA.gain": 0.81 }, preset: { name, displayName: "Fixture sound", ownerName: "users/fixture" } } }]);
+    const document = applyNativeOperations(base, [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: { "operatorA.gain": 0.81 }, preset: { name, displayName: "Fixture sound", ownerName: "users/fixture", contentHash: nativePresetFingerprint(preset) } } }]);
     const offline = await createOfflineDocument({ validated: true });
     await applyNativeSnapshot(offline, document, {}, { [name]: preset });
     const synth = offline.queryEntities.ofTypes("heisenberg").getOne()!;

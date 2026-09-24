@@ -6,7 +6,7 @@ import {
   analyzePreview, appendAttemptEvent, attemptBoundedDrumRepair, canonicalHash, claimNextJob, closePool, commitCancelled, commitExportPreparation, commitRevision, compileArrangement, completeProviderEffect, compositionSourceLineage, createAudiotoolServerClient, decodeWav, dispatchOutbox, expireJob, exportManifestToAudiotool, exportResumeState, failJob, failProviderEffect,
   getConfig, getRevision, heartbeat, isCancelled, markEffectDispatched, needsAttentionJob, produceArrangement, protectedTrackHash, providerAvailability, recordExportProgress, requeueJob, reserveProviderEffect,
   measureDecodedWav, profileOwnedSourceWav, renderAssets, renderComposition, safeStoragePath, simplifyDrums, validateComposition, writeNexusManifest,
-  AudiotoolSessionExpiredError, JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeLibraryClient, type NativeRemoteClient, type NativeSource, type SourceDescriptor
+  AudiotoolSessionExpiredError, JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeHasMaterial, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeLibrary, type NativeLibraryClient, type NativeRemoteClient, type NativeSource, type SourceDescriptor
 } from "@pocket/core";
 
 const config = getConfig();
@@ -245,7 +245,8 @@ async function revision(job: JobRecord, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<void> {
+interface OfflineNativeConstruction { library: NativeLibrary; scriptedModel: NonNullable<Parameters<typeof produceNative>[0]["scriptedModel"]> }
+async function nativeConstruction(job: JobRecord, signal: AbortSignal, offlineInput?: OfflineNativeConstruction): Promise<void> {
   const direction = typeof job.request.direction === "string" ? job.request.direction : "Construct an editable piece";
   const baseId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : null;
   const base = baseId ? (await getNativeRevision(job.ownerId, job.projectId, baseId)).document : seedNativeDocument(direction);
@@ -254,8 +255,8 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<
   const protectedBase = protectionChange && Array.isArray(protectionChange.expectedPartIds) && Array.isArray(protectionChange.desiredPartIds)
     ? setNativeProtections(base, protectionChange.expectedPartIds as string[], protectionChange.desiredPartIds as string[])
     : protectedPartIds.length ? applyNativeOperations(base, [{ kind: "protect", partIds: protectedPartIds, motifIds: [] }]) : base;
-  const libraryConnection = !config.FIXTURE_MODE && config.AUDIOTOOL_CLIENT_ID ? await optionalNativeLibraryConnection(job.ownerId, config.AUDIOTOOL_CLIENT_ID) : null;
-  const library = libraryConnection ? createNativeLibrary(libraryConnection.client as unknown as NativeLibraryClient) : null;
+  const libraryConnection = !offlineInput && !config.FIXTURE_MODE && config.AUDIOTOOL_CLIENT_ID ? await optionalNativeLibraryConnection(job.ownerId, config.AUDIOTOOL_CLIENT_ID) : null;
+  const library = offlineInput?.library ?? (libraryConnection ? createNativeLibrary(libraryConnection.client as unknown as NativeLibraryClient) : null);
   const session = new NativeToolSession(job, protectedBase, true, library);
   const selected = Array.isArray(job.request.sourceAssetIds) ? job.request.sourceAssetIds.filter((value): value is string => typeof value === "string") : [];
   const assets = selected.length ? await getPool().query<{ id: string; name: string; content_hash: string; duration_seconds: number }>("SELECT id,name,content_hash,duration_seconds FROM asset WHERE owner_id=$1 AND project_id=$2 AND kind='source' AND readiness='ready' AND id=ANY($3::uuid[])", [job.ownerId, job.projectId, selected]) : { rows: [] };
@@ -269,10 +270,10 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<
   throwIfAborted(signal, "Native construction interrupted");
   await stage(job, "constructing", "Building sections, instrument parts, motifs and automation");
   try {
-    const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), signal });
+    const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), ...(offlineInput ? { scriptedModel: offlineInput.scriptedModel } : {}), signal });
     await checkpoint(job);
     const document = nativeDocumentSchema.parse(session.document);
-    if (job.kind === "native-generation" && document.parts.every((part) => !part.notes.length && !part.placements.length && !part.sourceRegions.length)) throw new Error("Native producer returned no musical material");
+    if (job.kind === "native-generation" && !nativeHasMaterial(document)) throw new Error("Native producer returned no musical material");
     await stage(job, "validating", "Validating native notes, pattern regions, routing and automation in the pinned SDK");
     const presets = await resolveNativePresets(document, library);
     const librarySamples = await resolveNativeSamples(document, library);
@@ -509,14 +510,14 @@ async function exportRevision(job: JobRecord, signal: AbortSignal): Promise<void
   }
 }
 
-export async function processJob(job: JobRecord): Promise<void> {
+export async function processJob(job: JobRecord, offlineNative?: OfflineNativeConstruction): Promise<void> {
   try {
     if (await isCancelled(job)) return await commitCancelled(job);
     await withLeaseMonitor(job, async (signal) => {
       if (job.kind === "generation") await generation(job, signal);
       else if (job.kind === "revision") await revision(job, signal);
       else if (job.kind === "export") await exportRevision(job, signal);
-      else if (job.kind === "native-generation" || job.kind === "native-revision") await nativeConstruction(job, signal);
+      else if (job.kind === "native-generation" || job.kind === "native-revision") await nativeConstruction(job, signal, offlineNative);
       else if (job.kind === "native-sync") await nativeSynchronization(job, signal);
       else throw new Error("Native synchronization is not yet enabled for this worker");
     });

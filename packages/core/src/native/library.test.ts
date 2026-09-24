@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createNativeLibrary, NativeLibraryError, resolveNativeSamples, type NativeLibraryClient } from "./library.js";
-import { applyNativeOperations } from "./model.js";
+import { createOfflineDocument } from "@audiotool/nexus/node";
+import { applyNativeSnapshot } from "./adapter.js";
+import { createNativeLibrary, nativePresetFingerprint, NativeLibraryError, resolveNativePresets, resolveNativeSamples, type NativeLibraryClient, type NativePreset } from "./library.js";
+import { applyNativeOperations, protectedPartHash, setNativeProtections } from "./model.js";
 import { seedNativeDocument } from "./producer.js";
 
 const sample = { name: "samples/example", displayName: "Soft texture", ownerName: "users/example", durationSeconds: 12, bpm: 96, kind: "loop", visibility: "public", tags: ["texture"] };
@@ -34,5 +36,35 @@ describe("Audiotool resource boundary", () => {
     const library = fixture();
     await expect(library.getSample("not-an-id")).rejects.toBeInstanceOf(NativeLibraryError);
     await expect(library.getPreset("presets/not/a-name")).rejects.toMatchObject({ code: "invalid" });
+  });
+  it("pins actual preset configuration across protection and requires explicit adoption of historical references", async () => {
+    const name = "presets/stable-sound";
+    const meta = { name, displayName: "Stable sound", ownerName: "users/fixture", tags: [] };
+    const withGain = async (gain: number): Promise<NativePreset> => {
+      const source = await createOfflineDocument({ validated: true });
+      let data: unknown;
+      await source.modify((t) => { data = t.createPresetFor(t.create("heisenberg", { operatorA: { gain } })); });
+      return { entityType: "heisenberg", _presetName: name, data, meta } as unknown as NativePreset;
+    };
+    const original = await withGain(0.2), changed = await withGain(0.85);
+    expect(nativePresetFingerprint(original)).not.toBe(nativePresetFingerprint(changed));
+    const library = (current: NativePreset) => createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [], nextPageToken: "" }), get: () => Promise.resolve(new Error("missing")) }, presets: { search: () => Promise.resolve([current]), get: () => Promise.resolve(current) } } as unknown as NativeLibraryClient);
+    const reference = { name, displayName: meta.displayName, ownerName: meta.ownerName, contentHash: nativePresetFingerprint(original) };
+    const pinned = applyNativeOperations(seedNativeDocument("A kept lead"), [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: {}, preset: reference } }, { kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
+    const acceptedHash = protectedPartHash(pinned, "starting-voice");
+    const resolved = await resolveNativePresets(pinned, library(original));
+    const mapped = await createOfflineDocument({ validated: true });
+    await applyNativeSnapshot(mapped, pinned, {}, resolved);
+    expect(mapped.queryEntities.ofTypes("heisenberg").getOne()!.fields.operatorA.fields.gain.value).toBeCloseTo(0.2);
+    await expect(resolveNativePresets(pinned, library(changed))).rejects.toThrow(/configuration changed/);
+    await expect(applyNativeSnapshot(await createOfflineDocument({ validated: true }), pinned, {}, { [name]: changed })).rejects.toThrow(/drifted/);
+    expect(protectedPartHash(pinned, "starting-voice")).toBe(acceptedHash);
+    expect(() => applyNativeOperations(pinned, [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: {}, preset: { ...reference, contentHash: nativePresetFingerprint(changed) } } }])).toThrow(/Protected part/);
+    const unlocked = setNativeProtections(pinned, ["starting-voice"], []);
+    const updated = applyNativeOperations(unlocked, [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: {}, preset: { ...reference, contentHash: nativePresetFingerprint(changed) } } }]);
+    expect(protectedPartHash(updated, "starting-voice")).not.toBe(acceptedHash);
+    expect(await resolveNativePresets(updated, library(changed))).toHaveProperty(name);
+    const historical = applyNativeOperations(seedNativeDocument("Historical sound"), [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: {}, preset: { name, displayName: meta.displayName, ownerName: meta.ownerName } } }]);
+    await expect(resolveNativePresets(historical, library(original))).rejects.toThrow(/Historical preset/);
   });
 });

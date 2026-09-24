@@ -14,7 +14,7 @@ const nativePartShape = nativeDocumentSchema.shape.parts.element;
 export const nativeFormSchema = z.object({
   title: z.string().min(1).max(120), tempoBpm: z.number().int().min(40).max(220),
   meter: nativeDocumentSchema.shape.meter, sections: z.array(formSection).min(1).max(12),
-  groups: nativeDocumentSchema.shape.groups.unwrap().default([]), reverbBus: nativeDocumentSchema.shape.reverbBus.unwrap().optional(),
+  groups: nativeDocumentSchema.shape.groups.unwrap().default([]), reverbBus: nativeDocumentSchema.shape.reverbBus.unwrap().optional(), delayBus: nativeDocumentSchema.shape.delayBus.unwrap().optional(), master: nativeDocumentSchema.shape.master.unwrap().optional(),
   parts: z.array(z.object({
     id: formId, name: z.string().min(1).max(80), role: nativePartShape.shape.role,
     device: nativePartShape.shape.device, gain: z.number().min(0).max(1), pan: z.number().min(-1).max(1),
@@ -46,6 +46,8 @@ export function nativeFormOperations(raw: NativeForm, ownedSources: OwnedNativeS
   ];
   for (const group of form.groups) operations.push({ kind: "upsertGroup", group });
   if (form.reverbBus) operations.push({ kind: "setReverbBus", bus: form.reverbBus });
+  if (form.delayBus) operations.push({ kind: "setDelayBus", bus: form.delayBus });
+  if (form.master) operations.push({ kind: "setMaster", master: form.master });
   for (const item of form.parts) {
     const sourceRegions = item.sources.map((region) => {
       const source = sourceById.get(region.assetId);

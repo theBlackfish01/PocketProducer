@@ -10,6 +10,7 @@ export * from "./music/compiler.js";
 export * from "./native/catalog.js";
 export * from "./native/adapter.js";
 export * from "./native/model.js";
+export * from "./native/intent.js";
 export * from "./native/form.js";
 export * from "./native/resources.js";
 export * from "./native/library.js";

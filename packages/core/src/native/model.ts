@@ -13,7 +13,7 @@ export const nativeParameterRanges = {
   pulverisateur: { gain: [0, 1], tuneSemitones: [-12, 12], playModeIndex: [1, 2], glideTimeMs: [0, 10000],
     "filter.cutoffFrequencyHz": [18, 15500], "filter.resonance": [0, 1], "filter.filterSpacing": [-1, 1], "filter.modeIndex": [1, 2] },
   gakki: { gain: [0, 1] },
-  beatbox8: { gain: [0, 1] },
+  beatbox8: { gain: [0, 1], accentAmount: [0, 1], "bassdrum.gain": [0, 1], "bassdrum.tone": [0, 1], "bassdrum.decay": [0, 1], "snaredrum.gain": [0, 1], "snaredrum.tone": [0, 1], "snaredrum.snappy": [0, 1], "openHihat.decay": [0, 1] },
   audio: {},
   stompboxDelay: { feedbackFactor: [0, 1], mix: [0, 1], stepCount: [1, 7], stepLengthIndex: [1, 3] },
   stompboxReverb: { roomSizeFactor: [0, 1], preDelayTimeMs: [8, 500], feedbackFactor: [0, 1], mix: [0, 1] },
@@ -36,11 +36,14 @@ const note = z.object({ id, startTick: z.number().int().min(0), durationTicks: z
 const point = z.object({ tick: z.number().int().min(0), value: z.number().min(0).max(1), interpolation: z.enum(["step", "linear", "sloped"]).optional(), slope: z.number().min(-1).max(1).optional() }).superRefine((value, context) => { if (value.slope !== undefined && value.interpolation !== "sloped") context.addIssue({ code: "custom", message: "Automation slope requires sloped interpolation" }); });
 const automatableDeviceFields: Record<string, Set<string>> = {
   heisenberg: new Set(["gain", "glideMs", "velocityFactor", "operatorA.gain", "operatorB.gain", "filter.cutoffFrequencyHz", "filter.resonance", "envelopeMain.attackTimeNormalized", "envelopeMain.releaseTimeNormalized"]),
-  pulverisateur: new Set(["gain", "glideTimeMs", "filter.cutoffFrequencyHz", "filter.resonance"]), gakki: new Set(["gain"]), beatbox8: new Set(["gain"]), audio: new Set(["gain"])
+  pulverisateur: new Set(["gain", "glideTimeMs", "filter.cutoffFrequencyHz", "filter.resonance"]), gakki: new Set(["gain"]), beatbox8: new Set(["gain", "accentAmount", "bassdrum.gain", "bassdrum.tone", "bassdrum.decay", "snaredrum.gain", "snaredrum.tone", "snaredrum.snappy", "openHihat.decay"]), audio: new Set(["gain"])
 };
 const automatableEffectFields = new Set(["mix", "feedbackFactor", "cutoffFrequencyHz", "thresholdDb", "ratio", "releaseMs", "frequencyHz", "postGainDb"]);
-const mixerGroup = z.object({ id, name: z.string().min(1).max(80), gain: z.number().min(0).max(1.995), pan: z.number().min(-1).max(1), parentId: id.optional() });
+const mixerCompressor = z.object({ thresholdDb: z.number().min(-48).max(0), ratio: z.number().min(1).max(50), attackMs: z.number().min(0.001).max(200), releaseMs: z.number().min(0.001).max(2000), makeupGainDb: z.number().min(-24).max(24), detectionModeIndex: z.union([z.literal(1), z.literal(2)]).default(1), isActive: z.boolean().default(true) });
+const mixerGroup = z.object({ id, name: z.string().min(1).max(80), gain: z.number().min(0).max(1.995), pan: z.number().min(-1).max(1), parentId: id.optional(), compressor: mixerCompressor.optional(), sidechainFromPartId: id.optional() });
+const master = z.object({ gain: z.number().min(0).max(1.995), pan: z.number().min(-1).max(1), limiterEnabled: z.boolean() });
 const reverbBus = z.object({ id, name: z.string().min(1).max(80), roomSize: z.number().min(0).max(1), preDelayMs: z.number().min(8).max(500), damp: z.number().min(0).max(1) });
+const delayBus = z.object({ id, name: z.string().min(1).max(80), feedbackFactor: z.number().min(0).max(0.8), stepCount: z.number().int().min(1).max(7), stepLengthIndex: z.union([z.literal(1), z.literal(2), z.literal(3)]) });
 const send = z.object({ busId: id, gain: z.number().min(0).max(1) });
 const sourcePlayback = { playbackRate: z.number().min(0.5).max(2).optional(), stretchMode: z.enum(["resample", "preservePitch"]).optional(), pitchShiftSemitones: z.number().min(-24).max(24).optional() };
 const libraryRegion = z.object({ id, sampleName: z.string().regex(/^samples\/[a-zA-Z0-9-]{1,120}$/), displayName: z.string().min(1).max(160), ownerName: z.string().max(160), durationSeconds: z.number().positive(), bpm: z.number().min(0).max(400),
@@ -48,7 +51,9 @@ const libraryRegion = z.object({ id, sampleName: z.string().regex(/^samples\/[a-
 const part = z.object({
   id, name: z.string().min(1).max(80), role: z.enum(["percussion", "bass", "melody", "harmony", "texture", "lead", "fx", "source"]),
   device: z.object({ type: z.enum(["heisenberg", "pulverisateur", "gakki", "beatbox8", "audio"]), parameters,
-    preset: z.object({ name: z.string().regex(/^presets\/[a-zA-Z0-9-]{1,120}$/), displayName: z.string().min(1).max(160), ownerName: z.string().max(160) }).optional()
+    // Optional only to read pre-pinning immutable histories. New selections
+    // require a fingerprint and old references cannot be synced as trusted.
+    preset: z.object({ name: z.string().regex(/^presets\/[a-zA-Z0-9-]{1,120}$/), displayName: z.string().min(1).max(160), ownerName: z.string().max(160), contentHash: z.string().regex(/^[a-f0-9]{64}$/).optional() }).optional()
   }).superRefine((value, context) => { mappedParameters(value.type, value.parameters, context); if (value.type === "audio" && value.preset) context.addIssue({ code: "custom", message: "Audio clip parts cannot use instrument presets" }); }),
   gain: z.number().min(0).max(1).default(0.7), pan: z.number().min(-1).max(1).default(0),
   groupId: id.optional(), sends: z.array(send).max(4).optional(),
@@ -67,7 +72,7 @@ export const nativeDocumentSchema = z.object({
   assumptions: z.array(z.string().max(240)).max(16), tempoBpm: z.number().int().min(40).max(220),
   meter: z.object({ numerator: z.number().int().min(2).max(12), denominator: z.union([z.literal(4), z.literal(8)]) }),
   bars: z.number().int().min(4).max(128), sections: z.array(section).min(1).max(24), parts: z.array(part).min(1).max(24),
-  groups: z.array(mixerGroup).max(8).optional(), reverbBus: reverbBus.optional(),
+  groups: z.array(mixerGroup).max(8).optional(), reverbBus: reverbBus.optional(), delayBus: delayBus.optional(), master: master.optional(),
   motifs: z.array(motif).max(256), protectedPartIds: z.array(id).max(24), protectedMotifIds: z.array(id).max(256),
   sourceAssetIds: z.array(z.uuid()).max(24), audio: z.object({ state: z.enum(["deferred", "unavailable", "stale"]), revisionId: z.null(), assetHash: z.null() })
 }).superRefine((document, context) => {
@@ -77,6 +82,7 @@ export const nativeDocumentSchema = z.object({
   for (const item of document.sections) { if (item.startBar !== cursor || item.endBar <= item.startBar) context.addIssue({ code: "custom", path: ["sections"], message: "Sections must be ordered and contiguous" }); cursor = item.endBar; }
   if (cursor !== document.bars) context.addIssue({ code: "custom", path: ["sections"], message: "Sections must cover the arrangement" });
   const totalTicks = document.bars * document.meter.numerator * NATIVE_PPQ * 4 / document.meter.denominator;
+  if (document.reverbBus && document.delayBus && document.reverbBus.id === document.delayBus.id) context.addIssue({ code: "custom", path: ["delayBus"], message: "Shared returns need distinct identities" });
   const parts = new Set(document.parts.map((value) => value.id));
   const groups = new Map((document.groups ?? []).map((value) => [value.id, value]));
   unique([...groups.keys()], "groups");
@@ -88,6 +94,16 @@ export const nativeDocumentSchema = z.object({
       if (visited.has(parent)) { context.addIssue({ code: "custom", path: ["groups"], message: `Group cycle at ${group.id}` }); break; }
       visited.add(parent); parent = groups.get(parent)?.parentId;
     }
+    if (group.sidechainFromPartId && (!group.compressor?.isActive || !document.parts.some((item) => item.id === group.sidechainFromPartId))) context.addIssue({ code: "custom", path: ["groups"], message: `Group ${group.id} has no active compressor or valid sidechain source` });
+    const source = document.parts.find((item) => item.id === group.sidechainFromPartId);
+    let routed = source?.groupId;
+    const sidechainRouteSeen = new Set<string>();
+    while (routed) {
+      if (sidechainRouteSeen.has(routed)) break;
+      sidechainRouteSeen.add(routed);
+      if (routed === group.id) { context.addIssue({ code: "custom", path: ["groups"], message: `Group ${group.id} cannot be sidechained by a part routed through itself` }); break; }
+      routed = groups.get(routed)?.parentId;
+    }
   }
   const motifs = new Map(document.motifs.map((value) => [value.id, value]));
   for (const item of document.motifs) {
@@ -98,7 +114,7 @@ export const nativeDocumentSchema = z.object({
   for (const item of document.parts) {
     if (item.groupId && !groups.has(item.groupId)) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} has no mixer group` });
     if (new Set((item.sends ?? []).map((value) => value.busId)).size !== (item.sends ?? []).length) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} has duplicate sends` });
-    if (item.sends?.some((value) => value.busId !== document.reverbBus?.id)) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} sends to an unavailable return` });
+    if (item.sends?.some((value) => value.busId !== document.reverbBus?.id && value.busId !== document.delayBus?.id)) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} sends to an unavailable return` });
     unique(item.notes.map((value) => value.id), "part notes"); unique(item.placements.map((value) => value.id), "placements");
     if (item.notes.some((value) => value.startTick + value.durationTicks > totalTicks)) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} has notes outside the arrangement` });
     for (const placement of item.placements) {
@@ -161,6 +177,8 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("defineMotif"), motif }),
   z.object({ kind: z.literal("replaceMotif"), motif }),
   z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
+  z.object({ kind: z.literal("developSectionNotes"), partId: id, sectionId: id, pitchShiftSemitones: z.number().int().min(-12).max(12).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
+  z.object({ kind: z.literal("silenceSectionClips"), partId: id, sectionId: id }),
   z.object({ kind: z.literal("placeMotif"), partId: id, placement: part.shape.placements.unwrap().element }),
   z.object({ kind: z.literal("replacePlacements"), partId: id, placements: part.shape.placements.unwrap() }),
   z.object({ kind: z.literal("addNotes"), partId: id, notes: z.array(note).min(1).max(256) }),
@@ -171,6 +189,9 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("removeGroup"), groupId: id }),
   z.object({ kind: z.literal("routePart"), partId: id, groupId: id.nullable() }),
   z.object({ kind: z.literal("setReverbBus"), bus: reverbBus }),
+  z.object({ kind: z.literal("setDelayBus"), bus: delayBus }),
+  z.object({ kind: z.literal("removeDelayBus") }),
+  z.object({ kind: z.literal("setMaster"), master }),
   z.object({ kind: z.literal("removeReverbBus") }),
   z.object({ kind: z.literal("setSend"), partId: id, busId: id, gain: z.number().min(0).max(1) }),
   z.object({ kind: z.literal("removeSend"), partId: id, busId: id }),
@@ -204,13 +225,18 @@ export function materializedNotes(document: NativeDocument, partId: string): Nat
   return result.sort((a, b) => a.startTick - b.startTick || a.id.localeCompare(b.id));
 }
 
+export function nativeHasMaterial(document: NativeDocument): boolean {
+  return document.parts.some((item) => item.sourceRegions.length > 0 || (item.libraryRegions?.length ?? 0) > 0 || materializedNotes(document, item.id).length > 0);
+}
+
 export function protectedPartHash(document: NativeDocument, partId: string): string {
   const item = document.parts.find((value) => value.id === partId);
   if (!item) throw new Error(`Unknown part ${partId}`);
   const groupChain: NativeDocument["groups"] = [];
   let groupId = item.groupId;
   while (groupId) { const group = document.groups?.find((value) => value.id === groupId); if (!group) break; groupChain.push(group); groupId = group.parentId; }
-  return canonicalHash({ tempoBpm: document.tempoBpm, meter: document.meter, part: item, motifs: document.motifs.filter((value) => value.partId === partId), groupChain, reverbBus: item.sends?.length ? document.reverbBus : undefined });
+  const sidechainDependencies = groupChain.flatMap((group) => group.sidechainFromPartId ? [{ part: document.parts.find((value) => value.id === group.sidechainFromPartId), motifs: document.motifs.filter((value) => value.partId === group.sidechainFromPartId) }] : []);
+  return canonicalHash({ tempoBpm: document.tempoBpm, meter: document.meter, master: document.master, part: item, motifs: document.motifs.filter((value) => value.partId === partId), groupChain, sidechainDependencies, reverbBus: item.sends?.some((value) => value.busId === document.reverbBus?.id) ? document.reverbBus : undefined, delayBus: item.sends?.some((value) => value.busId === document.delayBus?.id) ? document.delayBus : undefined });
 }
 
 export function setNativeProtections(base: NativeDocument, expectedPartIds: string[], desiredPartIds: string[]): NativeDocument {
@@ -225,7 +251,7 @@ export function nativeMusicHash(document: NativeDocument): string {
   return canonicalHash({
     tempoBpm: document.tempoBpm, meter: document.meter, bars: document.bars,
     sections: document.sections.map(({ startBar, endBar }) => ({ startBar, endBar })),
-    groups: document.groups, reverbBus: document.reverbBus,
+    groups: document.groups, reverbBus: document.reverbBus, delayBus: document.delayBus, master: document.master,
     parts: document.parts.map(({ id, device, gain, pan, groupId, sends, notes, placements, sourceRegions, libraryRegions, effects, automation }) => ({ id, device, gain, pan, groupId, sends, notes, placements, sourceRegions, libraryRegions, effects, automation })),
     motifs: document.motifs.map(({ id, partId, lengthTicks, notes }) => ({ id, partId, lengthTicks, notes }))
   });
@@ -262,6 +288,62 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         placement.motifId = op.newMotifId;
         break;
       }
+      case "developSectionNotes": {
+        const item = findPart(op.partId);
+        const section = next.sections.find((value) => value.id === op.sectionId);
+        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (!(op.pitchShiftSemitones ?? 0) && (op.velocityFactor ?? 1) === 1 && !op.omitEvery) throw new Error("Section development must change musical material");
+        const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
+        const crossing = item.placements.filter((placement) => {
+          const phrase = next.motifs.find((value) => value.id === placement.motifId)!;
+          return placement.startTick < end && placement.startTick + placement.repeats * phrase.lengthTicks > start;
+        });
+        const realized = [...item.notes];
+        const sliceId = (event: NativeNote, area: string) => `n-${canonicalHash({ id: event.id, section: op.sectionId, area }).slice(0,24)}`;
+        for (const placement of crossing) {
+          const phrase = next.motifs.find((value) => value.id === placement.motifId)!;
+          for (let repeat = 0; repeat < placement.repeats; repeat++) for (const event of phrase.notes) realized.push({ ...event, id: `${placement.id}-${repeat}-${event.id}`, startTick: placement.startTick + repeat * phrase.lengthTicks + event.startTick, pitch: event.pitch + placement.transpose });
+        }
+        let insideIndex = 0;
+        const developed: NativeNote[] = [];
+        for (const event of realized) {
+          const eventEnd = event.startTick + event.durationTicks;
+          if (event.startTick >= end || eventEnd <= start) { developed.push(event); continue; }
+          if (event.startTick < start) developed.push({ ...event, id: sliceId(event, "before"), durationTicks: start - event.startTick });
+          const innerStart = Math.max(event.startTick, start), innerEnd = Math.min(eventEnd, end);
+          insideIndex++;
+          if (!op.omitEvery || insideIndex % op.omitEvery !== 0) developed.push({ ...event, id: sliceId(event, "inside"), startTick: innerStart, durationTicks: innerEnd - innerStart, pitch: event.pitch + (op.pitchShiftSemitones ?? 0), velocity: Number((event.velocity * (op.velocityFactor ?? 1)).toFixed(4)) });
+          if (eventEnd > end) developed.push({ ...event, id: sliceId(event, "after"), startTick: end, durationTicks: eventEnd - end });
+        }
+        if (!insideIndex || (op.omitEvery && !(op.pitchShiftSemitones ?? 0) && (op.velocityFactor ?? 1) === 1 && insideIndex < op.omitEvery)) throw new Error(`No notes can be developed within ${op.sectionId}`);
+        item.notes = developed;
+        item.placements = item.placements.filter((value) => !crossing.some((placement) => placement.id === value.id));
+        break;
+      }
+      case "silenceSectionClips": {
+        const item = findPart(op.partId);
+        const section = next.sections.find((value) => value.id === op.sectionId);
+        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
+        const split = <T extends NativePart["sourceRegions"][number] | NonNullable<NativePart["libraryRegions"]>[number]>(regions: T[]): T[] => regions.flatMap((region) => {
+          const regionEnd = region.startTick + region.durationTicks;
+          if (region.startTick >= end || regionEnd <= start) return [region];
+          if (region.playbackMode === "loop" && (region.startTick < start || regionEnd > end)) throw new Error(`Loop ${region.id} crosses ${op.sectionId}; preserving loop phase needs an explicit clip edit`);
+          const toSeconds = (ticks: number) => ticks / NATIVE_PPQ * 60 / next.tempoBpm * (region.playbackRate ?? 1);
+          const result: T[] = [];
+          if (region.startTick < start) result.push({ ...region, id: `r-${canonicalHash({ id: region.id, section: op.sectionId, side: "before" }).slice(0,24)}`, durationTicks: start - region.startTick, sourceDurationSeconds: toSeconds(start - region.startTick) });
+          if (regionEnd > end) {
+            const consumed = toSeconds(end - region.startTick);
+            result.push({ ...region, id: `r-${canonicalHash({ id: region.id, section: op.sectionId, side: "after" }).slice(0,24)}`, startTick: end, durationTicks: regionEnd - end, sourceStartSeconds: region.sourceStartSeconds + consumed, sourceDurationSeconds: region.sourceDurationSeconds - consumed });
+          }
+          return result;
+        });
+        const beforeHash = canonicalHash({ owned: item.sourceRegions, library: item.libraryRegions ?? [] });
+        item.sourceRegions = split(item.sourceRegions);
+        if (item.libraryRegions) item.libraryRegions = split(item.libraryRegions);
+        if (beforeHash === canonicalHash({ owned: item.sourceRegions, library: item.libraryRegions ?? [] })) throw new Error(`No clips were changed in ${op.sectionId}`);
+        break;
+      }
       case "placeMotif": findPart(op.partId).placements.push(op.placement); break;
       case "replacePlacements": findPart(op.partId).placements = op.placements; break;
       case "addNotes": findPart(op.partId).notes.push(...op.notes); break;
@@ -272,6 +354,9 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "removeGroup": next.groups = (next.groups ?? []).filter((value) => value.id !== op.groupId); break;
       case "routePart": { const item = findPart(op.partId); if (op.groupId) item.groupId = op.groupId; else delete item.groupId; break; }
       case "setReverbBus": next.reverbBus = op.bus; break;
+      case "setDelayBus": next.delayBus = op.bus; break;
+      case "removeDelayBus": delete next.delayBus; break;
+      case "setMaster": next.master = op.master; break;
       case "removeReverbBus": delete next.reverbBus; break;
       case "setSend": { const item = findPart(op.partId); const sends = item.sends ??= []; const index = sends.findIndex((value) => value.busId === op.busId); if (index < 0) sends.push({ busId: op.busId, gain: op.gain }); else sends[index] = { busId: op.busId, gain: op.gain }; break; }
       case "removeSend": { const item = findPart(op.partId); item.sends = (item.sends ?? []).filter((value) => value.busId !== op.busId); break; }
@@ -317,7 +402,7 @@ export function nativeDiff(before: NativeDocument | null, after: NativeDocument)
     removedParts: (before?.parts ?? []).filter((value) => !current.has(value.id)).map((value) => value.id),
     changedParts: partChanges.map((value) => value.partId),
     partChanges,
-    routingChange: before && (changed(before.groups, after.groups) || changed(before.reverbBus, after.reverbBus)) ? { groups: after.groups ?? [], reverbBus: after.reverbBus ?? null } : null,
+    routingChange: before && (changed(before.groups, after.groups) || changed(before.reverbBus, after.reverbBus) || changed(before.delayBus, after.delayBus) || changed(before.master, after.master)) ? { groups: after.groups ?? [], reverbBus: after.reverbBus ?? null, delayBus: after.delayBus ?? null, master: after.master ?? null } : null,
     addedSections: after.sections.filter((value) => !oldSections.has(value.id)).map((value) => value.id),
     removedSections: (before?.sections ?? []).filter((value) => !newSections.has(value.id)).map((value) => value.id),
     changedSections: after.sections.filter((value) => oldSections.has(value.id) && changed(oldSections.get(value.id), value)).map((value) => value.id),
@@ -337,7 +422,7 @@ export function pinnedContext(document: NativeDocument, revisionId: string | nul
     revisionId, documentHash: canonicalHash(document), direction: document.direction, currentObjective: document.currentObjective, assumptions: document.assumptions,
     tempoBpm: document.tempoBpm, meter: document.meter, bars: document.bars,
     sections: document.sections.map((value) => ({ id: value.id, name: value.name, bars: [value.startBar, value.endBar], intent: value.intent })),
-    groups: document.groups ?? [], reverbBus: document.reverbBus ?? null,
+    groups: document.groups ?? [], reverbBus: document.reverbBus ?? null, delayBus: document.delayBus ?? null, master: document.master ?? null,
     parts: document.parts.map((value) => ({ id: value.id, name: value.name, role: value.role, device: value.device.type, preset: value.device.preset ?? null, groupId: value.groupId ?? null, sends: value.sends ?? [], notes: materializedNotes(document, value.id).length, effects: value.effects.map((effect) => effect.type), automation: value.automation.map((curve) => curve.target), sourceRegions: value.sourceRegions.length, libraryRegions: value.libraryRegions?.length ?? 0, protected: document.protectedPartIds.includes(value.id) })),
     motifs: document.motifs.map((value) => ({ id: value.id, partId: value.partId, name: value.name, instances: document.parts.flatMap((item) => item.placements).filter((placement) => placement.motifId === value.id).length })),
     sources: document.parts.flatMap((value) => value.sourceRegions.map((region) => ({ assetId: region.assetId, assetHash: region.assetHash, selectedInterval: [region.sourceStartSeconds, region.sourceStartSeconds + region.sourceDurationSeconds], state: "placed/referenced" as const }))),

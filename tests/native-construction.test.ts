@@ -35,6 +35,41 @@ describe("native construction contracts", () => {
     const kept = applyNativeOperations(built, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
     expect(() => applyNativeOperations(kept, [{ kind: "varyMotifInstance", partId: "starting-voice", placementId: "answer", newMotifId: "forbidden", name: "Forbidden", pitchShiftSemitones: 2 }])).toThrow(/Protected part/);
   });
+  it("develops notes across a section boundary without changing the preceding phrase or held note", async () => {
+    const built = applyNativeOperations(seedNativeDocument("Make the arrival rise"), [
+      { kind: "setStructure", bars: 8, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "Quiet" }, { id: "arrival", name: "Arrival", startBar: 4, endBar: 8, intent: "Rise" }] },
+      { kind: "defineMotif", motif: { id: "theme", partId: "starting-voice", name: "Theme", lengthTicks: 3840, notes: [{ id: "motif-note", startTick: 0, durationTicks: 960, pitch: 60, velocity: 0.7 }] } },
+      { kind: "placeMotif", partId: "starting-voice", placement: { id: "crossing-instance", motifId: "theme", startTick: 11520, repeats: 3, transpose: 0 } },
+      { kind: "addNotes", partId: "starting-voice", notes: [{ id: "held", startTick: 15000, durationTicks: 960, pitch: 67, velocity: 0.6 }] },
+      { kind: "protect", partIds: [], motifIds: ["theme"] }
+    ]);
+    const revisionJob = { kind: "native-revision", request: { targetPartId: "starting-voice", targetSectionId: "arrival" } } as unknown as JobRecord;
+    const edit = new NativeToolSession(revisionJob, built, false);
+    await edit.apply("raise-arrival", [{ kind: "developSectionNotes", partId: "starting-voice", sectionId: "arrival", pitchShiftSemitones: 5 }]);
+    const before = materializedNotes(built, "starting-voice");
+    const after = materializedNotes(edit.document, "starting-voice");
+    expect(before.some((value) => value.startTick === 11520 && value.pitch === 60)).toBe(true);
+    expect(after.some((value) => value.startTick === 11520 && value.pitch === 60)).toBe(true);
+    expect(after.some((value) => value.startTick === 15360 && value.pitch === 65)).toBe(true);
+    expect(after.some((value) => value.startTick === 15360 && value.pitch === 72 && value.durationTicks === 600)).toBe(true);
+    expect(after.some((value) => value.startTick === 15000 && value.pitch === 67 && value.durationTicks === 360)).toBe(true);
+    expect(edit.document.motifs.find((value) => value.id === "theme")).toEqual(built.motifs.find((value) => value.id === "theme"));
+    const kept = applyNativeOperations(built, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
+    expect(() => applyNativeOperations(kept, [{ kind: "developSectionNotes", partId: "starting-voice", sectionId: "arrival", pitchShiftSemitones: 5 }])).toThrow(/Protected part/);
+  });
+  it("silences a section of a crossing one-shot clip while retaining its exact outside source offsets", async () => {
+    const base = seedNativeDocument("Let the recorded texture stop during the arrival");
+    const built = applyNativeOperations(base, [
+      { kind: "setStructure", bars: 8, tempoBpm: 120, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "Texture" }, { id: "arrival", name: "Arrival", startBar: 4, endBar: 8, intent: "Space" }] },
+      { kind: "removePart", partId: "starting-voice" },
+      { kind: "addPart", part: { id: "texture", name: "Texture", role: "source", device: { type: "audio", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], libraryRegions: [{ id: "crossing-clip", sampleName: "samples/texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 8, bpm: 120, startTick: 11520, durationTicks: 7680, sourceStartSeconds: 1, sourceDurationSeconds: 4, playbackMode: "once", gain: 0.6, provenance: "audiotool-library" }], effects: [], automation: [] } }
+    ]);
+    const job = { kind: "native-revision", request: { targetPartId: "texture", targetSectionId: "arrival" } } as unknown as JobRecord;
+    const edit = new NativeToolSession(job, built, false);
+    await edit.apply("silence-arrival", [{ kind: "silenceSectionClips", partId: "texture", sectionId: "arrival" }]);
+    expect(edit.document.parts[0]?.libraryRegions).toMatchObject([{ startTick: 11520, durationTicks: 3840, sourceStartSeconds: 1, sourceDurationSeconds: 2 }]);
+    expect(() => applyNativeOperations(built, [{ kind: "replaceLibrarySample", partId: "texture", region: { ...built.parts[0]!.libraryRegions![0]!, playbackMode: "loop" } }, { kind: "silenceSectionClips", partId: "texture", sectionId: "arrival" }])).toThrow(/preserving loop phase/);
+  });
   it("keeps generated editorial titles on a word boundary", () => {
     const title = seedNativeDocument("Build an evolving 64-bar ambient journey with a slow lead and spacious transitions into a final release").title;
     expect(title.length).toBeLessThanOrEqual(42);

@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createJob, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  createNativeJob, discoverNativeCapabilities, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeSnapshot, providerAvailability, requireProject, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
+  createNativeJob, discoverNativeCapabilities, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
 } from "@pocket/core";
 
 const config = getConfig();
@@ -113,6 +113,11 @@ app.get("/api/v1/native/library/presets", async (request) => {
 app.get("/api/v1/projects/:projectId/native", async (request) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   return nativeSnapshot(ownerId, projectId);
+});
+
+app.get("/api/v1/projects/:projectId/native/requests/:jobId/draft", async (request) => {
+  const { projectId, jobId } = z.object({ projectId: idSchema, jobId: idSchema }).parse(request.params);
+  return nativeDraftView(ownerId, projectId, jobId);
 });
 
 app.post("/api/v1/projects/:projectId/native/constructions", async (request, reply) => {

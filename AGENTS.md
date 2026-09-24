@@ -1,6 +1,6 @@
 # Pocket Producer — project instructions
 
-Read `docs/STATUS.md` first, then `docs/native-construction-pass.md` and relevant architecture, design and testing docs. The dated baseline is `docs/handoff/00-START-HERE.md`; current user decisions and the native-construction course in `docs/adr/002-native-construction-first.md` override its render-first/Sunroom limits. Record meaningful changes and keep the next session oriented.
+Read `docs/STATUS.md` first, then `docs/native-construction-followup.md` and relevant architecture, design and testing docs. The dated baseline is `docs/handoff/00-START-HERE.md`; current user decisions and the native-construction course in `docs/adr/002-native-construction-first.md` override its render-first/Sunroom limits. Record meaningful changes and keep the next session oriented.
 
 ## Product invariants
 

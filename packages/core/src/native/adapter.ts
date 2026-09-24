@@ -2,10 +2,10 @@ import { createOfflineDocument } from "@audiotool/nexus/node";
 import { Ticks } from "@audiotool/nexus/utils";
 import type { SyncedDocument } from "@audiotool/nexus";
 import type { NexusEntity } from "@audiotool/nexus/document";
-import type { LibrarySample, NativePreset } from "./library.js";
+import { nativePresetFingerprint, type LibrarySample, type NativePreset } from "./library.js";
 import { assertNativeDeviceMapping, materializedNotes, nativeDocumentSchema, type NativeDocument, type NativePart } from "./model.js";
 
-export const NATIVE_MAPPING_VERSION = "nexus-native-v4";
+export const NATIVE_MAPPING_VERSION = "nexus-native-v5";
 export const NEXUS_TICKS_PER_CANONICAL_TICK = Ticks.Beat / 960;
 export function toNexusTicks(canonicalTicks: number): number {
   const value = canonicalTicks * NEXUS_TICKS_PER_CANONICAL_TICK;
@@ -49,7 +49,7 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
   let automationEvents = 0;
   // This v1 adapter owns only documents it creates. It never deletes or rewrites
   // unknown entities in an existing Studio document.
-  if (doc.queryEntities.ofTypes("note", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "beatbox8", "heisenberg", "pulverisateur", "gakki", "audioRegion", "audioTrack", "audioDevice", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerAuxRoute", "desktopAudioCable", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack").get().length) throw new Error("Native target is not empty; inspect/reconcile external edits before applying a snapshot");
+  if (doc.queryEntities.ofTypes("note", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "beatbox8", "heisenberg", "pulverisateur", "gakki", "audioRegion", "audioTrack", "audioDevice", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack").get().length) throw new Error("Native target is not empty; inspect/reconcile external edits before applying a snapshot");
   await doc.modify((t) => {
     const groove = t.create("groove", { functionIndex: 1, durationTicks: Ticks.Beat * 2, impact: 0, displayName: "Straight" });
     const config = t.entities.ofTypes("config").getOne() ?? t.create("config", { defaultGroove: groove.location });
@@ -58,17 +58,26 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
     t.update(config.fields.signatureDenominator, document.meter.denominator);
     const duration = toNexusTicks(document.bars * document.meter.numerator * 960 * 4 / document.meter.denominator);
     t.update(config.fields.durationTicks, duration);
-    if (!t.entities.ofTypes("mixerMaster").getOne()) t.create("mixerMaster", {});
-    const groups = new Map((document.groups ?? []).map((group) => [group.id, t.create("mixerGroup", { displayParameters: { displayName: group.name }, faderParameters: { postGain: group.gain, panning: group.pan } })]));
+    const master = t.entities.ofTypes("mixerMaster").getOne() ?? t.create("mixerMaster", {});
+    if (document.master) {
+      t.update(master.fields.postGain, document.master.gain);
+      t.update(master.fields.panning, document.master.pan);
+      t.update(master.fields.limiterEnabled, document.master.limiterEnabled);
+    }
+    const groups = new Map((document.groups ?? []).map((group) => [group.id, t.create("mixerGroup", { displayParameters: { displayName: group.name }, faderParameters: { postGain: group.gain, panning: group.pan }, ...(group.compressor ? { compressor: group.compressor } : {}) })]));
     for (const group of document.groups ?? []) if (group.parentId) t.create("mixerStripGrouping", { childStrip: groups.get(group.id)!.location, groupStrip: groups.get(group.parentId)!.location });
     const reverbBus = document.reverbBus && t.create("mixerReverbAux", { displayParameters: { displayName: document.reverbBus.name }, roomSizeFactor: document.reverbBus.roomSize, preDelayTimeMs: document.reverbBus.preDelayMs, dampFactor: document.reverbBus.damp });
+    const delayBus = document.delayBus && t.create("mixerDelayAux", { displayParameters: { displayName: document.delayBus.name }, feedbackFactor: document.delayBus.feedbackFactor, stepCount: document.delayBus.stepCount, stepLengthIndex: document.delayBus.stepLengthIndex });
+    const channels = new Map<string, NexusEntity<"mixerChannel">>();
     for (const [index, part] of document.parts.entries()) {
       const channel = t.create("mixerChannel", { preGain: part.gain, faderParameters: { panning: part.pan } });
+      channels.set(part.id, channel);
       if (part.groupId) t.create("mixerStripGrouping", { childStrip: channel.location, groupStrip: groups.get(part.groupId)!.location });
       const sendTargets = new Map<string, unknown>();
       for (const send of part.sends ?? []) {
-        if (!reverbBus || send.busId !== document.reverbBus?.id) throw new Error(`Unresolved return ${send.busId}`);
-        const route = t.create("mixerAuxRoute", { auxSend: channel.fields.auxSend.location, auxReceive: reverbBus.location, gain: send.gain });
+        const receive = send.busId === document.reverbBus?.id ? reverbBus : send.busId === document.delayBus?.id ? delayBus : null;
+        if (!receive) throw new Error(`Unresolved return ${send.busId}`);
+        const route = t.create("mixerAuxRoute", { auxSend: channel.fields.auxSend.location, auxReceive: receive.location, gain: send.gain });
         sendTargets.set(send.busId, route.fields.gain);
       }
       const position = { displayName: part.name, positionX: 100 + (index % 4) * 240, positionY: 100 + Math.floor(index / 4) * 220 };
@@ -81,7 +90,7 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
         : t.create("beatbox8", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields });
       if (part.device.preset) {
         const preset = presets[part.device.preset.name];
-        if (!preset || preset.entityType !== part.device.type || preset.meta.name !== part.device.preset.name || preset.meta.ownerName !== part.device.preset.ownerName) throw new Error(`Preset ${part.device.preset.name} is unresolved or no longer matches this instrument`);
+        if (!preset || preset.entityType !== part.device.type || preset.meta.name !== part.device.preset.name || preset.meta.ownerName !== part.device.preset.ownerName || !part.device.preset.contentHash || nativePresetFingerprint(preset) !== part.device.preset.contentHash) throw new Error(`Preset ${part.device.preset.name} is unresolved, unpinned or its configuration has drifted`);
         t.applyPresetTo(instrument as never, preset);
         for (const [path, value] of Object.entries(parameters)) {
           let field: unknown = instrument.fields;
@@ -204,6 +213,12 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
         for (const point of curve.points) { t.create("automationEvent", { collection: collection.location, positionTicks: toNexusTicks(point.tick), value: point.value, interpolation: point.interpolation === "step" || !point.interpolation ? 1 : 2, slope: point.interpolation === "sloped" ? point.slope ?? 0 : 0 }); automationEvents += 1; }
       }
     }
+    for (const group of document.groups ?? []) if (group.sidechainFromPartId) {
+      const source = channels.get(group.sidechainFromPartId);
+      const destination = groups.get(group.id);
+      if (!source || !destination) throw new Error(`Unresolved mixer sidechain for ${group.id}`);
+      t.create("mixerSideChainCable", { from: source.fields.sideChainOutput.location, to: destination.fields.compressor.fields.sideChainInput.location });
+    }
   });
   const mappedParts = document.parts.filter((part) => part.device.type !== "audio" || part.sourceRegions.every((region) => !unresolvedSources.includes(region.id))).length;
   return { mappedParts, noteEntities, patternRegions, automationEvents, unresolvedSources };
@@ -236,7 +251,7 @@ export function nativeStructuralReadback(doc: Pick<SyncedDocument, "queryEntitie
   // Map every supported entity to a stable, type-local ordinal before reading
   // pointers. Keep actual socket field indexes: they distinguish routing ends
   // and automation targets. UI positions, labels and colors are not music.
-  const semanticTypes = ["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerAuxRoute", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "audioDevice", "audioTrack", "audioRegion", "sample"] as const;
+  const semanticTypes = ["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "audioDevice", "audioTrack", "audioRegion", "sample"] as const;
   const entities = doc.queryEntities.ofTypes(...semanticTypes).get();
   const ordinals = new Map<string, string>();
   const counts = new Map<string, number>();

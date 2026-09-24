@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ArrowRight, Check, GitCompareArrows, Headphones, LockKeyhole, Music2, Play, Plus, RotateCcw, Search, ShieldCheck, Sparkles } from "lucide-react"
-import { api, type Asset, type Job, type NativeSnapshot } from "../../lib/api"
+import { api, type Asset, type Job, type NativeDraftView, type NativeSnapshot } from "../../lib/api"
 import { arrangementSummary, friendlyIssue, jobProgress, readableDevice, readableEffect } from "../../lib/ui-copy"
 import { Button } from "../../components/ui/button"
 import { RoomHero } from "../../components/room-hero"
@@ -41,6 +41,8 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
   const [draftProjectId, setDraftProjectId] = useState<string | null>(null)
   const [draftNotices, setDraftNotices] = useState<string[]>([])
   const [job, setJob] = useState<Job | null>(null)
+  const [tentative, setTentative] = useState<NativeDraftView | null>(null)
+  const [tentativeError, setTentativeError] = useState<string | null>(null)
   const [compareOpen, setCompareOpen] = useState(false)
   const [compareId, setCompareId] = useState<string | null>(null)
   const [detailsPartId, setDetailsPartId] = useState<string | null>(null)
@@ -60,12 +62,12 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
   const partRoles = [...new Set(current?.document.parts.map((part) => part.role) ?? [])]
   const filteredParts = current?.document.parts.filter((part) => roleFilter === "all" || part.role === roleFilter) ?? []
   const visibleParts = filteredParts.slice(0, partLimit)
-  const currentRemoteVerification = snapshot?.synchronization.state === "verified" && snapshot.synchronization.revisionId === current?.id && snapshot.synchronization.mappingVersion === "nexus-native-v4"
+  const currentRemoteVerification = snapshot?.synchronization.state === "verified" && snapshot.synchronization.revisionId === current?.id && snapshot.synchronization.mappingVersion === "nexus-native-v5"
   const receiptKey = `pocket-producer:native-receipt:${projectId}`
 
   useEffect(() => {
     let active = true
-    setDraftProjectId(null); setLoading(true); setSnapshot(null); setJob(null); setError(null); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds([]); setSourceIds([]); setRoleFilter("all"); setPartLimit(8)
+    setDraftProjectId(null); setLoading(true); setSnapshot(null); setJob(null); setTentative(null); setTentativeError(null); setError(null); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds([]); setSourceIds([]); setRoleFilter("all"); setPartLimit(8)
     void api.nativeSnapshot(projectId).then((value) => {
       if (!active) return
       let stored: unknown = null
@@ -110,6 +112,15 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
     }, 900)
     return () => { active = false; window.clearInterval(timer) }
   }, [job, projectId, receiptKey, onProjectUpdated])
+
+  useEffect(() => {
+    if (!job || job.state === "succeeded" || job.state === "cancelled") return
+    let active = true
+    const inspect = () => { void api.nativeDraft(projectId, job.id).then((view) => { if (active) { setTentative(view); setTentativeError(null) } }).catch((cause: unknown) => { if (active) setTentativeError(cause instanceof Error ? cause.message : "The saved draft could not be checked") }) }
+    inspect()
+    const timer = !terminal.has(job.state) ? window.setInterval(inspect, 1800) : null
+    return () => { active = false; if (timer !== null) window.clearInterval(timer) }
+  }, [job?.id, job?.state, projectId])
 
   const selectedVersion = useMemo(() => snapshot?.versions.find((value) => value.id === compareId) ?? null, [snapshot, compareId])
   const activeJob = job && !terminal.has(job.state) ? job : null
@@ -209,7 +220,20 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
 
     <div className="native-audio-boundary" role="note"><Headphones className="size-5" /><div><strong>This arrangement isn't playable yet.</strong><p>You can shape its notes, sounds and sections now. {legacyVersionCount ? <button className="text-link" onClick={onLegacy}>Listen to your separate playable audio</button> : "Sounds you add can still be auditioned below."}</p></div></div>
     {activeJob ? <div className="job-status" role="status" aria-live="polite"><strong>{jobProgress(activeJob)}</strong><span>Your request continues if you leave this room. Accepted versions stay safe.</span><Button size="sm" variant="ghost" onClick={() => void api.cancel(activeJob.id).then(() => api.job(activeJob.id)).then(setJob)}>Stop this request</Button></div> : null}
-    {job && terminal.has(job.state) && job.state !== "succeeded" ? <div className="job-status" role="alert"><strong>{job.error_code === "NATIVE_PARTIAL" ? "This arrangement is still in progress" : job.state === "needs_attention" ? "We need to check what happened" : job.state === "cancelled" ? "Request stopped" : "We couldn't finish that change"}</strong><span>{job.error_code === "NATIVE_PARTIAL" ? "Confirmed steps are saved with this request, but this unfinished draft has not replaced your current version." : friendlyIssue(job.error_message, "Your earlier version is safe.")}</span>{job.error_code === "NATIVE_PARTIAL" ? <Button className="mt-3" variant="outline" size="sm" onClick={() => void continuePartial()} disabled={busy}>Continue saved draft</Button> : ["failed", "cancelled"].includes(job.state) ? <Button className="mt-3" variant="outline" size="sm" onClick={() => void submit(true)} disabled={busy}>Try again as a new request</Button> : <p className="provider-note">A new request is paused until the earlier outcome is known.</p>}{job.error_message ? <details className="room-technical"><summary>Technical details</summary><p>{job.error_message}</p></details> : null}</div> : null}
+    {job && terminal.has(job.state) && job.state !== "succeeded" ? <div className="job-status" role="alert">
+      <strong>{job.error_code === "NATIVE_PARTIAL" ? "This arrangement is still in progress" : job.state === "needs_attention" ? "We need to check what happened" : job.state === "cancelled" ? "Request stopped" : "We couldn't finish that change"}</strong>
+      <span>{job.error_code === "NATIVE_PARTIAL" ? "Confirmed steps are saved with this request, but this unfinished draft has not replaced your current version." : friendlyIssue(job.error_message, "Your earlier version is safe.")}</span>
+      {job.error_code === "NATIVE_PARTIAL" ? <>{tentative?.canContinue ? <Button className="mt-3" variant="outline" size="sm" onClick={() => void continuePartial()} disabled={busy}>Continue saved draft</Button> : <p className="provider-note">{tentative?.continuationReason ?? "Checking whether this draft can continue…"}</p>}</> : ["failed", "cancelled"].includes(job.state) ? <Button className="mt-3" variant="outline" size="sm" onClick={() => void submit(true)} disabled={busy}>Try again as a new request</Button> : <p className="provider-note">A new request is paused until the earlier outcome is known.</p>}
+      {job.error_message ? <details className="room-technical"><summary>Technical details</summary><p>{job.error_message}</p></details> : null}
+    </div> : null}
+    {job && tentative?.document && tentative.jobId === job.id && job.state !== "succeeded" ? <section className="native-section native-draft-preview" aria-label="Unfinished arrangement preview">
+      <div className="section-heading"><div><h2>Work in progress</h2><p>Not your current version · {tentative.stepCount} confirmed {tentative.stepCount === 1 ? "change" : "changes"}</p></div></div>
+      <p>{tentative.document.bars} bars across {tentative.document.sections.length} sections. {tentative.document.parts.length} editable {tentative.document.parts.length === 1 ? "part" : "parts"} currently in the draft.</p>
+      <p><strong>Sections:</strong> {tentative.document.sections.map((section) => `${section.name} (${section.endBar - section.startBar} bars)`).join(" · ")}</p>
+      <p><strong>Parts so far:</strong> {tentative.document.parts.slice(0, 8).map((part) => part.name).join(", ")}{tentative.document.parts.length > 8 ? ` and ${tentative.document.parts.length - 8} more` : ""}</p>
+      <p className="section-footnote">This is a saved structural draft. It is not selected, synchronized or playable.</p>
+    </section> : null}
+    {tentativeError ? <p className="provider-note" role="alert">The saved draft could not be inspected: {tentativeError}</p> : null}
     {error ? <div className="job-status" role="alert"><strong>Something needs attention</strong><span>{friendlyIssue(error, "We couldn't complete that action. Your saved versions are unchanged.")}</span><details className="room-technical"><summary>Technical details</summary><p>{error}</p></details></div> : null}
 
     <div className="workspace-panel">
@@ -252,12 +276,14 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
       <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto bg-popover p-6">
         <DialogHeader><DialogTitle className="font-heading text-2xl">{detailsPart?.name ?? "Part details"}</DialogTitle><DialogDescription>What this part contains in the editable arrangement. This is not an audio preview.</DialogDescription></DialogHeader>
         {detailsPart ? <div className="part-detail">
-          <p><strong>Instrument:</strong> {readableDevice(detailsPart.device.type)}{detailsPart.device.preset ? ` · ${detailsPart.device.preset.displayName} preset` : ""}</p>
+          <p><strong>Instrument:</strong> {readableDevice(detailsPart.device.type)}{detailsPart.device.preset ? ` · ${detailsPart.device.preset.displayName} preset` : ""}{detailsPart.device.preset && !detailsPart.device.preset.contentHash ? " · original sound settings unverified; reselect before copying to Audiotool" : ""}</p>
           <p><strong>Music:</strong> {detailsPart.notes.length} individual notes · {detailsPart.placements.length} phrase placements</p>
           {current?.document.motifs.filter((motif) => motif.partId === detailsPart.id).length ? <div><strong>Phrases</strong><ul>{current.document.motifs.filter((motif) => motif.partId === detailsPart.id).map((motif) => <li key={motif.id}>{motif.name} · {motif.notes.length} notes · {detailsPart.placements.filter((placement) => placement.motifId === motif.id).length} placements</li>)}</ul></div> : null}
           {detailsPart.notes.length ? <p><strong>Note range:</strong> MIDI {Math.min(...detailsPart.notes.map((note) => note.pitch))}–{Math.max(...detailsPart.notes.map((note) => note.pitch))} · <strong>Velocity:</strong> {Math.round(Math.min(...detailsPart.notes.map((note) => note.velocity)) * 100)}–{Math.round(Math.max(...detailsPart.notes.map((note) => note.velocity)) * 100)}%</p> : null}
           {detailsPart.sourceRegions.length || detailsPart.libraryRegions?.length ? <div><strong>Sound clips</strong><ul>{detailsPart.sourceRegions.map((region) => <li key={region.id}>Your sound · {region.sourceStartSeconds.toFixed(1)}–{(region.sourceStartSeconds + region.sourceDurationSeconds).toFixed(1)} seconds of source{clipTransform(region)}</li>)}{detailsPart.libraryRegions?.map((region) => <li key={region.id}>{region.displayName} · Audiotool library · {region.sourceStartSeconds.toFixed(1)}–{(region.sourceStartSeconds + region.sourceDurationSeconds).toFixed(1)} seconds of source{clipTransform(region)}</li>)}</ul></div> : null}
           <p><strong>Routing:</strong> {detailsPart.groupId ? current?.document.groups?.find((group) => group.id === detailsPart.groupId)?.name ?? "Unresolved group" : "Main output"}{detailsPart.sends?.length ? ` · ${detailsPart.sends.length} shared send${detailsPart.sends.length === 1 ? "" : "s"}` : ""}</p>
+          {detailsPart.groupId && current?.document.groups?.find((group) => group.id === detailsPart.groupId)?.compressor?.isActive ? <p><strong>Shared processing:</strong> Group compression{current.document.groups.find((group) => group.id === detailsPart.groupId)?.sidechainFromPartId ? ` guided by ${partName(current.document.groups.find((group) => group.id === detailsPart.groupId)!.sidechainFromPartId!)}` : ""}</p> : null}
+          {current?.document.master ? <p><strong>Final mix:</strong> {Math.round(current.document.master.gain * 100)}% level · {current.document.master.limiterEnabled ? "limiter on" : "limiter off"}</p> : null}
           <p><strong>Processing:</strong> {detailsPart.effects.length ? detailsPart.effects.map((effect) => readableEffect(effect.type)).join(", ") : "None"}</p>
           <p><strong>Motion:</strong> {detailsPart.automation.length ? detailsPart.automation.map((curve) => curve.target).join(", ") : "No changing controls"}</p>
           {Object.keys(detailsPart.device.parameters).length ? <details className="room-technical"><summary>Sound settings</summary><dl>{Object.entries(detailsPart.device.parameters).map(([name, value]) => <div key={name}><dt>{name.replaceAll(".", " · ")}</dt><dd>{value}</dd></div>)}</dl></details> : null}

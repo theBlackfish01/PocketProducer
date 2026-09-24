@@ -13,7 +13,8 @@ import type { JobRecord } from "../db/repository.js";
 import { AccountedOpenAICalls, checkpoint } from "../agent/producer.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "../providers/effects.js";
 import { discoverNativeCapabilities, inspectNativeCapability } from "./catalog.js";
-import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, nativeDiff, nativeDocumentSchema, nativeOperationSchema, pinnedContext, type NativeDocument, type NativeOperation } from "./model.js";
+import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, nativeDiff, nativeDocumentSchema, nativeHasMaterial, nativeOperationSchema, pinnedContext, type NativeDocument, type NativeOperation } from "./model.js";
+import { interpretNativeBrief } from "./intent.js";
 import { adoptUnfinishedNativeProducerEffect, loadConfirmedNativeModelCalls, loadNativeProducerCompletion, loadNativeSteps, nativeModelEffectsSafeToContinue, recordNativeProducerCompletion, recoverConfirmedNativeProducerResult, saveNativeStep } from "./repository.js";
 import { nativeFormOperations, nativeFormSchema } from "./form.js";
 import { searchNativeResources, type NativeSourceProfile } from "./resources.js";
@@ -21,6 +22,7 @@ import type { NativeLibrary } from "./library.js";
 
 export interface NativeSource { assetId: string; assetHash: string; durationSeconds: number; rights: string; name?: string; profile?: NativeSourceProfile }
 const op = (value: unknown): NativeOperation => nativeOperationSchema.parse(value);
+const toolFailure = (error: unknown): string => `Error: ${error instanceof Error ? error.message : "Native tool failed"}`;
 const shortTitle = (direction: string) => {
   const clean = direction.trim();
   if (clean.length <= 42) return clean || "New construction";
@@ -42,20 +44,13 @@ export function seedNativeDocument(direction: string): NativeDocument {
 export function nativeCompletionIssues(document: NativeDocument, direction: string, mode: "generation" | "revision", selectedSourceIds: string[] = []): string[] {
   if (mode === "revision") return [];
   const issues: string[] = [];
-  const text = direction.toLowerCase();
-  const requestedBars = /\b(\d{1,3})\s*[- ]?bars?\b/i.exec(direction)?.[1];
-  if (requestedBars && document.bars !== Number(requestedBars)) issues.push(`Requested ${requestedBars} bars, but the draft has ${document.bars}`);
+  const brief = interpretNativeBrief(direction);
+  if (brief.totalBars !== null && document.bars !== brief.totalBars) issues.push(`Requested ${brief.totalBars} bars in total, but the draft has ${document.bars}`);
   if (document.parts.some((part) => part.id === "starting-voice")) issues.push("The starting sketch was not replaced");
   const active = document.parts.filter((part) => part.sourceRegions.length || part.libraryRegions?.length || materializedNotes(document, part.id).length);
-  if (!active.length) issues.push("No notes or source regions were constructed");
-  const requestedRoles: Array<[RegExp, NativeDocument["parts"][number]["role"][], string]> = [
-    [/\b(drums?|percussion|beat)\b/, ["percussion"], "drums"],
-    [/\bbass\b/, ["bass"], "bass"],
-    [/\b(harmony|chords?|pad)\b/, ["harmony", "texture"], "harmony"],
-    [/\b(lead|melody|melodic)\b/, ["lead", "melody"], "lead or melody"],
-    [/\b(transitions?|risers?|fills?)\b/, ["fx"], "transitions"]
-  ];
-  for (const [pattern, roles, label] of requestedRoles) if (pattern.test(text) && !active.some((part) => roles.includes(part.role))) issues.push(`Requested ${label} has no constructed material`);
+  if (!nativeHasMaterial(document)) issues.push("No notes or source regions were constructed");
+  for (const role of brief.requiredRoles) if (!active.some((part) => role.matches.includes(part.role))) issues.push(`Requested ${role.label} has no constructed material`);
+  for (const role of brief.excludedRoles) if (active.some((part) => role.matches.includes(part.role))) issues.push(`Excluded ${role.label} has constructed material`);
   for (const assetId of selectedSourceIds) if (!document.sourceAssetIds.includes(assetId)) issues.push(`Selected source ${assetId} was not placed`);
   return issues;
 }
@@ -70,8 +65,11 @@ function compactConfirmedNativeHistory(messages: BaseMessage[]): BaseMessage[] {
   for (let index = 0; index < messages.length; index++) {
     const candidate = messages[index];
     if (!(candidate instanceof AIMessage)) continue;
-    const mutationIds = (candidate.tool_calls ?? []).filter((call) => ["compose_native_form", "apply_native_batch"].includes(call.name)).map((call) => call.id);
-    if (!mutationIds.length) continue;
+    const calls = candidate.tool_calls ?? [];
+    // A mixed turn also contains decision evidence. Keep the entire valid
+    // assistant/call/result group rather than orphaning its read or error.
+    if (!calls.length || calls.some((call) => !["compose_native_form", "apply_native_batch"].includes(call.name))) continue;
+    const mutationIds = calls.map((call) => call.id);
     const replies = messages.slice(index + 1, index + 1 + (candidate.tool_calls?.length ?? 0));
     if (mutationIds.every((id) => replies.some((reply) => reply instanceof ToolMessage && reply.tool_call_id === id && reply.status !== "error" && !/^Error[:\s]/i.test(reply.text)))) cutoff = index + 1 + replies.length;
   }
@@ -87,14 +85,16 @@ export class NativeToolSession {
   document: NativeDocument;
   lastMutation: { documentHash: string; diff: ReturnType<typeof nativeDiff>; context: ReturnType<typeof pinnedContext> } | null = null;
   readonly applied: Array<{ key: string; hash: string; operationHash: string; operations: number }> = [];
+  private mutationTail: Promise<void> = Promise.resolve();
   constructor(readonly job: JobRecord, base: NativeDocument, private readonly persistent = true, readonly library: NativeLibrary | null = null) { this.document = nativeDocumentSchema.parse(base); }
 
   async replay(): Promise<void> {
     if (!this.persistent) return;
     for (const step of await loadNativeSteps(this.job.id)) {
       const before = this.document;
+      if (step.predecessorHash && canonicalHash(before) !== step.predecessorHash) throw new Error(`NATIVE_HISTORY_INCONSISTENT: step ${step.key} has a different stored predecessor; accepted history was not changed`);
       const next = applyNativeOperations(this.document, step.operations);
-      if (canonicalHash(next) !== step.resultHash) throw new Error(`Native step ${step.key} no longer replays to its stored result`);
+      if (canonicalHash(next) !== step.resultHash) throw new Error(`NATIVE_HISTORY_INCONSISTENT: step ${step.key} no longer replays to its stored result; accepted history was not changed`);
       this.document = next;
       this.lastMutation = { documentHash: step.resultHash, diff: nativeDiff(before, next), context: pinnedContext(next, typeof this.job.request?.baseNativeRevisionId === "string" ? this.job.request.baseNativeRevisionId : null) };
       this.applied.push({ key: step.key, hash: step.resultHash, operationHash: canonicalHash(step.operations), operations: step.operations.length });
@@ -102,6 +102,15 @@ export class NativeToolSession {
   }
 
   async apply(key: string, operations: NativeOperation[]) {
+    const previous = this.mutationTail;
+    let release!: () => void;
+    this.mutationTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await this.applyOrdered(key, operations); }
+    finally { release(); }
+  }
+
+  private async applyOrdered(key: string, operations: NativeOperation[]) {
     const existing = this.applied.find((value) => value.key === key);
     if (existing) {
       if (existing.operationHash !== canonicalHash(operations)) throw new Error("NATIVE_STEP_REPLAY_CONFLICT");
@@ -114,6 +123,7 @@ export class NativeToolSession {
       if (!this.library) throw new Error("Connect Audiotool before selecting a library preset");
       const resolved = await this.library.getPreset(device.preset.name);
       if (resolved.metadata.deviceType !== device.type || resolved.metadata.ownerName !== device.preset.ownerName || resolved.metadata.displayName !== device.preset.displayName) throw new Error(`Preset ${device.preset.name} changed or is incompatible; search again`);
+      if (!device.preset.contentHash || resolved.metadata.contentHash !== device.preset.contentHash) throw new Error(`Preset ${device.preset.name} has changed or is an unpinned historical reference; inspect and intentionally select its current sound`);
     }
     for (const operation of operations) {
       const regions = operation.kind === "placeLibrarySample" || operation.kind === "replaceLibrarySample" ? [operation.region] : operation.kind === "addPart" ? operation.part.libraryRegions ?? [] : [];
@@ -135,18 +145,29 @@ export class NativeToolSession {
         const section = before.sections.find((value) => value.id === targetSectionId);
         if (!section) throw new Error(`Unknown target section ${targetSectionId}`);
         const start = section.startBar * barTicks(before), end = section.endBar * barTicks(before);
-        if (canonicalHash(before.sections) !== canonicalHash(next.sections) || before.tempoBpm !== next.tempoBpm || canonicalHash(before.meter) !== canonicalHash(next.meter) || canonicalHash(before.groups ?? []) !== canonicalHash(next.groups ?? []) || canonicalHash(before.reverbBus ?? null) !== canonicalHash(next.reverbBus ?? null)) throw new Error(`Revision targeted ${targetSectionId} but changed global timing or routing`);
+        if (canonicalHash(before.sections) !== canonicalHash(next.sections) || before.tempoBpm !== next.tempoBpm || canonicalHash(before.meter) !== canonicalHash(next.meter) || canonicalHash(before.groups ?? []) !== canonicalHash(next.groups ?? []) || canonicalHash(before.reverbBus ?? null) !== canonicalHash(next.reverbBus ?? null) || canonicalHash(before.delayBus ?? null) !== canonicalHash(next.delayBus ?? null) || canonicalHash(before.master ?? null) !== canonicalHash(next.master ?? null)) throw new Error(`Revision targeted ${targetSectionId} but changed global timing or routing`);
+        const outsideNotes = (document: NativeDocument, partId: string) => materializedNotes(document, partId).flatMap((event) => {
+          const result: Array<{ startTick: number; durationTicks: number; pitch: number; velocity: number }> = [];
+          if (event.startTick < start) result.push({ startTick: event.startTick, durationTicks: Math.min(event.startTick + event.durationTicks, start) - event.startTick, pitch: event.pitch, velocity: event.velocity });
+          if (event.startTick + event.durationTicks > end) result.push({ startTick: Math.max(event.startTick, end), durationTicks: event.startTick + event.durationTicks - Math.max(event.startTick, end), pitch: event.pitch, velocity: event.velocity });
+          return result;
+        }).sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch || a.durationTicks - b.durationTicks);
+        const outsideClips = (document: NativeDocument, regions: Array<NativeDocument["parts"][number]["sourceRegions"][number] | NonNullable<NativeDocument["parts"][number]["libraryRegions"]>[number]>) => regions.flatMap((region) => {
+          const endTick = region.startTick + region.durationTicks;
+          const portions = [{ from: region.startTick, to: Math.min(endTick, start) }, { from: Math.max(region.startTick, end), to: endTick }].filter((value) => value.to > value.from);
+          return portions.map(({ from, to }) => ({ resource: "assetId" in region ? `${region.assetId}:${region.assetHash}` : region.sampleName, startTick: from, durationTicks: to - from, sourceStartSeconds: Number((region.sourceStartSeconds + (from - region.startTick) / 960 * 60 / document.tempoBpm * (region.playbackRate ?? 1)).toFixed(6)), playbackMode: region.playbackMode ?? "once", loopDurationSeconds: region.playbackMode === "loop" ? region.sourceDurationSeconds : null, playbackRate: region.playbackRate ?? 1, stretchMode: region.stretchMode ?? null, pitchShiftSemitones: region.pitchShiftSemitones ?? 0, gain: region.gain }));
+        }).sort((a, b) => a.startTick - b.startTick || a.resource.localeCompare(b.resource));
         const outside = (document: NativeDocument) => document.parts.map((part) => ({
           id: part.id, device: part.device, gain: part.gain, pan: part.pan, groupId: part.groupId, sends: part.sends, effects: part.effects,
-          notes: materializedNotes(document, part.id).filter((event) => event.startTick < start || event.startTick + event.durationTicks > end),
-          sources: part.sourceRegions.filter((region) => region.startTick < start || region.startTick + region.durationTicks > end),
-          librarySources: part.libraryRegions?.filter((region) => region.startTick < start || region.startTick + region.durationTicks > end),
+          notes: outsideNotes(document, part.id),
+          sources: outsideClips(document, part.sourceRegions),
+          librarySources: outsideClips(document, part.libraryRegions ?? []),
           automation: part.automation
         }));
         if (canonicalHash(outside(before)) !== canonicalHash(outside(next))) throw new Error(`Revision targeted ${targetSectionId} but changed material outside that section or a global parameter`);
       }
     }
-    if (this.persistent) await saveNativeStep(this.job, key, operations, next);
+    if (this.persistent) await saveNativeStep(this.job, key, operations, canonicalHash(before), next);
     this.document = next;
     const hash = canonicalHash(next);
     this.lastMutation = { documentHash: hash, diff: nativeDiff(before, next), context: pinnedContext(next, typeof this.job.request?.baseNativeRevisionId === "string" ? this.job.request.baseNativeRevisionId : null) };
@@ -286,32 +307,35 @@ export async function produceNative(input: { session: NativeToolSession; directi
     for (const name of ["native-arrangement", "native-revision", "native-sound-design"]) files[`/skills/${name}/SKILL.md`] = { content: await readFile(resolve(REPOSITORY_ROOT, "agent-skills", name, "SKILL.md"), "utf8"), mimeType: "text/markdown", created_at: created, modified_at: created };
     const context = pinnedContext(input.session.document, typeof input.session.job.request.baseNativeRevisionId === "string" ? input.session.job.request.baseNativeRevisionId : null);
     let latestInspection: unknown = null;
-    files["/workspace/context.json"] = { content: JSON.stringify({ pinned: context, direction: input.direction, mode: input.mode, targets: { partId: input.targetPartId, sectionId: input.targetSectionId }, ownedSources: input.sources }), mimeType: "application/json", created_at: created, modified_at: created };
+    const brief = interpretNativeBrief(input.direction);
+    files["/workspace/context.json"] = { content: JSON.stringify({ pinned: context, direction: input.direction, conservativeBriefChecks: brief, mode: input.mode, targets: { partId: input.targetPartId, sectionId: input.targetSectionId }, ownedSources: input.sources }), mimeType: "application/json", created_at: created, modified_at: created };
     const safeContext = { revisionId: context.revisionId, documentHash: context.documentHash, protectedPartIds: context.parts.filter((part) => part.protected).map((part) => part.id), audio: context.audio };
     const agent = createDeepAgent({
       name: "pocket-native-producer",
       model: input.scriptedModel ?? new ChatOpenAI({ model: config.OPENAI_MODEL, apiKey: config.OPENAI_API_KEY, useResponsesApi: true, reasoning: { effort: "low" }, maxTokens: config.NATIVE_MODEL_OUTPUT_TOKENS, maxRetries: 0, timeout: Math.min(90_000, Math.max(1_000, new Date(input.session.job.deadlineAt).getTime() - Date.now())) }),
       tools: [
-        ...(input.mode === "generation" && !input.session.applied.length ? [tool(async (raw: unknown) => { const form = nativeFormSchema.parse(raw); const result = await input.session.apply("form-" + canonicalHash(form).slice(0, 24), nativeFormOperations(form, input.sources)); latestInspection = null; return result; }, { name: "compose_native_form", description: "Construct an original editable form with model-chosen meter, sections, instruments and pinned parameters, motifs and note events, placements, effects, automation and selected owned source intervals. Beats are quarter-note beats; placements use bars. All details go through validated, durably replayed operations.", schema: nativeFormSchema })] : []),
+        ...(input.mode === "generation" && !input.session.applied.length ? [tool(async (raw: unknown) => { try { const form = nativeFormSchema.parse(raw); const result = await input.session.apply("form-" + canonicalHash(form).slice(0, 24), nativeFormOperations(form, input.sources)); latestInspection = null; return result; } catch (error) { return toolFailure(error); } }, { name: "compose_native_form", description: "Construct an original editable form with model-chosen meter, sections, instruments and pinned parameters, motifs and note events, placements, effects, automation and selected owned source intervals. Beats are quarter-note beats; placements use bars. All details go through validated, durably replayed operations.", schema: nativeFormSchema })] : []),
         tool((raw: unknown) => discoverNativeCapabilities(z.object({ query: z.string().max(80) }).parse(raw).query), { name: "discover_native_capabilities", description: "Search the pinned Nexus entity catalogue; discovery is not write permission.", schema: z.object({ query: z.string().max(80) }) }),
         tool((raw: unknown) => inspectNativeCapability(z.object({ path: z.string().max(160) }).parse(raw).path), { name: "inspect_native_capability", description: "Inspect SDK metadata, pointer targets and numeric ranges at a schema path.", schema: z.object({ path: z.string().max(160) }) }),
         tool((raw: unknown) => searchNativeResources(z.object({ query: z.string().max(80) }).parse(raw).query, input.sources), { name: "search_native_resources", description: "Search only selected owned WAV sources and curated local parameter recipes. Results include real measured segment activity and provenance; no remote library is queried.", schema: z.object({ query: z.string().max(80) }) }),
         tool(async (raw: unknown) => { const { deviceType, query } = z.object({ deviceType: z.enum(["heisenberg", "pulverisateur", "gakki", "beatbox8"]), query: z.string().max(80) }).parse(raw); if (!input.session.library) throw new Error("Audiotool library is unavailable; connect the account before selecting presets"); return input.session.library.searchPresets(deviceType, query); }, { name: "search_audiotool_presets", description: "Search real Audiotool instrument presets through the connected server session; results are metadata, not playback or rights proof. Inspect an exact result before selection.", schema: z.object({ deviceType: z.enum(["heisenberg", "pulverisateur", "gakki", "beatbox8"]), query: z.string().max(80) }) }),
         tool(async (raw: unknown) => { const { name } = z.object({ name: z.string().max(160) }).parse(raw); if (!input.session.library) throw new Error("Audiotool library is unavailable"); return (await input.session.library.getPreset(name)).metadata; }, { name: "inspect_audiotool_preset", description: "Resolve a preset's current device compatibility, owner and identity. Applying it still passes trusted validation.", schema: z.object({ name: z.string().max(160) }) }),
+        tool(async (raw: unknown) => { const { query, family } = z.object({ query: z.string().max(80), family: z.enum(["instrument", "drums"]) }).parse(raw); if (!input.session.library) return "Error: Connect Audiotool to inspect its GM sound catalog"; return input.session.library.searchGmSounds(query, family); }, { name: "search_gm_sounds", description: "Find named General MIDI melodic instruments or expressive Gakki drum kits in the pinned Audiotool catalog; inspect a chosen sound before applying its pinned preset identity.", schema: z.object({ query: z.string().max(80), family: z.enum(["instrument", "drums"]) }) }),
+        tool(async (raw: unknown) => { const { slug, family } = z.object({ slug: z.string().max(100), family: z.enum(["instrument", "drums"]) }).parse(raw); if (!input.session.library) return "Error: Audiotool library is unavailable"; try { return (await input.session.library.getGmSound(slug, family)).metadata; } catch (error) { return toolFailure(error); } }, { name: "inspect_gm_sound", description: "Fetch the exact selected Gakki sound, including a configuration fingerprint to pin in the native part. Does not hear or license the sound.", schema: z.object({ slug: z.string().max(100), family: z.enum(["instrument", "drums"]) }) }),
         tool(async (raw: unknown) => { const { query, pageToken } = z.object({ query: z.string().max(80), pageToken: z.string().max(500).optional() }).parse(raw); if (!input.session.library) throw new Error("Audiotool library is unavailable"); return input.session.library.searchSamples(query, pageToken); }, { name: "search_audiotool_samples", description: "Search actual Audiotool sample metadata. Search alone does not attach or authorize a sample; inspect an exact result before using placeLibrarySample.", schema: z.object({ query: z.string().max(80), pageToken: z.string().max(500).optional() }) }),
         tool(async (raw: unknown) => { const { name } = z.object({ name: z.string().max(160) }).parse(raw); if (!input.session.library) throw new Error("Audiotool library is unavailable"); return input.session.library.getSample(name); }, { name: "inspect_audiotool_sample", description: "Resolve a real sample's current duration, owner and provenance before constructing an interval. Does not imply a license or audible result.", schema: z.object({ name: z.string().max(160) }) }),
         tool((raw: unknown) => { const { assetId } = z.object({ assetId: z.uuid() }).parse(raw); const source = input.sources.find((value) => value.assetId === assetId); if (!source) throw new Error("Source is not selected and owned in this job"); latestInspection = { source, placements: input.session.document.parts.flatMap((part) => part.sourceRegions.filter((region) => region.assetId === assetId).map((region) => ({ partId: part.id, region }))) }; return latestInspection; }, { name: "inspect_owned_source", description: "Inspect a selected owned source's measured, time-bounded activity and existing canonical placements before choosing an interval. This does not listen semantically to audio.", schema: z.object({ assetId: z.uuid() }) }),
         tool(() => { latestInspection = pinnedContext(input.session.document, typeof input.session.job.request.baseNativeRevisionId === "string" ? input.session.job.request.baseNativeRevisionId : null); return latestInspection; }, { name: "inspect_native_workspace", description: "Read the verified current native construction context after applied changes.", schema: z.object({}) }),
-        tool((raw: unknown) => { const { partId, noteOffset, noteLimit } = z.object({ partId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(24).default(12) }).parse(raw); const part = input.session.document.parts.find((value) => value.id === partId); if (!part) throw new Error(`Unknown part ${partId}`); const realized = materializedNotes(input.session.document, partId); latestInspection = { documentHash: canonicalHash(input.session.document), part: { ...part, notes: part.notes.slice(noteOffset, noteOffset + noteLimit) }, totalFreeNotes: part.notes.length, motifs: input.session.document.motifs.filter((value) => value.partId === partId).map((motif) => ({ id: motif.id, name: motif.name, lengthTicks: motif.lengthTicks, totalNotes: motif.notes.length, preview: motif.notes.slice(0, 4) })), materializedNotes: realized.slice(noteOffset, noteOffset + noteLimit), totalMaterializedNotes: realized.length, noteOffset, nextNoteOffset: noteOffset + noteLimit < realized.length ? noteOffset + noteLimit : null, protected: input.session.document.protectedPartIds.includes(partId) }; return latestInspection; }, { name: "inspect_native_part", description: "Read one part's device parameters, effects, placements, source regions, automation and a paged note window. Motifs are summarized here; use inspect_native_motif for exact longer phrases.", schema: z.object({ partId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(24).default(12) }) }),
+        tool((raw: unknown) => { try { const { partId, noteOffset, noteLimit } = z.object({ partId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(24).default(12) }).parse(raw); const part = input.session.document.parts.find((value) => value.id === partId); if (!part) throw new Error(`Unknown part ${partId}`); const realized = materializedNotes(input.session.document, partId); latestInspection = { documentHash: canonicalHash(input.session.document), part: { ...part, notes: part.notes.slice(noteOffset, noteOffset + noteLimit) }, totalFreeNotes: part.notes.length, motifs: input.session.document.motifs.filter((value) => value.partId === partId).map((motif) => ({ id: motif.id, name: motif.name, lengthTicks: motif.lengthTicks, totalNotes: motif.notes.length, preview: motif.notes.slice(0, 4) })), materializedNotes: realized.slice(noteOffset, noteOffset + noteLimit), totalMaterializedNotes: realized.length, noteOffset, nextNoteOffset: noteOffset + noteLimit < realized.length ? noteOffset + noteLimit : null, protected: input.session.document.protectedPartIds.includes(partId) }; return latestInspection; } catch (error) { return toolFailure(error); } }, { name: "inspect_native_part", description: "Read one part's device parameters, effects, placements, source regions, automation and a paged note window. Motifs are summarized here; use inspect_native_motif for exact longer phrases.", schema: z.object({ partId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(24).default(12) }) }),
         tool((raw: unknown) => { const { motifId, noteOffset, noteLimit } = z.object({ motifId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(64).default(32) }).parse(raw); const motif = input.session.document.motifs.find((value) => value.id === motifId); if (!motif) throw new Error(`Unknown motif ${motifId}`); latestInspection = { documentHash: canonicalHash(input.session.document), motif: { ...motif, notes: motif.notes.slice(noteOffset, noteOffset + noteLimit) }, totalNotes: motif.notes.length, noteOffset, instances: input.session.document.parts.flatMap((part) => part.placements.filter((placement) => placement.motifId === motifId).map((placement) => ({ partId: part.id, placement }))), protected: input.session.document.protectedMotifIds.includes(motifId) }; return latestInspection; }, { name: "inspect_native_motif", description: "Read exact motif notes in a bounded page and every placement that depends on it, to prevent an instance-targeted edit from changing shared uses.", schema: z.object({ motifId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(64).default(32) }) }),
         tool((raw: unknown) => { const { sectionId, focusPartId } = z.object({ sectionId: z.string(), focusPartId: z.string().optional() }).parse(raw); latestInspection = analyzeNativeSection(input.session.document, sectionId, focusPartId); return latestInspection; }, { name: "inspect_native_section", description: "Inspect a section's actual note onsets, sounding overlap, density, ranges, repeated motif instances, source intervals and automation targets. Includes material spanning its boundaries; optionally preview eight notes for one part.", schema: z.object({ sectionId: z.string(), focusPartId: z.string().optional() }) }),
-        tool(async (raw: unknown) => { const { stepKey, operations } = z.object({ stepKey: z.string().regex(/^[a-z0-9-]{1,96}$/), operations: z.array(nativeOperationSchema).min(1).max(128) }).parse(raw); if (operations.some((value) => value.kind === "protect")) throw new Error("Only the user's explicit protection control may change locks"); const result = await input.session.apply(stepKey, operations); latestInspection = null; return result; }, { name: "apply_native_batch", description: "Apply bounded validated musical operations, then read the actual diff. varyMotifInstance creates a new phrase for one placement using explicit pitch/timing/duration/velocity/omission changes, leaving the shared source motif untouched. Use stable unique step keys; protections and revision scope are enforced.", schema: z.object({ stepKey: z.string().regex(/^[a-z0-9-]{1,96}$/), operations: z.array(nativeOperationSchema).min(1).max(128) }) })
+        tool(async (raw: unknown) => { try { const { stepKey, operations } = z.object({ stepKey: z.string().regex(/^[a-z0-9-]{1,96}$/), operations: z.array(nativeOperationSchema).min(1).max(128) }).parse(raw); if (operations.some((value) => value.kind === "protect")) throw new Error("Only the user's explicit protection control may change locks"); const result = await input.session.apply(stepKey, operations); latestInspection = null; return result; } catch (error) { return toolFailure(error); } }, { name: "apply_native_batch", description: "Apply bounded validated musical operations, then read the actual diff. varyMotifInstance changes one placement without rewriting its shared phrase. developSectionNotes splits boundary-crossing notes and motif instances, transforms only the chosen section, and preserves outside material. Group compression, sidechain and master settings are validated operations. Use stable unique step keys; protections and revision scope are enforced.", schema: z.object({ stepKey: z.string().regex(/^[a-z0-9-]{1,96}$/), operations: z.array(nativeOperationSchema).min(1).max(128) }) })
       ],
       middleware: [createMiddleware({ name: "VerifiedNativeContext", wrapModelCall: async (request, handler) => {
         if (!input.session.applied.length) return handler(request);
         const current = pinnedContext(input.session.document, typeof input.session.job.request.baseNativeRevisionId === "string" ? input.session.job.request.baseNativeRevisionId : null);
-        const compactCurrent = { revisionId: current.revisionId, documentHash: current.documentHash, tempoBpm: current.tempoBpm, meter: current.meter, bars: current.bars, sections: current.sections.map((section) => ({ id: section.id, bars: section.bars })), groups: current.groups.map((group) => ({ id: group.id, parentId: group.parentId })), reverbBus: current.reverbBus?.id ?? null, parts: current.parts.map((part) => ({ id: part.id, role: part.role, device: part.device, groupId: part.groupId, protected: part.protected })), audio: current.audio };
-        const payload = { direction: input.direction, mode: input.mode, targets: { partId: input.targetPartId ?? null, sectionId: input.targetSectionId ?? null }, current: compactCurrent, lastMutation: input.session.lastMutation && { documentHash: input.session.lastMutation.documentHash, diff: input.session.lastMutation.diff }, lastInspectionHash: latestInspection === null ? null : canonicalHash(latestInspection) };
+        const compactCurrent = { revisionId: current.revisionId, documentHash: current.documentHash, tempoBpm: current.tempoBpm, meter: current.meter, bars: current.bars, sections: current.sections.map((section) => ({ id: section.id, bars: section.bars })), groups: current.groups.map((group) => ({ id: group.id, parentId: group.parentId, compressor: group.compressor ?? null, sidechainFromPartId: group.sidechainFromPartId ?? null })), master: current.master, reverbBus: current.reverbBus?.id ?? null, delayBus: current.delayBus?.id ?? null, parts: current.parts.map((part) => ({ id: part.id, role: part.role, device: part.device, preset: part.preset, groupId: part.groupId, protected: part.protected, notes: part.notes, sourceRegions: part.sourceRegions, libraryRegions: part.libraryRegions, effects: part.effects, automation: part.automation })), audio: current.audio };
+        const payload = { direction: input.direction, conservativeBriefChecks: brief, mode: input.mode, targets: { partId: input.targetPartId ?? null, sectionId: input.targetSectionId ?? null }, current: compactCurrent, confirmedSteps: input.session.applied.map((step) => ({ key: step.key, documentHash: step.hash })), lastMutation: input.session.lastMutation && { documentHash: input.session.lastMutation.documentHash, diff: input.session.lastMutation.diff }, lastInspectionHash: latestInspection === null ? null : canonicalHash(latestInspection) };
         // Keep the provider-valid assistant/tool-call/result pairs intact. In
         // particular, search results, skill reads and tool errors are evidence
         // for the next decision even though they do not mutate the document.

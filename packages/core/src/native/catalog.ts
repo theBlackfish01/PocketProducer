@@ -5,7 +5,7 @@ import { getSchemaLocationDetails, schemaPathToSchemaLocation, type SchemaPath }
 import { nativeParameterRanges } from "./model.js";
 
 export const NATIVE_CATALOG_VERSION = "nexus-0.0.17-schema-v1";
-const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
+const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
 const musicalMeaning: Record<string, { family: string; purpose: string; caveat?: string }> = {
   heisenberg: { family: "instrument", purpose: "Subtractive synth for basses, pads and leads." },
   pulverisateur: { family: "instrument", purpose: "Alternate pitched synth voice for contrasting timbres." },
@@ -20,6 +20,10 @@ const musicalMeaning: Record<string, { family: string; purpose: string; caveat?:
   audioDevice: { family: "routing", purpose: "Playback device and channel path created by the pinned sample insertion helper." },
   audioTrack: { family: "arrangement", purpose: "Timeline track for one or more ready owned sample regions." },
   mixerChannel: { family: "routing", purpose: "Part channel with gain and pan routing." },
+  mixerGroup: { family: "routing", purpose: "Shared part group with gain/pan, bounded compressor and supported sidechain source." },
+  mixerReverbAux: { family: "routing", purpose: "Shared reverb return selected by part send levels." },
+  mixerDelayAux: { family: "routing", purpose: "One shared tempo-stepped delay return selected by part send levels." },
+  mixerSideChainCable: { family: "routing", purpose: "Validated control link from a part channel to a group compressor." },
   desktopAudioCable: { family: "routing", purpose: "Connects an instrument or effect output to a compatible audio input." },
   stompboxDelay: { family: "effect", purpose: "Time-based repeats; timing and feedback need bounded parameter checks." },
   stompboxReverb: { family: "effect", purpose: "Spatial decay; structure cannot prove mix quality." },
@@ -32,11 +36,11 @@ const musicalMeaning: Record<string, { family: string; purpose: string; caveat?:
 export function nativeOperationContract(root: string) {
   const parameters = root in nativeParameterRanges ? nativeParameterRanges[root as keyof typeof nativeParameterRanges] : null;
   const operations = root === "sample" || root === "audioRegion" || root === "audioTrack" || root === "audioDevice"
-    ? ["create via ready owned sample mapping", "inspect", "readback"]
+    ? ["create via ready owned or resolved Audiotool sample mapping", "inspect", "readback"]
     : root === "mixerChannel" || root === "desktopAudioCable" ? ["create validated part route", "inspect", "readback"]
       : parameters ? ["create", "replace/edit mapped parameters", "remove via part/effect operation", "inspect", "readback"]
         : writable.has(root) ? ["create through validated domain operation", "inspect", "readback"] : ["inspect SDK schema only"];
-  return { operations, mappedParameters: parameters, prerequisite: root === "sample" || root === "audioRegion" ? "Owned ready WAV; upload outcome must be known before remote application" : null, offlineVerified: writable.has(root), liveVerified: false };
+  return { operations, mappedParameters: parameters, prerequisite: root === "sample" || root === "audioRegion" ? "Owned ready WAV with known upload outcome, or an exact resolved Audiotool library sample; neither implies usage rights" : null, offlineVerified: writable.has(root), liveVerified: false };
 }
 
 let rootsPromise: Promise<string[]> | undefined;
