@@ -6,10 +6,14 @@ import {
   analyzePreview, appendAttemptEvent, attemptBoundedDrumRepair, canonicalHash, claimNextJob, closePool, commitCancelled, commitExportPreparation, commitRevision, compileArrangement, completeProviderEffect, compositionSourceLineage, createAudiotoolServerClient, decodeWav, dispatchOutbox, expireJob, exportManifestToAudiotool, exportResumeState, failJob, failProviderEffect,
   getConfig, getRevision, heartbeat, isCancelled, markEffectDispatched, needsAttentionJob, produceArrangement, protectedTrackHash, providerAvailability, recordExportProgress, requeueJob, reserveProviderEffect,
   measureDecodedWav, profileOwnedSourceWav, renderAssets, renderComposition, safeStoragePath, simplifyDrums, validateComposition, writeNexusManifest,
-  JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeLibraryClient, type NativeRemoteClient, type NativeSource, type SourceDescriptor
+  AudiotoolSessionExpiredError, JobControlError, NexusOperationError, NEXUS_MAPPING_VERSION, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type AudiotoolExportCheckpoint, type AudioAnalysis, type JobRecord, type NativeLibraryClient, type NativeRemoteClient, type NativeSource, type SourceDescriptor
 } from "@pocket/core";
 
 const config = getConfig();
+export async function optionalNativeLibraryConnection(ownerId: string, clientId: string, connect: typeof createAudiotoolServerClient = createAudiotoolServerClient) {
+  try { return await connect(ownerId, clientId); }
+  catch (error) { if (error instanceof AudiotoolSessionExpiredError) return null; throw error; }
+}
 const workerId = `worker-${process.pid}-${randomUUID().slice(0, 8)}`;
 
 async function stage(job: JobRecord, name: string, message: string) {
@@ -250,7 +254,7 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal): Promise<
   const protectedBase = protectionChange && Array.isArray(protectionChange.expectedPartIds) && Array.isArray(protectionChange.desiredPartIds)
     ? setNativeProtections(base, protectionChange.expectedPartIds as string[], protectionChange.desiredPartIds as string[])
     : protectedPartIds.length ? applyNativeOperations(base, [{ kind: "protect", partIds: protectedPartIds, motifIds: [] }]) : base;
-  const libraryConnection = !config.FIXTURE_MODE && config.AUDIOTOOL_CLIENT_ID ? await createAudiotoolServerClient(job.ownerId, config.AUDIOTOOL_CLIENT_ID) : null;
+  const libraryConnection = !config.FIXTURE_MODE && config.AUDIOTOOL_CLIENT_ID ? await optionalNativeLibraryConnection(job.ownerId, config.AUDIOTOOL_CLIENT_ID) : null;
   const library = libraryConnection ? createNativeLibrary(libraryConnection.client as unknown as NativeLibraryClient) : null;
   const session = new NativeToolSession(job, protectedBase, true, library);
   const selected = Array.isArray(job.request.sourceAssetIds) ? job.request.sourceAssetIds.filter((value): value is string => typeof value === "string") : [];

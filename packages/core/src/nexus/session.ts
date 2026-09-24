@@ -13,6 +13,10 @@ const tokenSchema = z.object({
 });
 
 export type AudiotoolTokenData = z.infer<typeof tokenSchema>;
+export class AudiotoolSessionExpiredError extends Error {
+  readonly statusCode = 409;
+  constructor() { super("Audiotool access expired without a refresh token. Reconnect Audiotool in the browser."); this.name = "AudiotoolSessionExpiredError"; }
+}
 const keyPath = resolve(REPOSITORY_ROOT, ".local/secrets/audiotool-session.key");
 
 async function sessionKey(): Promise<Buffer> {
@@ -110,7 +114,7 @@ export async function createAudiotoolServerClient(ownerId: string, clientId: str
   const session = await loadAudiotoolSession(ownerId);
   if (!session) return null;
   if (!session.tokens.refreshToken && session.tokens.expiresAt <= Date.now() + 60_000) {
-    throw new Error("Audiotool access expired without a refresh token. Reconnect Audiotool in the browser.");
+    throw new AudiotoolSessionExpiredError();
   }
   const [nexusModule, nodeModule] = await Promise.all([import("@audiotool/nexus"), import("@audiotool/nexus/node")]);
   const refresh = createAudiotoolTokenRefreshHandler(ownerId, session.userName);
