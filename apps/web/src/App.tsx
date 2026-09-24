@@ -452,7 +452,7 @@ export default function App() {
     <Button className="w-full justify-start rail-new" onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button>
     <div className="rail-heading"><FolderOpen className="size-4" /> Sessions</div>
     <p className="rail-caption">Recent</p>
-    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => <button key={project.id} className="rail-session" aria-current={project.id === projectId ? "page" : undefined} title={project.title} onClick={() => void chooseProject(project.id)}>{project.title}</button>)}</div>
+    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === projectId ? "page" : undefined} title={project.title} onClick={() => void chooseProject(project.id)}>{project.title}</button>)}</div>
   </>, [projects, projectId, busy])
 
   return (

@@ -1,5 +1,11 @@
 # Verification record
 
+## Post-`cb64447` native construction pass (2026-09-24)
+
+`pnpm check` passed lint, strict typecheck, 13 unit files / 59 tests and production Vite build (existing large lazy SDK chunk warning). `pnpm test:integration` passed 2 files / 36 tests on the isolated PostgreSQL database with migration 012 applied. `pnpm test:e2e` passed six Chromium journeys in the final 1.0-minute run. No ordinary test can access provider credentials. No live OpenAI/Gemini/Audiotool request was dispatched for this pass.
+
+The new integration assertions inspect actual successive Deep Agent model messages, preserve discovery/errors after a mutation, interrupt an unfinished 48-bar ensemble and continue known steps under one job. Actual offline SDK tests assert source channel/FX/automation fields, group/send pointers, preset override order, sample interval placement, curated instrument parameters and automation target/shape. The browser journeys retain a typed pending native draft across mode/project/reload, show partial-state continuation and large-arrangement disclosure, and preserve legacy playback. Captures `.local/evidence/native-desktop.png`, `native-mobile.png`, `native-tablet-large.png` were visually inspected; they are fixture screens. This does not verify a real model's artistic decisions, real Audiotool resource permissions/readback, native audio, physical phone or non-Chromium browsers. The detailed current matrix is [here](native-construction-completion.md).
+
 ## Guided Listening Room redesign (2026-09-24)
 
 `pnpm check` passed: lint, strict typecheck, 12 unit files / 47 tests, and production build (only the existing large lazy SDK chunk warning). `pnpm test:integration` passed: 2 files / 32 tests. Final `pnpm test:e2e` passed: 5 Chromium journeys in 1.3 min after the copy/touch-target polish. All ordinary tests remain isolated fixture mode with zero provider access. The copy tests verify human progress/recovery labels and fact-derived arrangement summaries rather than exposing SDK prose.

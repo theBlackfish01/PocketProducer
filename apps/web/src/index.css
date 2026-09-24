@@ -147,6 +147,17 @@ button:disabled { cursor: not-allowed; }
 .native-section-card span, .native-section-card small { color: var(--muted-foreground); font-size: .8rem; }
 .native-section-card[aria-pressed="true"] { border-color: var(--forest); background: var(--accent); box-shadow: inset 0 3px var(--forest); }
 .native-part-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 11px; }
+.native-role-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.native-role-filters button { min-height: 36px; text-transform: capitalize; }
+.native-library-section form { display: grid; gap: 7px; margin-top: 12px; }
+.native-library-section label { font-size: .78rem; color: var(--muted-foreground); }
+.native-library-section input, .native-library-section select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); color: var(--foreground); }
+.native-library-section form button { justify-self: start; margin-top: 4px; }
+.native-library-results { display: grid; gap: 8px; list-style: none; padding: 0; margin: 14px 0 0; }
+.native-library-results li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px; border: 1px solid var(--border); border-radius: 11px; background: var(--card); }
+.native-library-results li div { min-width: 0; }
+.native-library-results strong, .native-library-results small { display: block; overflow-wrap: anywhere; }
+.native-library-results small { color: var(--muted-foreground); font-size: .72rem; }
 .native-part-card { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 15px; background: var(--card); }
 .native-part-card.is-target { border-color: var(--forest); }
 .native-part-card > button:last-child { justify-self: start; }

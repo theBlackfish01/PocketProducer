@@ -1,0 +1,44 @@
+# Native construction completion pass — 2026-09-24
+
+This pass starts at clean `cb64447`. It extends the existing native v2 history without rewriting accepted versions or legacy WAVs. `012_native_producer_completion.sql` adds an aggregate completion marker; the source-of-truth document remains the immutable native JSON and its ordered tool steps. The mapper is `nexus-native-v4` against pinned `@audiotool/nexus@0.0.17`. Native render/playback and Gemini listening remain deferred.
+
+## User path and boundaries
+
+Create an Arrange room, optionally attach owned WAV sources, describe the piece, select a scope/kept part, and submit. The Deep Agent can inspect paged musical state and source measurements; search connected Audiotool sample/preset metadata; build a compact form; then use validated operations to refine notes, instances, parameters, effects, groups, a shared reverb return, sends, source intervals and automation. Changes commit as immutable local versions only after structural checks. Compare and restore are factual structural actions, not audio A/B. Sync to Audiotool remains explicit. The Playable audio history is separate.
+
+A disconnected library produces an explicit unavailable state; local recipes are not represented as Audiotool presets. Search/metadata is read-only. Selection is re-resolved through the trusted adapter before acceptance and again before sync. Metadata preserves resource name/owner/provenance; it is **not** a license guarantee. Owned source hashes, access and readiness remain trusted worker checks. No sample or preset is fabricated as a successful resource. The connected adapter has not been live-tested in this pass, so remote permissions/results are unknown.
+
+Partial model work is kept under the original job and accounted call budget. A marker records only a structurally checked completed aggregate. An unfinished generation does not become the selected version; the UI offers **Continue saved draft** on the same job. Confirmed effects are reused, uncertain effects remain fenced, and a changed head or exhausted call budget rejects continuation. The saved draft is a durable sequence of operations, not yet a separately browsable tentative version. The four-call/1,200-output-token defaults may limit a large real-model piece; no hidden new job or cap increase is used.
+
+## Reproduced defects
+
+| ID | Repair | Maintained evidence |
+| --- | --- | --- |
+| F1 | Dispatch compaction keeps ordered post-mutation discovery, skill and error exchanges alongside fresh verified state; detailed reads are paged. Accounting/idempotency remains enabled. | `tests/integration/native.test.ts` inspects the *next actual model input* after search and after a failed tool. |
+| F2 | A completion marker plus structural postconditions distinguish finished from confirmed-but-partial work. Same-job continuation retains steps, usage and head fencing; no one-note sketch is promoted. | Integration restart/partial/continue tests, including the 48-bar ensemble case. |
+| F3 | Audio parts receive a routed channel, gain/pan, serial processing and automation. Invalid audio-on-instrument combinations reject before acceptance. | `readback.test.ts` compares canonical source intent to actual SDK fields, intervals, effects and automation parameter locations. |
+| F4 | Project-keyed native drafts persist direction, scope, sources and protections through mode switch, project navigation and reload; stale references are reconciled visibly. | `native-room.spec.ts` types a non-default request and exercises all three paths. |
+
+## Current capability contract
+
+Legend: **local** means validated canonical write plus SDK offline creation/readback; **connected** is implemented against the SDK client but not live-verified in this pass. SDK discovery by itself never authorizes a write.
+
+| Family | Discover/read | Write / automation | Evidence and limit |
+| --- | --- | --- | --- |
+| Musical form | Paged sections, motifs, part details, source profiles, actual diff; section inspector measures onsets, sounding overlap, density and note/velocity range | 4–128 bars, 2/4–12/8, 24 sections, motifs/instances, per-note pitch/start/duration/velocity, placement repeat/transpose, replacement/local variation | Local note/pattern relationships and section-spanning note inspection verified. Beatbox8 remains four boolean lanes/five pattern slots; expressive drums require a MIDI-capable voice. No high-level phrase-retiming primitive. |
+| Instruments/FX | Pinned SDK capability search/path inspection; actual part settings | Heisenberg operator/envelope/filter/unison/playing controls, Pulverisateur filter/glide/playing controls, Gakki and Beatbox8 gain, five serial FX with curated numeric fields; edit/remove/reorder via replacement operations | Local SDK field readback. This is not the full native-device/enum/modulation surface; Gakki soundfont selection and arbitrary SDK primitives are not exposed. |
+| Samples/presets | Connected SDK `samples.list/get`, `presets.search/get`; owned WAV segment measurements | Exact sample identity and trimmed later interval, once/loop, multiple clips; preset application then explicit parameter overrides | Local SDK sample interval and preset field readback with representative resource fixtures. Connected remote results, rights, sample preview and source-rate transformations remain unverified/unsupported. |
+| Routing/shared processing | Paged part detail and factual compare | Channels, nested mixer groups, one shared reverb aux, sends, serial effects, remove/reroute; protected dependencies reject changes | Local group/aux/pointer and protection tests. No arbitrary bus FX, sidechain/modulation cable editor or feedback topology. |
+| Automation | Part detail exposes target and points | Gain/pan, curated instrument/effect fields, aux-send gain; step/linear/sloped events; add/replace/remove | Actual SDK parameter locations/events verified. Values are SDK-normalized 0–1 curve values; no arbitrary parameter, musical-unit conversion, or automated section retiming. |
+| Native sync | Local mapping version, semantic readback, per-version checkpoint | Explicit create/upload/apply/readback; no unknown Studio overwrite | Expanded v4 resource/routing adapter verified only offline/contract-double. Fresh real Audiotool readback and source-bearing sync require separate bounded authorization. |
+| Audio | Existing owned WAV audition and legacy four-stem playback | No new native render or player | Deliberately deferred; structural and model opinion are not audible evidence. |
+
+The default completion check covers explicit bars, named roles and selected source placement and prevents a seed sketch from passing. It does not certify artistic sophistication, harmonic intent, subjective balance or a fully realized vague brief. The agent may construct in multiple batches, but the four-call envelope has not been measured with a real model for the expanded workflow. Scripted transport proves orchestration and tool wiring, not autonomous real-provider quality. More coverage is needed for coherent section-spanning *edits* (inspection now handles overlap), high-level phrase development, broad native parameter enums and sidechain/modulation before calling the entire construction ambition complete.
+
+## Verification and next bounded gate
+
+`pnpm check`: lint, types, 13 unit files / 59 tests, production build pass (existing large lazy SDK chunk warning). `pnpm test:integration`: 2 files / 36 tests pass against isolated PostgreSQL. `pnpm test:e2e`: six Chromium journeys pass, including 16-part tablet progressive disclosure and 390 px phone focus. Desktop/tablet/mobile captures were inspected in ignored `.local/evidence/native-*.png`. These are fixture or scripted-model states, not live model or native audio evidence. A legacy provider test's one-second timeout was widened to five seconds solely to make its intended uncertain-readiness assertion stable under full-suite load.
+
+No OpenAI, Gemini or Audiotool live call was made for this pass; new provider spend is zero. Last reported ledger before this pass was USD 0.618486 known spent/reserved against USD 5, with unknown Gemini liability; that is not a freshly proven available balance. Migration 012 is applied in the test database. The existing development database should be migrated with `pnpm db:migrate` before running the new worker.
+
+The next external gate is a separately authorized disposable real-model evaluation, then one source-free and one source-bearing Audiotool sync/readback with explicit effect/cost bounds and current consent. Do not run a native render probe or infer playback from a successful structural sync. Independently, continue local construction work on the capability limits above and test against actual SDK values.

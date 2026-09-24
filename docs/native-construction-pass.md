@@ -1,6 +1,8 @@
 # Creative native construction pass — 2026-09-24
 
-This is the current implementation contract for the follow-up to reviewed baseline `92a8daf`. The attached handoff is a work order, not runtime evidence. Native rendering, playback and Gemini listening remain deferred. The legacy accepted WAV history is separate and untouched.
+Historical contract for the earlier creative pass. The current post-`cb64447` implementation, capability matrix and limits are in [native-construction-completion.md](native-construction-completion.md); this page's v2 mapper/library/bus limitations no longer describe the current tree.
+
+This records the earlier follow-up to reviewed baseline `92a8daf`. The attached handoff is a work order, not runtime evidence. Native rendering, playback and Gemini listening remain deferred. The legacy accepted WAV history is separate and untouched.
 
 ## User workflow and producer boundary
 

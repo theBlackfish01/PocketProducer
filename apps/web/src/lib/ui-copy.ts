@@ -30,6 +30,7 @@ export function readableDevice(type: string) {
     heisenberg: "Synth",
     pulverisateur: "Synth",
     gakki: "Pitched instrument",
+    audio: "Your sound",
     sample: "Your sound"
   }
   return names[type] ?? "Instrument"

@@ -44,6 +44,21 @@ test("native construct, protect, revise, compare and restore survives reload", a
   await page.getByRole("button", { name: /Ascent.*Bars/i }).click();
   await expect(page.getByText(/In Ascent · change Soft pulse/)).toBeVisible();
   await direction.fill("Vary the rhythmic phrase in the later section while preserving the slow lead");
+  const pending = "Vary the rhythmic phrase in the later section while preserving the slow lead";
+  await page.getByRole("button", { name: "Playable audio" }).click();
+  await page.getByRole("button", { name: "Arrange" }).click();
+  await expect(direction).toHaveValue(pending);
+  await expect(page.getByText(/In Ascent · change Soft pulse/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Allow changes to Slow lead for the next change" })).toHaveAttribute("aria-pressed", "true");
+  await page.reload();
+  await expect(direction).toHaveValue(pending);
+  await expect(page.getByText(/In Ascent · change Soft pulse/)).toBeVisible();
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("heading", { name: "Make something yours" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).not.toHaveValue(pending);
+  await page.locator(`.session-rail .rail-session[data-project-id="${projectId}"]`).click();
+  await expect(direction).toHaveValue(pending);
+  await expect(page.getByText(/In Ascent · change Soft pulse/)).toBeVisible();
   await page.getByRole("button", { name: "Shape the arrangement" }).click();
   await expect(page.getByText(/2 saved versions/)).toBeVisible({ timeout: 90_000 });
   await page.getByRole("button", { name: "Compare" }).click();
@@ -56,6 +71,7 @@ test("native construct, protect, revise, compare and restore survives reload", a
   await expect(page.getByText(/2 saved versions/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Keep unchanged Slow lead for the next change" })).toHaveAttribute("aria-pressed", "false");
   await page.reload();
+  await page.locator(`.session-rail .rail-session[data-project-id="${projectId}"]`).click();
   await expect(page.getByText(/64 bars.*8 editable parts/)).toBeVisible();
   await page.getByText("Explore detailed capabilities").click();
   await page.getByPlaceholder("Find instruments or effects").fill("beatbox8");
@@ -66,8 +82,12 @@ test("native construct, protect, revise, compare and restore survives reload", a
 
 test("native phone layout preserves direction focus and compare dialog return", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("A quiet 32-bar instrumental sketch for mobile review");
+  await page.getByRole("button", { name: "Create arrangement" }).click();
+  await expect(page.getByText(/1 saved version/)).toBeVisible({ timeout: 90_000 });
+  await page.setViewportSize({ width: 390, height: 844 });
   const direction = page.getByRole("textbox", { name: "Describe your arrangement" });
   await direction.focus();
   const box = await direction.boundingBox();
@@ -81,4 +101,31 @@ test("native phone layout preserves direction focus and compare dialog return", 
   await expect(page.getByRole("button", { name: "Compare" })).toBeFocused();
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: `${evidence}/native-mobile.png`, fullPage: true });
+});
+
+test("tablet progressively discloses a large arrangement without horizontal overflow", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("An evolving arrangement with many interacting parts");
+  await page.getByRole("button", { name: "Create arrangement" }).click();
+  await expect(page.getByText(/1 saved version/)).toBeVisible({ timeout: 90_000 });
+  await page.route("**/api/v1/projects/*/native", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json() as { current: { document: { parts: Array<{ id: string; name: string }> } } | null };
+    if (snapshot.current) {
+      const parts = snapshot.current.document.parts;
+      snapshot.current.document.parts = [...parts, ...parts.map((part) => ({ ...part, id: `${part.id}-second`, name: `${part.name} second voice` }))];
+    }
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await page.reload();
+  await expect(page.getByRole("group", { name: "Filter parts by role" })).toBeVisible();
+  await expect(page.locator(".native-part-card")).toHaveCount(8);
+  await page.getByRole("button", { name: /Show more parts/ }).click();
+  await expect(page.locator(".native-part-card")).toHaveCount(16);
+  await page.getByRole("group", { name: "Filter parts by role" }).getByRole("button", { name: /percussion/i }).click();
+  await expect(page.locator(".native-part-card")).toHaveCount(4);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(820);
+  await page.screenshot({ path: `${evidence}/native-tablet-large.png`, fullPage: true });
 });
