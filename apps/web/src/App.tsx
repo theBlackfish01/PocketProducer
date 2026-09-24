@@ -167,6 +167,14 @@ export default function App() {
     } else { setSnapshot(null); setReceipt(null); setExportResult(null); playback.clear() }
   }
 
+  const refreshProjectLabels = async (id: string) => {
+    const result = await api.listProjects()
+    if (activeProjectRef.current !== id) return
+    setProjects(result.projects)
+    const updated = result.projects.find((project) => project.id === id)
+    if (updated) setSnapshot((prior) => prior?.project.id === id ? { ...prior, project: updated } : prior)
+  }
+
   useEffect(() => {
     const requestId = ++projectRequestRef.current
     void Promise.all([api.status(), api.listProjects()]).then(async ([status, list]) => {
@@ -455,7 +463,7 @@ export default function App() {
         <div className="mobile-topbar"><Brand /><Button variant="ghost" size="icon" aria-label="Open sessions" onClick={() => setNavOpen(true)}><Menu /></Button></div>
         <div className="topline"><span>Listening Room / {snapshot?.project.title ?? "Welcome"}</span><div className="mode-switch" role="group" aria-label="Listening Room workflow"><Button variant={nativeMode ? "default" : "outline"} size="sm" aria-pressed={nativeMode} onClick={() => { playback.clear(); setNativeMode(true) }}>Native construction</Button><Button variant={!nativeMode ? "default" : "outline"} size="sm" aria-pressed={!nativeMode} onClick={() => { setNativeMode(false); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted) }}>Legacy audio</Button></div>{!nativeMode ? <Button variant="outline" onClick={() => void (nexus.connection === "awaiting-authorization" ? connectAudiotool() : exportCurrent())} disabled={!currentRevision || busy}><Headphones /> {nexus.connection === "unconfigured" ? "Prepare Nexus handoff" : nexus.connection === "awaiting-authorization" ? "Connect Audiotool" : "Export editable stems"}</Button> : null}</div>
 
-        {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot ? nativeMode ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} legacyVersionCount={snapshot.revisions.length} onAddSource={() => setSourcesOpen(true)} onLegacy={() => { setNativeMode(false); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted) }} /> : <>
+        {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot ? nativeMode ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} legacyVersionCount={snapshot.revisions.length} onAddSource={() => setSourcesOpen(true)} onLegacy={() => { setNativeMode(false); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted) }} onProjectUpdated={() => { void refreshProjectLabels(snapshot.project.id) }} /> : <>
           <header className="session-header"><div className="eyebrow"><span className="status-dot" /> {activeJob ? "Production in progress" : currentRevision ? "Ready to listen" : "New session"}</div><h1 className="session-title">{currentRevision?.title ?? snapshot.project.title}</h1><p className="session-deck">{currentRevision?.changeSummary ?? "Start with a sound or an idea. The producer will shape a short instrumental and keep every accepted version safe."}</p><p className="provider-status">Producer: {producerProvenance} · Audio critique: {currentAnalysis ? `${currentAnalysis.status} via ${currentAnalysis.model}` : providers.gemini ? "available when a render is made" : "unavailable; measured checks remain active"}</p></header>
           {exportResult ? <div className="job-status" role={exportResult.state === "failed" || exportResult.state === "uncertain" ? "alert" : "status"}><strong>Audiotool handoff: {exportResult.state.replaceAll("_", " ")}</strong><span>{exportResult.error_message ?? (exportResult.remote_url ? "Four editable audio stems are ready in Audiotool." : "The local four-stem mapping is preserved while this handoff progresses.")}</span>{exportResult.remote_url ? <Button className="mt-3" variant="outline" size="sm" onClick={() => window.open(exportResult.remote_url ?? "", "_blank", "noopener,noreferrer")}>Open Audiotool Studio</Button> : null}</div> : null}
           {audibleItem ? <>

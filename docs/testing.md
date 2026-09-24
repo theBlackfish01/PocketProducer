@@ -1,6 +1,12 @@
 # Verification record
 
-## Native-construction verification (2026-09-23)
+## Creative construction follow-up (2026-09-24)
+
+Final run: `pnpm check` passed (11 unit files / 44 tests, lint, strict types, build), `pnpm test:integration` passed (2 files / 32 tests) and `pnpm test:e2e` passed (5 Chromium journeys, 56.0 s). Ordinary tests have zero provider access. The contract double drives the real worker orchestration and validated offline Nexus document, not live Audiotool. Native desktop and 390 px screenshots under `.local/evidence/native-*.png` were inspected after the composer/palette/title changes. A native browser assertion was updated from the old protection string to the new pairwise comparison and then all five journeys passed. Physical-phone/non-Chromium verification remains open.
+
+Scripted-model tests use the production Deep Agent/tools/accounting path for three different briefs, plus a targeted shared-motif revision. Fixture mode remains a separate deterministic path. Neither proves subjective sound quality or real provider creative behavior. Semantic SDK tests vary region, gain/pan, effect and automation; source tests check an initially silent WAV, nonzero intervals, durable upload identities and v2 readback. No native renderer or Gemini listening test ran in this follow-up. See [finding and example evidence](native-construction-pass.md).
+
+## Prior native-construction verification (2026-09-23)
 
 Normal tests remain offline (`APP_ENV=test`, `FIXTURE_MODE=true`, keys blanked in child processes, dedicated `*_test` database). `vitest` files and Playwright workers run serially because their repository tests share one queue identity; concurrent files were observed to steal each other's jobs before this harness correction.
 

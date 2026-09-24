@@ -1,6 +1,6 @@
 # Pocket Producer — project instructions
 
-Read `docs/STATUS.md` first, then relevant architecture, design and testing docs. The dated baseline is `docs/handoff/00-START-HERE.md`; current user decisions and the native-construction course in `docs/adr/002-native-construction-first.md` override its render-first/Sunroom limits. Record meaningful changes and keep the next session oriented.
+Read `docs/STATUS.md` first, then `docs/native-construction-pass.md` and relevant architecture, design and testing docs. The dated baseline is `docs/handoff/00-START-HERE.md`; current user decisions and the native-construction course in `docs/adr/002-native-construction-first.md` override its render-first/Sunroom limits. Record meaningful changes and keep the next session oriented.
 
 ## Product invariants
 
@@ -10,6 +10,7 @@ Read `docs/STATUS.md` first, then relevant architecture, design and testing docs
 - Protect accepted audio during work. Enforce cancellation/lease/head checks before commit. Retries must not duplicate paid or external effects.
 - State export fidelity honestly: notes, audio clips and stems have different editability.
 - Use Deep Agents with an OpenAI producer for native construction and a separate Gemini adapter for future audio/source analysis. Runtime workspace/skills are scoped; model tools cannot bypass domain validation. Render/Gemini critique is deferred for native documents, and the legacy audio loop remains intact.
+- The production producer chooses a validated form and may inspect/refine actual musical state; the old 32/64-bar blueprint is a fixture only. SDK discovery is not write authority. Beatbox8 uses a deliberately strict boolean-step contract, and local owned-source mapping is not live Audiotool evidence.
 
 ## Working rules
 

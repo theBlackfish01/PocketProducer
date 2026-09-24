@@ -130,6 +130,8 @@ button:disabled { cursor: not-allowed; }
 .mode-switch { display: flex; flex-wrap: wrap; gap: 6px; }
 .native-room { padding-bottom: max(44px, env(safe-area-inset-bottom)); }
 .native-sync-control { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+.native-sync-control .provider-note { max-width: 58ch; }
+.native-sync-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
 .native-search { display: flex; align-items: center; gap: .7rem; border: 1px solid var(--border); border-radius: .9rem; padding: .7rem 1rem; background: var(--card); }
 .native-search input { border: 0; outline: 0; background: transparent; color: var(--foreground); width: 100%; min-width: 0; }
 .native-capability-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .7rem; margin-top: 1rem; }
@@ -162,6 +164,8 @@ button:disabled { cursor: not-allowed; }
 .native-composer { margin-top: 36px; }
 .native-diff { padding: 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--accent); font-size: .84rem; }
 .native-diff p { margin: 6px 0 0; }
+.native-palette summary { cursor: pointer; color: var(--forest); font-weight: 650; padding: .4rem 0; }
+.native-palette summary:focus-visible { outline: 3px solid var(--ring); outline-offset: 3px; border-radius: .3rem; }
 
 @media (max-width: 1023px) {
   .app-shell { display: block; }
