@@ -7,10 +7,13 @@ const id = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 // not inferred physical units (for example, compressor.ratio is normalized).
 export const nativeParameterRanges = {
   heisenberg: { gain: [0, 1], tuneSemitones: [-12, 12], playModeIndex: [1, 4], glideMs: [0, 5000], velocityFactor: [0, 1], unisonoCount: [1, 4], unisonoDetuneSemitones: [0, 1], unisonoStereoSpreadFactor: [-1, 1],
-    "operatorA.gain": [0, 1], "operatorB.gain": [0, 1], "operatorC.gain": [0, 1], "operatorD.gain": [0, 1], "operatorA.waveformIndex": [1, 49], "operatorB.waveformIndex": [1, 49],
+    "operatorA.gain": [0, 1], "operatorB.gain": [0, 1], "operatorC.gain": [0, 1], "operatorD.gain": [0, 1], "operatorA.waveformIndex": [1, 49], "operatorB.waveformIndex": [1, 49], "operatorC.waveformIndex": [1, 49], "operatorD.waveformIndex": [1, 49],
+    "operatorA.detuneFactor": [0, 64], "operatorB.detuneFactor": [0, 64], "operatorC.detuneFactor": [0, 64], "operatorD.detuneFactor": [0, 64],
+    "operatorA.modulationFactorB": [0, 1], "operatorA.modulationFactorC": [0, 1], "operatorA.modulationFactorD": [0, 1], "operatorB.modulationFactorA": [0, 1], "operatorB.modulationFactorC": [0, 1], "operatorB.modulationFactorD": [0, 1], "operatorC.modulationFactorA": [0, 1], "operatorC.modulationFactorB": [0, 1], "operatorC.modulationFactorD": [0, 1], "operatorD.modulationFactorA": [0, 1], "operatorD.modulationFactorB": [0, 1], "operatorD.modulationFactorC": [0, 1],
+    "operatorA.envelope2AmplitudeModulationDepth": [0, 1], "operatorB.envelope2AmplitudeModulationDepth": [0, 1], "operatorC.envelope2AmplitudeModulationDepth": [0, 1], "operatorD.envelope2AmplitudeModulationDepth": [0, 1], "lfo1.rateNormalized": [0, 1], "lfo2.rateNormalized": [0, 1],
     "filter.cutoffFrequencyHz": [33, 22050], "filter.resonance": [0.70710677, 60], "filter.keyboardTrackingAmount": [-1, 1],
     "envelopeMain.attackTimeNormalized": [0, 1], "envelopeMain.decayTimeNormalized": [0, 1], "envelopeMain.sustainRangeFactor": [-1, 1], "envelopeMain.releaseTimeNormalized": [0, 1] },
-  pulverisateur: { gain: [0, 1], tuneSemitones: [-12, 12], playModeIndex: [1, 2], glideTimeMs: [0, 10000],
+  pulverisateur: { gain: [0, 1], tuneSemitones: [-12, 12], playModeIndex: [1, 2], glideTimeMs: [0, 10000], "audio.drive": [0, 1],
     "filter.cutoffFrequencyHz": [18, 15500], "filter.resonance": [0, 1], "filter.filterSpacing": [-1, 1], "filter.modeIndex": [1, 2] },
   gakki: { gain: [0, 1] },
   beatbox8: { gain: [0, 1], accentAmount: [0, 1], "bassdrum.gain": [0, 1], "bassdrum.tone": [0, 1], "bassdrum.decay": [0, 1], "snaredrum.gain": [0, 1], "snaredrum.tone": [0, 1], "snaredrum.snappy": [0, 1], "openHihat.decay": [0, 1] },
@@ -19,7 +22,10 @@ export const nativeParameterRanges = {
   stompboxReverb: { roomSizeFactor: [0, 1], preDelayTimeMs: [8, 500], feedbackFactor: [0, 1], mix: [0, 1] },
   stompboxCompressor: { thresholdDb: [-24, 0], ratio: [0, 1], attackMs: [0, 200], releaseMs: [0, 1000], makeupGainDb: [0, 24] },
   stompboxParametricEqualizer: { frequencyHz: [31, 12000], postGainDb: [-12, 12], bandwidthFactor: [0, 1] },
-  autoFilter: { cutoffFrequencyHz: [18, 10000], mix: [0, 1], filterModulationDepth: [0, 1] }
+  autoFilter: { cutoffFrequencyHz: [18, 10000], mix: [0, 1], filterModulationDepth: [0, 1] },
+  stompboxTube: { drive: [0.1, 12], tone: [-10, 10], postGain: [0, 2] },
+  stompboxChorus: { delayTimeMs: [20, 40], feedbackFactor: [0, 1], lfoFrequencyHz: [0.1, 5], lfoModulationDepth: [0, 1], spreadFactor: [0, 1] },
+  stompboxPitchDelay: { stepCount: [1, 7], stepLengthIndex: [1, 3], feedbackFactor: [0, 1], tuneFactor: [-1, 1], mix: [0, 1] }
 } as const;
 type ParameterDevice = keyof typeof nativeParameterRanges;
 function mappedParameters(type: ParameterDevice, values: Record<string, number>, context: z.RefinementCtx): void {
@@ -35,7 +41,7 @@ const parameters = z.record(z.string(), z.number()).default({});
 const note = z.object({ id, startTick: z.number().int().min(0), durationTicks: z.number().int().min(1), pitch: z.number().int().min(0).max(127), velocity: z.number().min(0.01).max(1) });
 const point = z.object({ tick: z.number().int().min(0), value: z.number().min(0).max(1), interpolation: z.enum(["step", "linear", "sloped"]).optional(), slope: z.number().min(-1).max(1).optional() }).superRefine((value, context) => { if (value.slope !== undefined && value.interpolation !== "sloped") context.addIssue({ code: "custom", message: "Automation slope requires sloped interpolation" }); });
 const automatableDeviceFields: Record<string, Set<string>> = {
-  heisenberg: new Set(["gain", "glideMs", "velocityFactor", "operatorA.gain", "operatorB.gain", "filter.cutoffFrequencyHz", "filter.resonance", "envelopeMain.attackTimeNormalized", "envelopeMain.releaseTimeNormalized"]),
+  heisenberg: new Set(["gain", "glideMs", "velocityFactor", "operatorA.gain", "operatorB.gain", "operatorC.gain", "operatorD.gain", "operatorB.modulationFactorA", "operatorC.modulationFactorA", "operatorD.modulationFactorB", "lfo1.rateNormalized", "lfo2.rateNormalized", "filter.cutoffFrequencyHz", "filter.resonance", "envelopeMain.attackTimeNormalized", "envelopeMain.releaseTimeNormalized"]),
   pulverisateur: new Set(["gain", "glideTimeMs", "filter.cutoffFrequencyHz", "filter.resonance"]), gakki: new Set(["gain"]), beatbox8: new Set(["gain", "accentAmount", "bassdrum.gain", "bassdrum.tone", "bassdrum.decay", "snaredrum.gain", "snaredrum.tone", "snaredrum.snappy", "openHihat.decay"]), audio: new Set(["gain"])
 };
 const automatableEffectFields = new Set(["mix", "feedbackFactor", "cutoffFrequencyHz", "thresholdDb", "ratio", "releaseMs", "frequencyHz", "postGainDb"]);
@@ -48,6 +54,7 @@ const send = z.object({ busId: id, gain: z.number().min(0).max(1) });
 const sourcePlayback = { playbackRate: z.number().min(0.5).max(2).optional(), stretchMode: z.enum(["resample", "preservePitch"]).optional(), pitchShiftSemitones: z.number().min(-24).max(24).optional() };
 const libraryRegion = z.object({ id, sampleName: z.string().regex(/^samples\/[a-zA-Z0-9-]{1,120}$/), displayName: z.string().min(1).max(160), ownerName: z.string().max(160), durationSeconds: z.number().positive(), bpm: z.number().min(0).max(400),
   startTick: z.number().int().min(0), durationTicks: z.number().int().positive(), sourceStartSeconds: z.number().min(0), sourceDurationSeconds: z.number().positive(), playbackMode: z.enum(["once", "loop"]), gain: z.number().min(0).max(1), provenance: z.literal("audiotool-library"), ...sourcePlayback }).superRefine((value, context) => { if (value.pitchShiftSemitones !== undefined && value.stretchMode !== "preservePitch") context.addIssue({ code: "custom", message: "Pitch shifting needs preservePitch stretch mode" }); });
+const nativeEffect = z.object({ id, type: z.enum(["stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay"]), parameters }).superRefine((value, context) => mappedParameters(value.type, value.parameters, context));
 const part = z.object({
   id, name: z.string().min(1).max(80), role: z.enum(["percussion", "bass", "melody", "harmony", "texture", "lead", "fx", "source"]),
   device: z.object({ type: z.enum(["heisenberg", "pulverisateur", "gakki", "beatbox8", "audio"]), parameters,
@@ -61,14 +68,15 @@ const part = z.object({
   placements: z.array(z.object({ id, motifId: id, startTick: z.number().int().min(0), repeats: z.number().int().min(1).max(64), transpose: z.number().int().min(-36).max(36) })).max(512).default([]),
   sourceRegions: z.array(z.object({ id, assetId: z.uuid(), assetHash: z.string().regex(/^[a-f0-9]{64}$/), sampleId: z.string().min(1).max(160).optional(), startTick: z.number().int().min(0), durationTicks: z.number().int().positive(), sourceStartSeconds: z.number().min(0), sourceDurationSeconds: z.number().positive(), playbackMode: z.enum(["once", "loop"]).optional(), gain: z.number().min(0).max(1), rights: z.string().min(1).max(300), ...sourcePlayback }).superRefine((value, context) => { if (value.pitchShiftSemitones !== undefined && value.stretchMode !== "preservePitch") context.addIssue({ code: "custom", message: "Pitch shifting needs preservePitch stretch mode" }); })).max(128).default([]),
   libraryRegions: z.array(libraryRegion).max(128).optional(),
-  effects: z.array(z.object({ id, type: z.enum(["stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter"]), parameters }).superRefine((value, context) => mappedParameters(value.type, value.parameters, context))).max(8).default([]),
+  effects: z.array(nativeEffect).max(8).default([]),
+  parallel: z.object({ wetMix: z.number().min(0.01).max(0.99), effects: z.array(nativeEffect).min(1).max(3) }).optional(),
   automation: z.array(z.object({ id, target: z.string().min(1).max(160), points: z.array(point).min(2).max(128) })).max(16).default([])
 });
 const motif = z.object({ id, partId: id, name: z.string().min(1).max(80), lengthTicks: z.number().int().positive(), notes: z.array(note).min(1).max(256) });
 const section = z.object({ id, name: z.string().min(1).max(80), startBar: z.number().int().min(0), endBar: z.number().int().positive(), intent: z.string().max(240).default("") });
 
 export const nativeDocumentSchema = z.object({
-  schemaVersion: z.literal(2), ppq: z.literal(NATIVE_PPQ), title: z.string().min(1).max(120), direction: z.string().min(1).max(2000), currentObjective: z.string().min(1).max(2000),
+  schemaVersion: z.literal(2), ppq: z.literal(NATIVE_PPQ), title: z.string().min(1).max(120), direction: z.string().min(1).max(32_768), currentObjective: z.string().min(1).max(32_768),
   assumptions: z.array(z.string().max(240)).max(16), tempoBpm: z.number().int().min(40).max(220),
   meter: z.object({ numerator: z.number().int().min(2).max(12), denominator: z.union([z.literal(4), z.literal(8)]) }),
   bars: z.number().int().min(4).max(128), sections: z.array(section).min(1).max(24), parts: z.array(part).min(1).max(24),
@@ -112,6 +120,7 @@ export const nativeDocumentSchema = z.object({
     unique(item.notes.map((value) => value.id), "motif notes");
   }
   for (const item of document.parts) {
+    unique([...item.effects.map((value) => value.id), ...(item.parallel?.effects.map((value) => value.id) ?? [])], "part effects");
     if (item.groupId && !groups.has(item.groupId)) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} has no mixer group` });
     if (new Set((item.sends ?? []).map((value) => value.busId)).size !== (item.sends ?? []).length) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} has duplicate sends` });
     if (item.sends?.some((value) => value.busId !== document.reverbBus?.id && value.busId !== document.delayBus?.id)) context.addIssue({ code: "custom", path: ["parts"], message: `Part ${item.id} sends to an unavailable return` });
@@ -170,7 +179,7 @@ export function assertNativeDeviceMapping(document: NativeDocument): void {
 }
 export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("setTitle"), title: z.string().min(1).max(120) }),
-  z.object({ kind: z.literal("setObjective"), objective: z.string().min(1).max(2000) }),
+  z.object({ kind: z.literal("setObjective"), objective: z.string().min(1).max(32_768) }),
   z.object({ kind: z.literal("setStructure"), bars: z.number().int().min(4).max(128), sections: z.array(section).min(1).max(24), tempoBpm: z.number().int().min(40).max(220).optional() }),
   z.object({ kind: z.literal("setMeter"), meter: z.object({ numerator: z.number().int().min(2).max(12), denominator: z.union([z.literal(4), z.literal(8)]) }) }),
   z.object({ kind: z.literal("addPart"), part }),
@@ -182,9 +191,13 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("placeMotif"), partId: id, placement: part.shape.placements.unwrap().element }),
   z.object({ kind: z.literal("replacePlacements"), partId: id, placements: part.shape.placements.unwrap() }),
   z.object({ kind: z.literal("addNotes"), partId: id, notes: z.array(note).min(1).max(256) }),
+  z.object({ kind: z.literal("harmonizeSection"), partId: id, sectionId: id, cycleBars: z.number().int().min(1).max(16), chords: z.array(z.object({ barOffset: z.number().min(0).max(16), durationBars: z.number().positive().max(16), pitches: z.array(z.number().int().min(0).max(127)).min(2).max(8), velocity: z.number().min(0.01).max(1), strumTicks: z.number().int().min(0).max(240).default(0) })).min(1).max(16) }),
+  z.object({ kind: z.literal("sequenceSectionPattern"), partId: id, sectionId: id, cycleBars: z.number().int().min(1).max(8), hits: z.array(z.object({ tick: z.number().int().min(0), durationTicks: z.number().int().min(1).max(3840), pitch: z.number().int().min(0).max(127), velocity: z.number().min(0.01).max(1), timingOffsetTicks: z.number().int().min(-120).max(120).default(0) })).min(1).max(96) }),
   z.object({ kind: z.literal("replaceNotes"), partId: id, notes: z.array(note).max(4096) }),
   z.object({ kind: z.literal("setDevice"), partId: id, device: part.shape.device }),
   z.object({ kind: z.literal("setMix"), partId: id, gain: z.number().min(0).max(1).optional(), pan: z.number().min(-1).max(1).optional() }),
+  z.object({ kind: z.literal("setParallelChain"), partId: id, parallel: part.shape.parallel.unwrap() }),
+  z.object({ kind: z.literal("removeParallelChain"), partId: id }),
   z.object({ kind: z.literal("upsertGroup"), group: mixerGroup }),
   z.object({ kind: z.literal("removeGroup"), groupId: id }),
   z.object({ kind: z.literal("routePart"), partId: id, groupId: id.nullable() }),
@@ -220,7 +233,7 @@ export function materializedNotes(document: NativeDocument, partId: string): Nat
   const result = [...item.notes];
   for (const placement of item.placements) {
     const phrase = phrases.get(placement.motifId)!;
-    for (let repeat = 0; repeat < placement.repeats; repeat++) for (const value of phrase.notes) result.push({ ...value, id: `${placement.id}-${repeat}-${value.id}`, startTick: placement.startTick + repeat * phrase.lengthTicks + value.startTick, pitch: value.pitch + placement.transpose });
+    for (let repeat = 0; repeat < placement.repeats; repeat++) for (const value of phrase.notes) result.push({ ...value, id: `n-${canonicalHash({ placementId: placement.id, repeat, noteId: value.id }).slice(0, 32)}`, startTick: placement.startTick + repeat * phrase.lengthTicks + value.startTick, pitch: value.pitch + placement.transpose });
   }
   return result.sort((a, b) => a.startTick - b.startTick || a.id.localeCompare(b.id));
 }
@@ -252,7 +265,7 @@ export function nativeMusicHash(document: NativeDocument): string {
     tempoBpm: document.tempoBpm, meter: document.meter, bars: document.bars,
     sections: document.sections.map(({ startBar, endBar }) => ({ startBar, endBar })),
     groups: document.groups, reverbBus: document.reverbBus, delayBus: document.delayBus, master: document.master,
-    parts: document.parts.map(({ id, device, gain, pan, groupId, sends, notes, placements, sourceRegions, libraryRegions, effects, automation }) => ({ id, device, gain, pan, groupId, sends, notes, placements, sourceRegions, libraryRegions, effects, automation })),
+    parts: document.parts.map(({ id, device, gain, pan, groupId, sends, notes, placements, sourceRegions, libraryRegions, effects, parallel, automation }) => ({ id, device, gain, pan, groupId, sends, notes, placements, sourceRegions, libraryRegions, effects, parallel, automation })),
     motifs: document.motifs.map(({ id, partId, lengthTicks, notes }) => ({ id, partId, lengthTicks, notes }))
   });
 }
@@ -270,6 +283,39 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "setObjective": next.currentObjective = op.objective; break;
       case "setStructure": next.bars = op.bars; next.sections = op.sections; if (op.tempoBpm !== undefined) next.tempoBpm = op.tempoBpm; break;
       case "setMeter": next.meter = op.meter; break;
+      case "harmonizeSection": {
+        const item = findPart(op.partId), section = next.sections.find((value) => value.id === op.sectionId);
+        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (["audio", "beatbox8"].includes(item.device.type)) throw new Error("Harmonic notes need a MIDI-capable native instrument");
+        const ticksPerBar = barTicks(next), sectionStart = section.startBar * ticksPerBar, sectionEnd = section.endBar * ticksPerBar, cycleTicks = op.cycleBars * ticksPerBar, operationHash = canonicalHash(op);
+        for (const chord of op.chords) {
+          if (chord.barOffset >= op.cycleBars || chord.barOffset + chord.durationBars > op.cycleBars || new Set(chord.pitches).size !== chord.pitches.length) throw new Error("Chord voicing must fit its cycle and contain distinct pitches");
+        }
+        for (let cycleStart = sectionStart, repeat = 0; cycleStart < sectionEnd; cycleStart += cycleTicks, repeat++) for (const [chordIndex, chord] of op.chords.entries()) {
+          const onset = cycleStart + Math.round(chord.barOffset * ticksPerBar);
+          if (onset >= sectionEnd) continue;
+          for (const [voice, pitch] of chord.pitches.entries()) {
+            const startTick = onset + voice * chord.strumTicks;
+            if (startTick >= sectionEnd) continue;
+            item.notes.push({ id: `n-${canonicalHash({ operationHash, repeat, chordIndex, voice, pitch }).slice(0, 32)}`, startTick, durationTicks: Math.min(Math.round(chord.durationBars * ticksPerBar), sectionEnd - startTick), pitch, velocity: chord.velocity });
+          }
+        }
+        break;
+      }
+      case "sequenceSectionPattern": {
+        const item = findPart(op.partId), section = next.sections.find((value) => value.id === op.sectionId);
+        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (["audio", "beatbox8"].includes(item.device.type)) throw new Error("Expressive pattern notes need a MIDI-capable native instrument");
+        const ticksPerBar = barTicks(next), sectionStart = section.startBar * ticksPerBar, sectionEnd = section.endBar * ticksPerBar, cycleTicks = op.cycleBars * ticksPerBar, operationHash = canonicalHash(op);
+        if (op.hits.some((hit) => hit.tick >= cycleTicks)) throw new Error("Pattern hit exceeds its cycle");
+        for (let cycleStart = sectionStart, repeat = 0; cycleStart < sectionEnd; cycleStart += cycleTicks, repeat++) for (const [hitIndex, hit] of op.hits.entries()) {
+          const startTick = cycleStart + hit.tick + hit.timingOffsetTicks;
+          if (cycleStart + hit.tick >= sectionEnd) continue;
+          if (startTick < sectionStart || startTick >= sectionEnd) throw new Error("Expressive hit timing exceeds the selected section");
+          item.notes.push({ id: `n-${canonicalHash({ operationHash, repeat, hitIndex }).slice(0, 32)}`, startTick, durationTicks: Math.min(hit.durationTicks, sectionEnd - startTick), pitch: hit.pitch, velocity: hit.velocity });
+        }
+        break;
+      }
       case "addPart": next.parts.push(op.part); break;
       case "defineMotif": next.motifs.push(op.motif); break;
       case "replaceMotif": { const index = next.motifs.findIndex((value) => value.id === op.motif.id); if (index < 0) throw new Error(`Unknown motif ${op.motif.id}`); next.motifs[index] = op.motif; break; }
@@ -302,7 +348,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         const sliceId = (event: NativeNote, area: string) => `n-${canonicalHash({ id: event.id, section: op.sectionId, area }).slice(0,24)}`;
         for (const placement of crossing) {
           const phrase = next.motifs.find((value) => value.id === placement.motifId)!;
-          for (let repeat = 0; repeat < placement.repeats; repeat++) for (const event of phrase.notes) realized.push({ ...event, id: `${placement.id}-${repeat}-${event.id}`, startTick: placement.startTick + repeat * phrase.lengthTicks + event.startTick, pitch: event.pitch + placement.transpose });
+          for (let repeat = 0; repeat < placement.repeats; repeat++) for (const event of phrase.notes) realized.push({ ...event, id: `n-${canonicalHash({ placementId: placement.id, repeat, noteId: event.id }).slice(0, 32)}`, startTick: placement.startTick + repeat * phrase.lengthTicks + event.startTick, pitch: event.pitch + placement.transpose });
         }
         let insideIndex = 0;
         const developed: NativeNote[] = [];
@@ -350,6 +396,8 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "replaceNotes": findPart(op.partId).notes = op.notes; break;
       case "setDevice": findPart(op.partId).device = op.device; break;
       case "setMix": { const item = findPart(op.partId); if (op.gain !== undefined) item.gain = op.gain; if (op.pan !== undefined) item.pan = op.pan; break; }
+      case "setParallelChain": findPart(op.partId).parallel = op.parallel; break;
+      case "removeParallelChain": delete findPart(op.partId).parallel; break;
       case "upsertGroup": { const groups = next.groups ??= []; const index = groups.findIndex((value) => value.id === op.group.id); if (index < 0) groups.push(op.group); else groups[index] = op.group; break; }
       case "removeGroup": next.groups = (next.groups ?? []).filter((value) => value.id !== op.groupId); break;
       case "routePart": { const item = findPart(op.partId); if (op.groupId) item.groupId = op.groupId; else delete item.groupId; break; }
@@ -391,7 +439,7 @@ export function nativeDiff(before: NativeDocument | null, after: NativeDocument)
   const partChanges = after.parts.flatMap((value) => {
     const old = prior.get(value.id);
     if (!old) return [];
-    const fields: string[] = (["name", "role", "device", "gain", "pan", "groupId", "sends", "notes", "placements", "sourceRegions", "libraryRegions", "effects", "automation"] as const).filter((field) => changed(old[field], value[field]));
+    const fields: string[] = (["name", "role", "device", "gain", "pan", "groupId", "sends", "notes", "placements", "sourceRegions", "libraryRegions", "effects", "parallel", "automation"] as const).filter((field) => changed(old[field], value[field]));
     if (changed(before?.motifs.filter((motif) => motif.partId === value.id), after.motifs.filter((motif) => motif.partId === value.id))) fields.push("motifs");
     return fields.length ? [{ partId: value.id, fields }] : [];
   });
@@ -423,7 +471,7 @@ export function pinnedContext(document: NativeDocument, revisionId: string | nul
     tempoBpm: document.tempoBpm, meter: document.meter, bars: document.bars,
     sections: document.sections.map((value) => ({ id: value.id, name: value.name, bars: [value.startBar, value.endBar], intent: value.intent })),
     groups: document.groups ?? [], reverbBus: document.reverbBus ?? null, delayBus: document.delayBus ?? null, master: document.master ?? null,
-    parts: document.parts.map((value) => ({ id: value.id, name: value.name, role: value.role, device: value.device.type, preset: value.device.preset ?? null, groupId: value.groupId ?? null, sends: value.sends ?? [], notes: materializedNotes(document, value.id).length, effects: value.effects.map((effect) => effect.type), automation: value.automation.map((curve) => curve.target), sourceRegions: value.sourceRegions.length, libraryRegions: value.libraryRegions?.length ?? 0, protected: document.protectedPartIds.includes(value.id) })),
+    parts: document.parts.map((value) => ({ id: value.id, name: value.name, role: value.role, device: value.device.type, preset: value.device.preset ?? null, groupId: value.groupId ?? null, sends: value.sends ?? [], notes: materializedNotes(document, value.id).length, effects: value.effects.map((effect) => effect.type), parallel: value.parallel ? { wetMix: value.parallel.wetMix, effects: value.parallel.effects.map((effect) => effect.type) } : null, automation: value.automation.map((curve) => curve.target), sourceRegions: value.sourceRegions.length, libraryRegions: value.libraryRegions?.length ?? 0, protected: document.protectedPartIds.includes(value.id) })),
     motifs: document.motifs.map((value) => ({ id: value.id, partId: value.partId, name: value.name, instances: document.parts.flatMap((item) => item.placements).filter((placement) => placement.motifId === value.id).length })),
     sources: document.parts.flatMap((value) => value.sourceRegions.map((region) => ({ assetId: region.assetId, assetHash: region.assetHash, selectedInterval: [region.sourceStartSeconds, region.sourceStartSeconds + region.sourceDurationSeconds], state: "placed/referenced" as const }))),
     librarySamples: document.parts.flatMap((value) => (value.libraryRegions ?? []).map((region) => ({ sampleName: region.sampleName, ownerName: region.ownerName, selectedInterval: [region.sourceStartSeconds, region.sourceStartSeconds + region.sourceDurationSeconds], state: "placed/referenced; availability rechecked at validation/sync" as const }))),

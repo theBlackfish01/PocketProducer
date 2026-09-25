@@ -2,6 +2,7 @@ import type pg from "pg";
 import { getConfig } from "../config.js";
 import type { JobRecord } from "../db/repository.js";
 import { getPool } from "../db/pool.js";
+import { jobNativeRunLimits } from "../native/profile.js";
 
 export type ProviderName = "openai" | "gemini" | "audiotool";
 export type EffectState = "reserved" | "dispatched" | "succeeded" | "failed" | "uncertain";
@@ -68,7 +69,8 @@ export async function reserveProviderEffect(input: {
       "SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND reservation_microusd>0",
       [input.job.id]
     );
-    if (Number(callCount.rows[0]?.count ?? 0) >= config.MAX_MODEL_CALLS_PER_JOB) throw new Error("MODEL_CALL_LIMIT_EXCEEDED");
+    const nativeLimits = jobNativeRunLimits(input.job.request);
+    if (Number(callCount.rows[0]?.count ?? 0) >= (nativeLimits?.maxCalls ?? config.MAX_MODEL_CALLS_PER_JOB)) throw new Error("MODEL_CALL_LIMIT_EXCEEDED");
     const totals = await client.query<{ overall: string; job: string }>(
       `SELECT
          COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS overall,
@@ -77,7 +79,7 @@ export async function reserveProviderEffect(input: {
       [input.job.id]
     );
     const overallLimit = usdToMicrousd(config.INITIAL_BUILD_API_BUDGET_USD);
-    const jobLimit = usdToMicrousd(config.MAX_JOB_COST_USD);
+    const jobLimit = usdToMicrousd(Math.min(config.MAX_JOB_COST_USD, nativeLimits?.maxJobCostUsd ?? config.MAX_JOB_COST_USD));
     const overall = Number(totals.rows[0]?.overall ?? 0);
     const job = Number(totals.rows[0]?.job ?? 0);
     if (input.reservationMicrousd < 0 || overall + input.reservationMicrousd > overallLimit || job + input.reservationMicrousd > jobLimit) {

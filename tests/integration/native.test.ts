@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { AIMessage, createOfflineDocument, fakeModel } from "@pocket/core/test-support";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { advanceNativeSync, applyNativeOperations, AudiotoolSessionExpiredError, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, materializedNotes, nativeDraftView, nativePresetFingerprint, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type JobRecord, type NativeLibraryClient, type NativePreset } from "@pocket/core";
+import { advanceNativeSync, applyNativeOperations, AudiotoolSessionExpiredError, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, extendNativePartialJob, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, materializedNotes, nativeDraftView, nativePresetFingerprint, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type JobRecord, type NativeLibraryClient, type NativePreset } from "@pocket/core";
 import { nativeSynchronization, optionalNativeLibraryConnection, processJob } from "@pocket/worker";
 
 const subject = `native-test-${randomUUID()}`;
@@ -54,6 +54,81 @@ async function claim(id: string, worker = "native-test"): Promise<JobRecord> {
 }
 
 describe("audio-independent native job lifecycle", () => {
+  it("preserves a near-limit text-only brief through more than four model turns and three construction batches", async () => {
+    const scratchId = (await createProject(ownerId, "Long text-only construction")).id;
+    extraProjects.push(scratchId);
+    const opening = "Create 4 bars at 90 BPM in 3/4 with a sparse melody and no percussion. ";
+    const closing = " End with an answering phrase; keep the result editable.";
+    const filler = "Leave deliberate space between phrases and let the mood evolve gently. ".repeat(500);
+    const direction = opening + filler.slice(0, 32_000 - opening.length - closing.length) + closing;
+    expect(direction).toHaveLength(32_000);
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "long-text-only-profile", request: { direction, profile: "extended", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const job = await claim(accepted.id, "long-text-only-worker");
+    expect((job.request._nativeRun as { maxCalls: number }).maxCalls).toBe(80);
+    expect((job.request._nativeRun as { pricing: { verifiedOn: string } }).pricing.verifiedOn).toMatch(/^20\d\d-/);
+    const session = new NativeToolSession(job, seedNativeDocument(direction));
+    const form = { title: "Quiet answer", tempoBpm: 90, meter: { numerator: 3, denominator: 4 }, sections: [{ id: "opening", name: "Opening", bars: 2 }, { id: "answer", name: "Answer", bars: 2 }], parts: [{ id: "lead", name: "Soft melody", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.56, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 62, velocity: 0.62 }] }] };
+    const model = fakeModel()
+      .respondWithTools([{ name: "record_native_plan", args: { intent: "Sparse three-quarter phrase and answer", sections: [{ name: "Opening", purpose: "Leave space" }, { name: "Answer", purpose: "Change the ending" }], soundGoals: ["Soft lead"], hardConstraints: ["No percussion", "Four bars"], developmentTasks: ["Answer the opening phrase"] } }])
+      .respondWithTools([{ name: "compose_native_form", args: form }])
+      .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "answer-phrase", operations: [{ kind: "addNotes", partId: "lead", notes: [{ id: "answer-one", startTick: 5760, durationTicks: 960, pitch: 65, velocity: 0.58 }] }] } }])
+      .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "lead-color", operations: [{ kind: "setDevice", partId: "lead", device: { type: "heisenberg", parameters: { "filter.cutoffFrequencyHz": 1800 } } }] } }])
+      .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "master-headroom", operations: [{ kind: "setMaster", master: { gain: 0.82, pan: 0, limiterEnabled: false } }] } }])
+      .respondWithTools([{ name: "inspect_native_section", args: { sectionId: "opening" } }, { name: "inspect_native_section", args: { sectionId: "answer" } }])
+      .respondWithTools([{ name: "advance_native_stage", args: { stage: "reviewed" } }])
+      .respond(new AIMessage("Four bars of editable melody with an answering phrase; audio was not heard."));
+    const timer = setInterval(() => { void heartbeat(job); }, 750);
+    try {
+      const result = await produceNative({ session, direction, mode: "generation", sources: [], scriptedModel: model });
+      expect(model.callCount).toBeGreaterThan(4);
+      expect(session.applied).toHaveLength(4);
+      expect(JSON.stringify(model.calls[0]!.messages)).toContain(closing.trim());
+      expect(session.document.meter.numerator).toBe(3);
+      expect(session.document.parts).toHaveLength(1);
+      expect(session.document.parts[0]!.role).toBe("melody");
+      expect((await nativeDraftView(ownerId, scratchId, job.id)).runLimits?.profile).toBe("extended");
+      await commitNativeRevision(job, session.document, result.summary, result);
+    } finally { clearInterval(timer); }
+  }, 90_000);
+  it("keeps a detailed text-only producer plan and develops section-specific harmony and groove through the real tool graph", async () => {
+    const scratchId = (await createProject(ownerId, "Text-only developed song")).id;
+    extraProjects.push(scratchId);
+    const direction = "Write 8 bars in total at 128 BPM in D minor. No drums in intro; bring expressive ghost-note drums in chorus. Give the chorus voiced Dm9 and Bbmaj7 chords and an FM pluck with gentle saturation.";
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "text-only-staged-song", request: { direction, profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const job = await claim(accepted.id, "text-only-staged-worker");
+    expect((job.request._nativeRun as { maxCalls: number }).maxCalls).toBe(40);
+    const session = new NativeToolSession(job, seedNativeDocument(direction));
+    const plan = { intent: "Dark minor introduction opens into a rhythmically active chorus", sections: [{ name: "Intro", purpose: "Establish the FM pluck without percussion" }, { name: "Chorus", purpose: "Develop harmony and bring in ghost-note drums" }], soundGoals: ["An FM pluck with restrained tube warmth"], hardConstraints: ["No intro percussion", "Eight bars at 128 BPM"], developmentTasks: ["Voice Dm9 and Bbmaj7", "Sequence chorus accents and ghost notes"] };
+    const form = { title: "Minor lift", tempoBpm: 128, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "intro", name: "Intro", bars: 4 }, { id: "chorus", name: "Chorus", bars: 4 }], parts: [
+      { id: "pluck", name: "FM pluck", role: "melody", device: { type: "heisenberg", parameters: { "operatorC.modulationFactorA": 0.4, "operatorC.waveformIndex": 5 } }, gain: 0.62, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 62, velocity: 0.7 }], effects: [{ id: "warmth", type: "stompboxTube", parameters: { drive: 1.8, tone: 0, postGain: 0.7 } }] },
+      { id: "chords", name: "Chords", role: "harmony", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [] },
+      { id: "drums", name: "Expressive drums", role: "percussion", device: { type: "gakki", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [] }
+    ] };
+    const model = fakeModel()
+      .respondWithTools([{ name: "record_native_plan", args: plan }])
+      .respondWithTools([{ name: "compose_native_form", args: form }])
+      .respondWithTools([{ name: "advance_native_stage", args: { stage: "building" } }])
+      .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "chorus-harmony-and-drums", operations: [
+        { kind: "harmonizeSection", partId: "chords", sectionId: "chorus", cycleBars: 2, chords: [{ barOffset: 0, durationBars: 1, pitches: [50, 57, 60, 64, 69], velocity: 0.62, strumTicks: 20 }, { barOffset: 1, durationBars: 1, pitches: [46, 53, 57, 62, 65], velocity: 0.6, strumTicks: 20 }] },
+        { kind: "sequenceSectionPattern", partId: "drums", sectionId: "chorus", cycleBars: 1, hits: [{ tick: 0, durationTicks: 240, pitch: 36, velocity: 0.85, timingOffsetTicks: 0 }, { tick: 840, durationTicks: 120, pitch: 38, velocity: 0.2, timingOffsetTicks: 20 }, { tick: 960, durationTicks: 240, pitch: 38, velocity: 0.65, timingOffsetTicks: 34 }] }
+      ] } }])
+      .respondWithTools([{ name: "inspect_native_section", args: { sectionId: "intro" } }, { name: "inspect_native_section", args: { sectionId: "chorus" } }])
+      .respondWithTools([{ name: "advance_native_stage", args: { stage: "reviewed" } }])
+      .respond(new AIMessage("The chorus has exact chord voicings and expressive drum onsets; no audio was heard."));
+    const timer = setInterval(() => { void heartbeat(job); }, 750);
+    try {
+      const produced = await produceNative({ session, direction, mode: "generation", sources: [], scriptedModel: model });
+      expect(produced.provider).toBe("scripted-deep-agent");
+      expect(JSON.stringify(model.calls[0]!.messages)).toContain("No drums in intro");
+      expect(session.document.parts.find((part) => part.id === "drums")?.notes.every((note) => note.startTick >= 4 * 3840)).toBe(true);
+      expect(session.document.parts.find((part) => part.id === "chords")?.notes).toHaveLength(20);
+      const draft = await nativeDraftView(ownerId, scratchId, job.id);
+      expect(draft.plan?.stage).toBe("reviewed");
+      expect(draft.plan?.inspectedDocumentHash).toBe(canonicalHash(session.document));
+      expect((await validateNativeOffline(session.document)).readback.noteEntities).toBe(33);
+      await commitNativeRevision(job, session.document, produced.summary, produced);
+    } finally { clearInterval(timer); }
+  }, 90_000);
   it("runs a model-directed form through the real Deep Agent tools and durable step ledger", async () => {
     const scratchId = (await createProject(ownerId, "Scripted creative orchestration")).id;
     extraProjects.push(scratchId);
@@ -424,6 +499,45 @@ describe("audio-independent native job lifecycle", () => {
     const fresh = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "fresh-attempt", request, expectedHeadId: null });
     expect(fresh.id).not.toBe(first.id);
     await cancelJob(ownerId, fresh.id);
+  });
+
+  it("cannot bypass a prior uncertain native request by changing its captured run profile", async () => {
+    const scratchId = (await createProject(ownerId, "Run-profile retry fence")).id;
+    extraProjects.push(scratchId);
+    const request = { direction: "A four-bar text-only phrase", profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null };
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "uncertain-profile-original", request, expectedHeadId: null });
+    const job = await claim(accepted.id);
+    await needsAttentionJob(job, "NATIVE_PARTIAL", "A prior outcome needs review");
+    await getPool().query("UPDATE job SET request=jsonb_set(request,'{_nativeRun,maxCalls}','12'::jsonb) WHERE id=$1", [accepted.id]);
+    await expect(createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "uncertain-profile-new-key", request, expectedHeadId: null })).rejects.toThrow(/reconciliation/);
+    await cancelJob(ownerId, accepted.id);
+  });
+
+  it("explicitly extends a paused Standard run without changing its effect identity or job ID", async () => {
+    const scratchId = (await createProject(ownerId, "Explicit native allowance extension")).id;
+    extraProjects.push(scratchId);
+    const request = { direction: "A four-bar melody", profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null };
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "extend-same-run", request, expectedHeadId: null });
+    const first = await claim(accepted.id);
+    const session = new NativeToolSession(first, seedNativeDocument(request.direction));
+    await session.apply("opening-note", [{ kind: "addNotes", partId: "starting-voice", notes: [{ id: "opening", startTick: 0, durationTicks: 960, pitch: 60, velocity: 0.6 }] }]);
+    const originalHash = canonicalHash({ version: "native-producer-v2", jobId: first.id, request: first.request, model: getConfig().OPENAI_MODEL });
+    const aggregate = await reserveProviderEffect({ job: first, provider: "openai", step: "native-producer-result", idempotencyKey: `native-producer:${originalHash}`, inputHash: originalHash, model: getConfig().OPENAI_MODEL, promptVersion: "native-producer-v2", reservationMicrousd: 0 });
+    await markEffectDispatched(aggregate.id, first);
+    await needsAttentionJob(first, "NATIVE_PARTIAL", "Confirmed sketch is paused");
+    expect((await nativeDraftView(ownerId, scratchId, accepted.id)).canExtend).toBe(true);
+    await extendNativePartialJob(ownerId, scratchId, accepted.id);
+    const extended = await nativeDraftView(ownerId, scratchId, accepted.id);
+    expect(extended.runLimits?.profile).toBe("extended");
+    expect(extended.runLimits?.maxCalls).toBe(80);
+    await expect(extendNativePartialJob(ownerId, scratchId, accepted.id)).rejects.toThrow(/no available profile extension/);
+    expect(await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "extend-same-run", request, expectedHeadId: null })).toMatchObject({ id: accepted.id, duplicate: true });
+    await resumeNativePartialJob(ownerId, scratchId, accepted.id);
+    const second = await claim(accepted.id, "extended-worker");
+    const originalRequest = { ...second.request }; delete originalRequest._nativeRunCurrent;
+    expect(canonicalHash({ version: "native-producer-v2", jobId: second.id, request: originalRequest, model: getConfig().OPENAI_MODEL })).toBe(originalHash);
+    expect(second.id).toBe(first.id);
+    await cancelJob(ownerId, accepted.id);
   });
 
   it("uses two real owned WAV profiles and nonzero intervals in a source-led scripted construction", async () => {

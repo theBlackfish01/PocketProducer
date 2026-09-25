@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createJob, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  createNativeJob, discoverNativeCapabilities, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
+  createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
 } from "@pocket/core";
 
 const config = getConfig();
@@ -122,7 +122,7 @@ app.get("/api/v1/projects/:projectId/native/requests/:jobId/draft", async (reque
 
 app.post("/api/v1/projects/:projectId/native/constructions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  const body = z.object({ direction: z.string().trim().min(3).max(2_000), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null() }).parse(request.body);
+  const body = z.object({ direction: z.string().trim().min(3).max(32_768), profile: z.enum(["standard", "extended"]).default("standard"), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null() }).parse(request.body);
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey, request: body, expectedHeadId: null });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
@@ -131,7 +131,7 @@ app.post("/api/v1/projects/:projectId/native/constructions", async (request, rep
 app.post("/api/v1/projects/:projectId/native/revisions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   const partId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
-  const body = z.object({ direction: z.string().trim().min(3).max(2_000), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: partId.optional(), targetSectionId: partId.optional(), protectedPartIds: z.array(partId).max(24).optional(), protectionChange: z.object({ expectedPartIds: z.array(partId).max(24), desiredPartIds: z.array(partId).max(24) }).optional(), sourceAssetIds: z.array(idSchema).max(24).default([]) }).parse(request.body);
+  const body = z.object({ direction: z.string().trim().min(3).max(32_768), profile: z.enum(["standard", "extended"]).default("standard"), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: partId.optional(), targetSectionId: partId.optional(), protectedPartIds: z.array(partId).max(24).optional(), protectionChange: z.object({ expectedPartIds: z.array(partId).max(24), desiredPartIds: z.array(partId).max(24) }).optional(), sourceAssetIds: z.array(idSchema).max(24).default([]) }).parse(request.body);
   if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("Revise the currently selected native version; restore an older one first"), { statusCode: 409 });
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId, projectId, kind: "native-revision", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId });
@@ -142,6 +142,12 @@ app.post("/api/v1/projects/:projectId/native/requests/:jobId/continue", async (r
   const { projectId, jobId } = z.object({ projectId: idSchema, jobId: idSchema }).parse(request.params);
   await resumeNativePartialJob(ownerId, projectId, jobId);
   return reply.status(202).send({ jobId });
+});
+
+app.post("/api/v1/projects/:projectId/native/requests/:jobId/extend", async (request) => {
+  const { projectId, jobId } = z.object({ projectId: idSchema, jobId: idSchema }).parse(request.params);
+  await extendNativePartialJob(ownerId, projectId, jobId);
+  return { jobId, extended: true };
 });
 
 app.post("/api/v1/projects/:projectId/native/select-version", async (request) => {

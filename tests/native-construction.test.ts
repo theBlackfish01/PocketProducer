@@ -57,6 +57,19 @@ describe("native construction contracts", () => {
     const kept = applyNativeOperations(built, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
     expect(() => applyNativeOperations(kept, [{ kind: "developSectionNotes", partId: "starting-voice", sectionId: "arrival", pitchShiftSemitones: 5 }])).toThrow(/Protected part/);
   });
+  it("keeps developed note identities bounded even when legal placement and source IDs are long", async () => {
+    const placementId = `p${"a".repeat(39)}`;
+    const noteId = `n${"b".repeat(34)}`;
+    const built = applyNativeOperations(seedNativeDocument("Develop a long-identity motif"), [
+      { kind: "setStructure", bars: 8, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "" }, { id: "arrival", name: "Arrival", startBar: 4, endBar: 8, intent: "" }] },
+      { kind: "defineMotif", motif: { id: "theme", partId: "starting-voice", name: "Theme", lengthTicks: 3840, notes: [{ id: noteId, startTick: 0, durationTicks: 960, pitch: 62, velocity: 0.6 }] } },
+      { kind: "placeMotif", partId: "starting-voice", placement: { id: placementId, motifId: "theme", startTick: 11520, repeats: 3, transpose: 0 } }
+    ]);
+    const developed = applyNativeOperations(built, [{ kind: "developSectionNotes", partId: "starting-voice", sectionId: "arrival", pitchShiftSemitones: 2 }]);
+    expect(developed.parts[0]?.notes.every((event) => event.id.length <= 64)).toBe(true);
+    expect(new Set(developed.parts[0]?.notes.map((event) => event.id)).size).toBe(developed.parts[0]?.notes.length);
+    expect((await validateNativeOffline(developed)).readback.noteEntities).toBe(3);
+  });
   it("silences a section of a crossing one-shot clip while retaining its exact outside source offsets", async () => {
     const base = seedNativeDocument("Let the recorded texture stop during the arrival");
     const built = applyNativeOperations(base, [
@@ -79,6 +92,53 @@ describe("native construction contracts", () => {
     const base = seedNativeDocument("A small motif");
     expect(() => applyNativeOperations(base, [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: { imaginaryCutoff: 1200 } } }])).toThrow(/mapped native parameters/);
     expect(() => applyNativeOperations(base, [{ kind: "addEffect", partId: "starting-voice", effect: { id: "space", type: "stompboxReverb", parameters: { imaginaryDecay: 0.7 } } }])).toThrow(/mapped native parameters/);
+  });
+  it("maps FM operator links and three contrasting effects into an offline editable Nexus document", async () => {
+    const document = applyNativeOperations(seedNativeDocument("An FM pluck with saturated delay throws"), [
+      { kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: { "operatorA.waveformIndex": 1, "operatorC.waveformIndex": 5, "operatorC.modulationFactorA": 0.45, "operatorC.envelope2AmplitudeModulationDepth": 0.6, "lfo1.rateNormalized": 0.4 } } },
+      { kind: "addNotes", partId: "starting-voice", notes: [{ id: "pluck", startTick: 0, durationTicks: 480, pitch: 74, velocity: 0.76 }] },
+      { kind: "addEffect", partId: "starting-voice", effect: { id: "warmth", type: "stompboxTube", parameters: { drive: 2.5, tone: 0, postGain: 0.6 } } },
+      { kind: "addEffect", partId: "starting-voice", effect: { id: "width", type: "stompboxChorus", parameters: { delayTimeMs: 25, lfoFrequencyHz: 0.8, spreadFactor: 0.6 } } },
+      { kind: "addEffect", partId: "starting-voice", effect: { id: "throw", type: "stompboxPitchDelay", parameters: { stepCount: 2, stepLengthIndex: 3, feedbackFactor: 0.3, tuneFactor: 0.2, mix: 0.25 } } }
+    ]);
+    const mapped = await validateNativeOffline(document);
+    expect(mapped.readback.noteEntities).toBe(1);
+    expect(mapped.readback.effectDevices).toBe(3);
+    expect(mapped.structuralReadback.effects).toBe(3);
+  });
+  it("develops repeated exact chord voicings and expressive drum hits within chosen sections", async () => {
+    const base = applyNativeOperations(seedNativeDocument("A dark-to-hopeful song with a light offbeat groove"), [
+      { kind: "setStructure", bars: 12, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "No drums" }, { id: "body", name: "Body", startBar: 4, endBar: 12, intent: "Lift" }] },
+      { kind: "addPart", part: { id: "chords", name: "Warm chords", role: "harmony", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] } },
+      { kind: "addPart", part: { id: "kit", name: "Offbeat kit", role: "percussion", device: { type: "gakki", parameters: {} }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] } }
+    ]);
+    const piece = applyNativeOperations(base, [
+      { kind: "harmonizeSection", partId: "chords", sectionId: "body", cycleBars: 2, chords: [{ barOffset: 0, durationBars: 1, pitches: [50, 57, 60, 64], velocity: 0.64, strumTicks: 20 }, { barOffset: 1, durationBars: 1, pitches: [46, 53, 57, 60], velocity: 0.6, strumTicks: 20 }] },
+      { kind: "sequenceSectionPattern", partId: "kit", sectionId: "body", cycleBars: 1, hits: [{ tick: 0, durationTicks: 240, pitch: 36, velocity: 0.8, timingOffsetTicks: 0 }, { tick: 960, durationTicks: 240, pitch: 38, velocity: 0.45, timingOffsetTicks: 35 }, { tick: 1440, durationTicks: 120, pitch: 42, velocity: 0.19, timingOffsetTicks: 25 }] }
+    ]);
+    expect(piece.parts.find((part) => part.id === "chords")?.notes).toHaveLength(32);
+    expect(piece.parts.find((part) => part.id === "kit")?.notes).toHaveLength(24);
+    expect(analyzeNativeSection(piece, "intro").parts.find((part) => part.id === "kit")?.soundingNotes).toBe(0);
+    expect((await validateNativeOffline(piece)).readback.noteEntities).toBe(56);
+    const guarded = applyNativeOperations(piece, [{ kind: "protect", partIds: ["chords"], motifIds: [] }]);
+    expect(() => applyNativeOperations(guarded, [{ kind: "harmonizeSection", partId: "chords", sectionId: "body", cycleBars: 1, chords: [{ barOffset: 0, durationBars: 1, pitches: [50, 57], velocity: 0.5, strumTicks: 0 }] }])).toThrow(/Protected part/);
+  });
+  it("builds a real dry/wet split, processed branch and merger without changing protected routing", async () => {
+    const dry = applyNativeOperations(seedNativeDocument("A restrained groove with parallel drum warmth"), [{ kind: "addNotes", partId: "starting-voice", notes: [{ id: "pulse", startTick: 0, durationTicks: 240, pitch: 36, velocity: 0.7 }] }]);
+    const wet = applyNativeOperations(dry, [{ kind: "setParallelChain", partId: "starting-voice", parallel: { wetMix: 0.28, effects: [{ id: "tube", type: "stompboxTube", parameters: { drive: 3, tone: 0, postGain: 0.6 } }, { id: "squeeze", type: "stompboxCompressor", parameters: { thresholdDb: -12, ratio: 0.5 } }] } }]);
+    const mapped = await validateNativeOffline(wet);
+    expect(mapped.structuralReadback.parallelSplits).toBe(1);
+    expect(mapped.structuralReadback.parallelMerges).toBe(1);
+    expect(mapped.structuralReadback.effects).toBe(2);
+    expect(mapped.structuralReadback.cables).toBeGreaterThanOrEqual(6);
+    const merger = mapped.structuralReadback.semanticEntities.find((entity) => entity.type === "audioMerger")?.fields as { mergeCoords: { x: number; y: number } };
+    const tube = mapped.structuralReadback.semanticEntities.find((entity) => entity.type === "stompboxTube")?.fields as { drive: number };
+    expect(merger.mergeCoords).toEqual({ x: 0.28, y: 0.36 });
+    expect(tube.drive).toBe(3);
+    expect(nativeMusicHash(wet)).not.toBe(nativeMusicHash(dry));
+    expect(nativeDiff(dry, wet).partChanges[0]?.fields).toContain("parallel");
+    const protectedWet = applyNativeOperations(wet, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
+    expect(() => applyNativeOperations(protectedWet, [{ kind: "removeParallelChain", partId: "starting-voice" }])).toThrow(/Protected part/);
   });
   it("discovers pinned SDK entities and their actual field ranges", async () => {
     const result = await discoverNativeCapabilities("instrument", 32);

@@ -296,7 +296,7 @@ describe("durable job repository", () => {
     if (!attempt) throw new Error("Expected concurrent budget attempt");
     const reserve = (suffix: string) => reserveProviderEffect({
       job: attempt, provider: "openai" as const, step: `mock-${suffix}`, idempotencyKey: `concurrent:${suffix}`,
-      inputHash: `input-${suffix}`, model: "gpt-6-astra", promptVersion: "test", reservationMicrousd: 150_000
+      inputHash: `input-${suffix}`, model: "gpt-6-astra", promptVersion: "test", reservationMicrousd: 3_000_000
     });
     const outcomes = await Promise.allSettled([reserve("a"), reserve("b")]);
     const successes = outcomes.filter((outcome): outcome is PromiseFulfilledResult<Awaited<ReturnType<typeof reserve>>> => outcome.status === "fulfilled");
@@ -574,7 +574,7 @@ describe("durable job repository", () => {
     if (!budgetClaim) throw new Error("Expected Gemini budget job");
     await getPool().query(
       `INSERT INTO effect(id,job_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd,actual_cost_microusd,cost_usd)
-       VALUES($1,$2,'budget-fixture','budget-fixture','budget-fixture','succeeded','gemini','fixture','fixture',0,250000,0.25)`,
+       VALUES($1,$2,'budget-fixture','budget-fixture','budget-fixture','succeeded','gemini','fixture','fixture',0,5000000,5)`,
       [randomUUID(), budgetClaim.id]
     );
     let budgetCalls = 0;

@@ -20,7 +20,7 @@ export const nativeFormSchema = z.object({
     device: nativePartShape.shape.device, gain: z.number().min(0).max(1), pan: z.number().min(-1).max(1),
     groupId: formId.optional(), sends: nativePartShape.shape.sends.unwrap().default([]),
     motifs: z.array(formMotif).max(8), placements: z.array(formPlacement).max(64),
-    freeNotes: z.array(formNote).max(128).default([]), effects: nativePartShape.shape.effects.unwrap().default([]),
+    freeNotes: z.array(formNote).max(128).default([]), effects: nativePartShape.shape.effects.unwrap().default([]), parallel: nativePartShape.shape.parallel.unwrap().optional(),
     automation: nativePartShape.shape.automation.unwrap().default([]), sources: z.array(formSource).max(24).default([]), librarySamples: z.array(formLibrarySample).max(24).default([])
   })).min(1).max(24)
 });
@@ -69,7 +69,7 @@ export function nativeFormOperations(raw: NativeForm, ownedSources: OwnedNativeS
       id: item.id, name: item.name, role: item.role, device: item.device, gain: item.gain, pan: item.pan, ...(item.groupId ? { groupId: item.groupId } : {}), sends: item.sends,
       notes: item.freeNotes.map((event, index) => ({ id: `free-${index}`, startTick: ticks(event.beat), durationTicks: ticks(event.durationBeats), pitch: event.pitch, velocity: event.velocity })),
       placements: item.placements.map((place) => ({ id: place.id, motifId: place.motifId, startTick: ticks(place.startBar * beatsPerBar), repeats: place.repeats, transpose: place.transpose })),
-      sourceRegions, libraryRegions, effects: item.effects, automation: item.automation
+      sourceRegions, libraryRegions, effects: item.effects, ...(item.parallel ? { parallel: item.parallel } : {}), automation: item.automation
     } });
     for (const motif of item.motifs) operations.push({ kind: "defineMotif", motif: { id: motif.id, partId: item.id, name: motif.name, lengthTicks: ticks(motif.lengthBeats), notes: motif.notes.map((event, index) => ({ id: `note-${index}`, startTick: ticks(event.beat), durationTicks: ticks(event.durationBeats), pitch: event.pitch, velocity: event.velocity })) } });
   }

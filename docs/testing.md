@@ -1,6 +1,12 @@
 # Verification record
 
-## Post-`69baa7a` native reliability follow-up (2026-09-24)
+## Text-to-native-music extension (2026-09-25)
+
+`pnpm check` passed lint, strict types, 14 unit files / 78 tests and the production build; the only build warning is the existing lazy SDK chunk size. `pnpm test:integration` passed 2 files / 48 tests against the isolated PostgreSQL test database, including a 32,000-character source-free brief, eight scripted Deep Agent responses, four durable mutation batches, a captured-profile retry fence and explicit same-job extension. `pnpm test:e2e` passed eight Chromium journeys, including queued/running/completed sync without erroneous construction-draft polling or loss of pending direction. Desktop and 390 px phone fixture screenshots under `.local/evidence/native-*.png` were visually inspected. `pnpm db:migrate` applied additive migrations 013–014 to the existing development database without rewriting revisions. No ordinary test has provider access.
+
+The new domain/SDK checks cover negated and section-local role requirements, long motif/placement identities after section development, generated chord voicings and timed MIDI hits, FM modulation and tube/chorus/pitch-delay fields, and per-part dry/wet splitter/merger routing with semantic offline readback. The production-path scripted model saves a plan, composes a form, develops two sections, inspects current symbolic material and commits. The paused-run integration test extends Standard to Extended under the same job/effect identity; the browser test drives the explicit extension-and-continuation control. These checks prove executable structure and durable plumbing, not the creative quality of a real model or sound of an unrendered native document. Live Nexus and native audio remain unverified/deferred respectively. Physical phone and non-Chromium browsers were not tested.
+
+## Historical: post-`69baa7a` native reliability follow-up (2026-09-24)
 
 Ordinary checks use fixture/scripted providers and the dedicated `_test` database with credentials excluded. Final runs passed `pnpm check` (lint, types, 14 unit files / 72 tests, build), `pnpm test:integration` (2 files / 44 tests), and `pnpm test:e2e` (seven Chromium journeys, rerun after partial-card polish; desktop/tablet/phone/partial-draft captures). No provider request was dispatched. `pnpm budget:status` read the existing ledger without spending.
 
@@ -46,7 +52,7 @@ Normal tests set `APP_ENV=test`, require a database name ending in `_test`, refu
 
 Integration and browser preparation delete only `dev-loopback` resources in the caller-supplied disposable database and test asset directories. They do not truncate the development database or seed the demo as a substitute for a required journey. Browser services own explicit ports, refuse existing listeners and terminate through test-only loopback shutdown endpoints.
 
-## Current results
+## Earlier legacy results
 
 | Command | Result | Main evidence |
 | --- | --- | --- |

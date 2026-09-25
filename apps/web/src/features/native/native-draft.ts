@@ -7,6 +7,7 @@ export interface NativeDraft {
   targetSectionId: string | null
   protectedPartIds: string[]
   sourceIds: string[]
+  profile?: "standard" | "extended"
 }
 
 export const nativeDraftKey = (projectId: string) => `pocket-producer:native-draft:${projectId}`
@@ -15,7 +16,7 @@ export const defaultNativeDirection = (hasVersion: boolean) => hasVersion
   : "Build an evolving instrumental with a clear motif and contrasting sections."
 
 export function freshNativeDraft(snapshot: NativeSnapshot | null): NativeDraft {
-  return { headId: snapshot?.currentRevisionId ?? null, direction: defaultNativeDirection(Boolean(snapshot?.current)), targetPartId: null, targetSectionId: null, protectedPartIds: snapshot?.current?.document.protectedPartIds ?? [], sourceIds: [] }
+  return { headId: snapshot?.currentRevisionId ?? null, direction: defaultNativeDirection(Boolean(snapshot?.current)), targetPartId: null, targetSectionId: null, protectedPartIds: snapshot?.current?.document.protectedPartIds ?? [], sourceIds: [], profile: "standard" }
 }
 
 export function reconcileNativeDraft(raw: unknown, snapshot: NativeSnapshot, assets: Asset[]): { draft: NativeDraft; notices: string[] } {
@@ -37,10 +38,11 @@ export function reconcileNativeDraft(raw: unknown, snapshot: NativeSnapshot, ass
   const requestedProtections = Array.isArray(saved.protectedPartIds) ? saved.protectedPartIds.filter((value): value is string => typeof value === "string") : []
   return { draft: {
     headId: snapshot.currentRevisionId,
-    direction: typeof saved.direction === "string" && saved.direction.length <= 2000 ? saved.direction : fallback.direction,
+    direction: typeof saved.direction === "string" && saved.direction.length <= 32_768 ? saved.direction : fallback.direction,
     targetPartId: requestedPartId && partIds.has(requestedPartId) ? requestedPartId : null,
     targetSectionId: requestedSectionId && sectionIds.has(requestedSectionId) ? requestedSectionId : null,
     protectedPartIds: headChanged ? fallback.protectedPartIds : [...new Set(requestedProtections.filter((id) => partIds.has(id)))],
-    sourceIds: [...new Set(requestedSources.filter((id) => assetIds.has(id)))]
+    sourceIds: [...new Set(requestedSources.filter((id) => assetIds.has(id)))],
+    profile: saved.profile === "extended" ? "extended" : "standard"
   }, notices }
 }

@@ -17,7 +17,7 @@ pnpm seed:demo
 pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`, create a session, and in **Native construction** enter `Build an evolving 64-bar ambient journey with a slow lead and spacious transitions`. Inspect the sections, parts and native palette. Protect the Slow lead, target Soft pulse/Ascent, request `Vary the rhythmic phrase in the later section`, compare structural versions and restore explicitly. This fixture demonstration is audio-independent. For the preserved audio journey, choose **Legacy audio** and follow the previous Sunroom WAV flow.
+Open `http://127.0.0.1:5173`, create a session, and in **Arrange** enter either a few words or a detailed production brief. Recordings are optional. Choose Standard or Extended depth, inspect the saved plan and confirmed structural draft while the job runs, then inspect sections, parts and native palette. A safely paused Standard draft can be explicitly extended and continued on the same job without resetting confirmed work or accounting. Protect a part, target another part or section, request a precise change, compare structural versions and restore explicitly. In fixture mode this is an audio-independent deterministic demonstration, not evidence of real-model artistry. For the preserved playable journey, choose **Playable audio** and follow the earlier WAV flow.
 
 The root `.env` is loaded only by server code and remains ignored. Do not add secrets under `VITE_*`. For a no-cost deterministic run, launch the services with `FIXTURE_MODE=true`; live OpenAI creation requires the existing `OPENAI_API_KEY` and is fenced by `INITIAL_BUILD_API_BUDGET_USD` and `MAX_JOB_COST_USD`.
 
@@ -44,15 +44,15 @@ pnpm budget:status
 
 - React/Vite Listening Room using owned shadcn source, Base UI, Tailwind, Lucide and one wavesurfer-backed legacy playback controller, plus native arrangement/part/protection/compare views.
 - Native 960-PPQ schema v2 with reusable motifs, MIDI notes, Beatbox8 patterns, instrument/effect/automation state, source intervals and validated protected operations; immutable history and durable step replay.
-- Pinned Nexus capability discovery and offline native mapping/readback; checkpointed isolated remote sync with a strict unverified-live status. Native audio/Gemini and source upload mapping are deferred.
+- Pinned Nexus capability discovery and offline native mapping/readback; checkpointed isolated remote sync with a strict unverified-live status. Native audio/Gemini are deferred; owned-source upload/placement has offline contract evidence, not new live verification.
 - Fastify API, PostgreSQL canonical state and outbox/lease/fencing queue, independent worker, cancellation, retry and owner checks.
-- OpenAI Deep Agent on LangGraph with PostgreSQL checkpoints, scoped runtime skills and a validated arrangement plan.
+- OpenAI Deep Agent on LangGraph with PostgreSQL checkpoints, scoped runtime skills, a durable staged native plan, captured Standard/Extended limits, and validated musical construction tools. The text-only quality benchmark still needs real-model evaluation.
 - Canonical tick composition, 48 kHz deterministic WAV renderer, per-part stems, measured audio facts and private content-addressed storage.
 - Protected drum simplification, canonical melody and artifact checks, immutable history, A/B audition and explicit restore.
 - Gemini source/preview adapter with structured critique, usage capture, one-repair ceiling and an honest unavailable state.
 - Preserved Nexus v3 four-track stem mapping with explicit 960→3840 PPQ conversion, browser PKCE/callback, encrypted owner-bound worker sessions, and durable per-step recovery. Audiotool registration/consent previously succeeded; this assignment made no live Audiotool call. See [docs/USER-SETUP.md](docs/USER-SETUP.md).
 
-See [docs/STATUS.md](docs/STATUS.md), [docs/architecture.md](docs/architecture.md), [docs/design-system.md](docs/design-system.md), and [docs/testing.md](docs/testing.md).
+See [docs/STATUS.md](docs/STATUS.md), [docs/native-text-to-music.md](docs/native-text-to-music.md), [docs/architecture.md](docs/architecture.md), [docs/design-system.md](docs/design-system.md), and [docs/testing.md](docs/testing.md).
 
 ## Understand the architecture
 

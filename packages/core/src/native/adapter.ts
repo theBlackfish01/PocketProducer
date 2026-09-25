@@ -49,7 +49,7 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
   let automationEvents = 0;
   // This v1 adapter owns only documents it creates. It never deletes or rewrites
   // unknown entities in an existing Studio document.
-  if (doc.queryEntities.ofTypes("note", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "beatbox8", "heisenberg", "pulverisateur", "gakki", "audioRegion", "audioTrack", "audioDevice", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack").get().length) throw new Error("Native target is not empty; inspect/reconcile external edits before applying a snapshot");
+  if (doc.queryEntities.ofTypes("note", "noteTrack", "noteRegion", "patternTrack", "patternRegion", "beatbox8", "heisenberg", "pulverisateur", "gakki", "audioRegion", "audioTrack", "audioDevice", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "audioSplitter", "audioMerger", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay", "automationTrack").get().length) throw new Error("Native target is not empty; inspect/reconcile external edits before applying a snapshot");
   await doc.modify((t) => {
     const groove = t.create("groove", { functionIndex: 1, durationTicks: Ticks.Beat * 2, impact: 0, displayName: "Straight" });
     const config = t.entities.ofTypes("config").getOne() ?? t.create("config", { defaultGroove: groove.location });
@@ -108,11 +108,36 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
           : effect.type === "stompboxReverb" ? t.create("stompboxReverb", { ...fxPosition, ...effect.parameters })
           : effect.type === "stompboxCompressor" ? t.create("stompboxCompressor", { ...fxPosition, ...effect.parameters })
           : effect.type === "stompboxParametricEqualizer" ? t.create("stompboxParametricEqualizer", { ...fxPosition, ...effect.parameters })
+          : effect.type === "stompboxTube" ? t.create("stompboxTube", { ...fxPosition, ...effect.parameters })
+          : effect.type === "stompboxChorus" ? t.create("stompboxChorus", { ...fxPosition, ...effect.parameters })
+          : effect.type === "stompboxPitchDelay" ? t.create("stompboxPitchDelay", { ...fxPosition, ...effect.parameters })
           : t.create("autoFilter", { ...fxPosition, ...effect.parameters });
         t.create("desktopAudioCable", { fromSocket: output, toSocket: fx.fields.audioInput.location });
         output = fx.fields.audioOutput.location;
         effectTargets.set(effect.id, fx.fields);
         if (effect.type === "autoFilter") filterTarget = (fx as NexusEntity<"autoFilter">).fields.cutoffFrequencyHz;
+      }
+      if (part.parallel) {
+        const split = t.create("audioSplitter", { displayName: `${part.name} dry/wet split`, blendModeIndex: 1, positionX: position.positionX + 120, positionY: position.positionY + 180 });
+        const merge = t.create("audioMerger", { displayName: `${part.name} dry/wet blend`, blendModeIndex: 1, mergeCoords: { x: part.parallel.wetMix, y: (1 - part.parallel.wetMix) / 2 }, positionX: position.positionX + 550, positionY: position.positionY + 180 });
+        t.create("desktopAudioCable", { fromSocket: output, toSocket: split.fields.audioInput.location });
+        t.create("desktopAudioCable", { fromSocket: split.fields.audioOutputA.location, toSocket: merge.fields.audioInputA.location });
+        let wetOutput = split.fields.audioOutputB.location;
+        for (const [effectIndex, effect] of part.parallel.effects.entries()) {
+          const fxPosition = { displayName: `${part.name} parallel ${effect.type}`, positionX: position.positionX + 240 + effectIndex * 100, positionY: position.positionY + 230 };
+          const fx = effect.type === "stompboxDelay" ? t.create("stompboxDelay", { ...fxPosition, ...effect.parameters })
+            : effect.type === "stompboxReverb" ? t.create("stompboxReverb", { ...fxPosition, ...effect.parameters })
+            : effect.type === "stompboxCompressor" ? t.create("stompboxCompressor", { ...fxPosition, ...effect.parameters })
+            : effect.type === "stompboxParametricEqualizer" ? t.create("stompboxParametricEqualizer", { ...fxPosition, ...effect.parameters })
+            : effect.type === "stompboxTube" ? t.create("stompboxTube", { ...fxPosition, ...effect.parameters })
+            : effect.type === "stompboxChorus" ? t.create("stompboxChorus", { ...fxPosition, ...effect.parameters })
+            : effect.type === "stompboxPitchDelay" ? t.create("stompboxPitchDelay", { ...fxPosition, ...effect.parameters })
+            : t.create("autoFilter", { ...fxPosition, ...effect.parameters });
+          t.create("desktopAudioCable", { fromSocket: wetOutput, toSocket: fx.fields.audioInput.location });
+          wetOutput = fx.fields.audioOutput.location;
+        }
+        t.create("desktopAudioCable", { fromSocket: wetOutput, toSocket: merge.fields.audioInputB.location });
+        output = merge.fields.audioOutput.location;
       }
       t.create("desktopAudioCable", { fromSocket: output, toSocket: channel.fields.audioInput.location });
       if (part.device.type === "audio") {
@@ -235,7 +260,7 @@ export async function validateNativeOffline(document: NativeDocument, sourceSamp
       drumMachines: offline.queryEntities.ofTypes("beatbox8").get().length,
       noteEntities: offline.queryEntities.ofTypes("note").get().length,
       patternRegions: offline.queryEntities.ofTypes("patternRegion").get().length,
-      effectDevices: offline.queryEntities.ofTypes("stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter").get().length,
+      effectDevices: offline.queryEntities.ofTypes("stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay").get().length,
       automationEvents: offline.queryEntities.ofTypes("automationEvent").get().length
     },
     structuralReadback: nativeStructuralReadback(offline)
@@ -251,7 +276,7 @@ export function nativeStructuralReadback(doc: Pick<SyncedDocument, "queryEntitie
   // Map every supported entity to a stable, type-local ordinal before reading
   // pointers. Keep actual socket field indexes: they distinguish routing ends
   // and automation targets. UI positions, labels and colors are not music.
-  const semanticTypes = ["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "audioDevice", "audioTrack", "audioRegion", "sample"] as const;
+  const semanticTypes = ["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "audioSplitter", "audioMerger", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "audioDevice", "audioTrack", "audioRegion", "sample"] as const;
   const entities = doc.queryEntities.ofTypes(...semanticTypes).get();
   const ordinals = new Map<string, string>();
   const counts = new Map<string, number>();
@@ -292,7 +317,9 @@ export function nativeStructuralReadback(doc: Pick<SyncedDocument, "queryEntitie
     groupLinks: doc.queryEntities.ofTypes("mixerStripGrouping").get().length,
     sends: doc.queryEntities.ofTypes("mixerAuxRoute").get().length,
     cables: doc.queryEntities.ofTypes("desktopAudioCable").get().length,
-    effects: doc.queryEntities.ofTypes("stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter").get().length,
+    parallelSplits: doc.queryEntities.ofTypes("audioSplitter").get().length,
+    parallelMerges: doc.queryEntities.ofTypes("audioMerger").get().length,
+    effects: doc.queryEntities.ofTypes("stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay").get().length,
     noteRegions: doc.queryEntities.ofTypes("noteRegion").get().length,
     patternRegions: doc.queryEntities.ofTypes("patternRegion").get().length,
     automationTracks: doc.queryEntities.ofTypes("automationTrack").get().length,

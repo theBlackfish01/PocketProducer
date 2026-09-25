@@ -1,5 +1,7 @@
 # Native construction follow-up — 2026-09-24
 
+Historical baseline note. The current text-only production envelope, tools and unfinished capability map are in [native-text-to-music.md](native-text-to-music.md); current test and provider facts are in [STATUS.md](STATUS.md). The four-call/1,200-token statement below describes this older pass, not today's configuration.
+
 This pass starts at reviewed `69baa7a` and preserves native v2 and legacy histories. Additive migration `013_native_step_predecessor.sql` records predecessor hashes for new tool steps; old rows and accepted versions are not rewritten. The local mapper is `nexus-native-v5` against pinned Nexus `0.0.17`. Native rendering/playback and Gemini listening remain deferred.
 
 ## Five review findings

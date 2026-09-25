@@ -15,7 +15,8 @@ import { arrangementPlanSchema, canonicalHash, type ArrangementPlan } from "../d
 import { getPool } from "../db/pool.js";
 import type { JobRecord } from "../db/repository.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "../providers/effects.js";
-import { tokenCostMicrousd, tokenCostUsd } from "../providers/pricing.js";
+import { tokenCostMicrousd, tokenCostMicrousdAtPrice, tokenCostUsd } from "../providers/pricing.js";
+import { jobNativeRunLimits } from "../native/profile.js";
 
 const paletteTool = tool(
   () => ({
@@ -151,8 +152,13 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
     super({ raiseError: true, _awaitHandler: true });
   }
 
+  private cost(usage: { inputTokens: number; outputTokens: number }): number {
+    const capturedPrice = jobNativeRunLimits(this.job.request)?.pricing;
+    return capturedPrice ? tokenCostMicrousdAtPrice(capturedPrice, usage) : tokenCostMicrousd("openai", this.model, usage);
+  }
+
   override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
-    const request = boundOpenAiRequest(messages, this.outputTokenBound);
+    const request = boundOpenAiRequest(messages, this.outputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens);
     const messageHash = canonicalHash(request.normalizedMessages);
     const reservation = await reserveProviderEffect({
       job: this.job,
@@ -162,7 +168,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
       inputHash: canonicalHash({ operationHash: this.operationHash, messageHash, inputTokenBound: request.inputTokenBound, outputTokenBound: request.outputTokenBound }),
       model: this.model,
       promptVersion: "deep-producer-v2",
-      reservationMicrousd: tokenCostMicrousd("openai", this.model, { inputTokens: request.inputTokenBound, outputTokens: request.outputTokenBound })
+      reservationMicrousd: this.cost({ inputTokens: request.inputTokenBound, outputTokens: request.outputTokenBound })
     });
     if (!reservation.created) throw new Error(`OPENAI_EFFECT_${reservation.state.toUpperCase()}`);
     await markEffectDispatched(reservation.id, this.job);
@@ -173,7 +179,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
     const effectId = this.effects.get(runId);
     if (!effectId) return;
     const usage = usageFromLlmResult(output);
-    const actualCostMicrousd = tokenCostMicrousd("openai", this.model, usage);
+    const actualCostMicrousd = this.cost(usage);
     const state = await completeProviderEffect({ effectId, job: this.job, output: { usage }, actualCostMicrousd });
     if (state !== "succeeded") throw new Error("OPENAI_EFFECT_OUTCOME_UNCERTAIN");
     this.usage.inputTokens += usage.inputTokens;
@@ -193,7 +199,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   }
 }
 
-export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound = 900): {
+export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound = 900, inputLimit = getConfig().MAX_OPENAI_INPUT_TOKENS): {
   normalizedMessages: unknown;
   inputTokenBound: number;
   outputTokenBound: number;
@@ -211,7 +217,7 @@ export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound =
   // selected text-only request. This intentionally admits less than an
   // approximate chars/4 estimate rather than risking an under-reservation.
   const inputTokenBound = Buffer.byteLength(serialized, "utf8") + 768;
-  const configuredLimit = getConfig().MAX_OPENAI_INPUT_TOKENS;
+  const configuredLimit = Math.min(inputLimit, getConfig().MAX_OPENAI_INPUT_TOKENS);
   if (inputTokenBound > configuredLimit) {
     throw new Error(`OPENAI_INPUT_LIMIT_EXCEEDED:${inputTokenBound}:${configuredLimit}`);
   }

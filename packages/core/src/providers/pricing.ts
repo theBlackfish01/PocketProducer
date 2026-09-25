@@ -3,7 +3,7 @@ export interface TokenUsage {
   outputTokens: number;
 }
 
-interface ModelPrice {
+export interface ModelPrice {
   inputUsdPerMillion: number;
   outputUsdPerMillion: number;
   modality: "text" | "audio";
@@ -35,7 +35,10 @@ export function requireModelPrice(provider: "openai" | "gemini", model: string):
 }
 
 export function tokenCostMicrousd(provider: "openai" | "gemini", model: string, usage: TokenUsage): number {
-  const price = requireModelPrice(provider, model);
+  return tokenCostMicrousdAtPrice(requireModelPrice(provider, model), usage);
+}
+
+export function tokenCostMicrousdAtPrice(price: ModelPrice, usage: TokenUsage): number {
   return Math.ceil(usage.inputTokens * price.inputUsdPerMillion + usage.outputTokens * price.outputUsdPerMillion);
 }
 

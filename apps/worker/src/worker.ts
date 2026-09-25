@@ -525,7 +525,7 @@ export async function processJob(job: JobRecord, offlineNative?: OfflineNativeCo
     if (error instanceof JobControlError && error.code === "CANCELLED") await commitCancelled(job);
     else if (error instanceof JobControlError && (error.code === "LEASE_LOST" || error.code === "MONITOR_UNAVAILABLE")) return;
     else if (error instanceof JobControlError && error.code === "DEADLINE_EXCEEDED") await expireJob(job);
-    else if ((job.kind === "native-generation" || job.kind === "native-revision") && error instanceof Error && /^(NATIVE_INCOMPLETE|MODEL_CALL_LIMIT_EXCEEDED)/.test(error.message)) {
+    else if ((job.kind === "native-generation" || job.kind === "native-revision") && error instanceof Error && /^(NATIVE_INCOMPLETE|MODEL_CALL_LIMIT_EXCEEDED|OPENAI_INCOMPLETE_RESPONSE)/.test(error.message)) {
       await needsAttentionJob(job, "NATIVE_PARTIAL", `The editable draft is unfinished and was not selected. Confirmed work is saved under this request. ${error.message}`);
     }
     else if (error instanceof Error && /outcome is not safely replayable|previous (?:native )?producer dispatch|NATIVE_STEP_REPLAY_CONFLICT|EFFECT_(?:DISPATCHED|UNCERTAIN)/i.test(error.message)) {

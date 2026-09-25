@@ -140,7 +140,7 @@ describe("optional provider boundaries", () => {
     const longer = boundOpenAiRequest([[message("keep the melody and simplify the drums ".repeat(40)) as never]]);
     expect(short.outputTokenBound).toBe(900);
     expect(longer.inputTokenBound).toBeGreaterThan(short.inputTokenBound);
-    expect(() => boundOpenAiRequest([[message("x".repeat(20_000)) as never]])).toThrow("OPENAI_INPUT_LIMIT_EXCEEDED");
+    expect(() => boundOpenAiRequest([[message("x".repeat(20_000)) as never]], 900, 16_000)).toThrow("OPENAI_INPUT_LIMIT_EXCEEDED");
   });
 
   it("prevents post-cancel mutation and fences ambiguous Nexus outcomes", async () => {

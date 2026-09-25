@@ -18,5 +18,5 @@ Object.assign(process.env, {
   // Keys stay cleared and fixture mode remains mandatory. These ceilings only
   // let injected provider mocks exercise the real transactional ledger.
   INITIAL_BUILD_API_BUDGET_USD: "5",
-  MAX_JOB_COST_USD: "0.25"
+  MAX_JOB_COST_USD: "5"
 });

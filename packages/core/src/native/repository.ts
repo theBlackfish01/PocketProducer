@@ -7,6 +7,8 @@ import { JobControlError, type JobRecord } from "../db/repository.js";
 import { nativeDiff, nativeDocumentSchema, nativeMusicHash, pinnedContext, type NativeDocument, type NativeOperation } from "./model.js";
 import { NATIVE_MAPPING_VERSION } from "./adapter.js";
 import type { NativeSampleResources } from "./adapter.js";
+import { jobNativeRunLimits, nativeProfileSchema, nativeRunLimits, originalNativeRequest } from "./profile.js";
+import { nativePlanSchema, nativeStageSchema, type NativePlan, type NativeStage } from "./plan.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
@@ -17,17 +19,23 @@ async function head(client: pg.PoolClient, ownerId: string, projectId: string, l
 }
 
 export async function createNativeJob(input: { ownerId: string; projectId: string; kind: "native-generation" | "native-revision" | "native-sync"; idempotencyKey: string; request: Record<string, unknown>; expectedHeadId: string | null }): Promise<{ id: string; duplicate: boolean }> {
+  const requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard")) };
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     const existing = await client.query<{ id: string; request: Record<string, unknown> }>("SELECT id,request FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND idempotency_key=$4 FOR UPDATE", [input.ownerId, input.projectId, input.kind, input.idempotencyKey]);
     if (existing.rows[0]) {
-      if (canonicalHash(existing.rows[0].request) !== canonicalHash(input.request)) throw Object.assign(new Error("Idempotency key reused with a different request"), { statusCode: 409 });
+      const priorRequest = { ...existing.rows[0].request };
+      delete priorRequest._nativeRun;
+      delete priorRequest._nativeRunCurrent;
+      const priorComparable = input.kind === "native-sync" ? priorRequest : { ...priorRequest, profile: priorRequest.profile ?? "standard" };
+      const incomingComparable = input.kind === "native-sync" ? input.request : { ...input.request, profile: input.request.profile ?? "standard" };
+      if (canonicalHash(priorComparable) !== canonicalHash(incomingComparable)) throw Object.assign(new Error("Idempotency key reused with a different request"), { statusCode: 409 });
       await client.query("COMMIT");
       return { id: existing.rows[0].id, duplicate: true };
     }
     const priorSameRequest = await client.query<{ id: string; state: string }>(
-      "SELECT id,state FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND request=$4::jsonb ORDER BY created_at DESC LIMIT 1",
+      "SELECT id,state FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND (request - '_nativeRun' - '_nativeRunCurrent')=$4::jsonb ORDER BY created_at DESC LIMIT 1",
       [input.ownerId, input.projectId, input.kind, JSON.stringify(input.request)]
     );
     if (priorSameRequest.rows[0]?.state === "needs_attention") throw Object.assign(new Error("Prior native command needs reconciliation; a new key cannot bypass it"), { statusCode: 409 });
@@ -58,11 +66,11 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
       const asset = await client.query("SELECT 1 FROM asset WHERE id=$1 AND owner_id=$2 AND project_id=$3 AND kind='source' AND readiness='ready'", [assetId, input.ownerId, input.projectId]);
       if (asset.rowCount !== 1) throw Object.assign(new Error("A selected source is unavailable in this room"), { statusCode: 422 });
     }
-    const hash = canonicalHash({ version: "native-command-v1", ...input });
+    const hash = canonicalHash({ version: "native-command-v1", ...input, request: requestWithLimits });
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,state,deadline_at)
        VALUES($1,$2,$3,$4,$5,$6,'queued',now()+make_interval(secs=>$7)) RETURNING id`,
-      [input.ownerId, input.projectId, input.kind, input.idempotencyKey, hash, input.request, getConfig().MAX_JOB_SECONDS]
+      [input.ownerId, input.projectId, input.kind, input.idempotencyKey, hash, requestWithLimits, jobNativeRunLimits(requestWithLimits)?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS]
     );
     const id = inserted.rows[0]!.id;
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,1,'accepted',$2)", [id, { message: "Native construction request accepted", expectedNativeHeadId: current }]);
@@ -86,13 +94,43 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     const expectedHead = typeof job.request.expectedNativeHeadId === "string" ? job.request.expectedNativeHeadId : null;
     if (await head(client, ownerId, projectId, true) !== expectedHead) throw Object.assign(new Error("The selected version changed; this saved draft cannot continue against a different head"), { statusCode: 409 });
     const effects = await client.query<{ step: string; state: string; cost_status: string }>("SELECT step,state,cost_status FROM effect WHERE job_id=$1 FOR UPDATE", [jobId]);
-    if (effects.rows.some((effect) => effect.step === "producer-model-call" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A model outcome still needs reconciliation"), { statusCode: 409 });
+    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A provider outcome still needs reconciliation"), { statusCode: 409 });
     const callCount = effects.rows.filter((effect) => effect.step === "producer-model-call").length;
-    if (callCount >= getConfig().MAX_MODEL_CALLS_PER_JOB) throw Object.assign(new Error("The request has reached its configured model-call limit; continuation needs an explicitly approved limit change"), { statusCode: 409 });
+    const limits = jobNativeRunLimits(job.request);
+    if (callCount >= (limits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB)) throw Object.assign(new Error("The request has reached its configured model-call limit; continuation needs an explicitly approved limit change"), { statusCode: 409 });
     const unfinished = effects.rows.some((effect) => effect.step === "native-producer-result" && effect.state === "dispatched");
     if (!unfinished) throw Object.assign(new Error("No safely resumable producer effect remains"), { statusCode: 409 });
-    await client.query("UPDATE job SET state='queued',stage=NULL,error_code=NULL,error_message=NULL,deadline_at=now()+make_interval(secs=>$2),updated_at=now() WHERE id=$1", [jobId, getConfig().MAX_JOB_SECONDS]);
+    await client.query("UPDATE job SET state='queued',stage=NULL,error_code=NULL,error_message=NULL,deadline_at=now()+make_interval(secs=>$2),updated_at=now() WHERE id=$1", [jobId, limits?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'continued',$2 FROM job WHERE id=$1", [jobId, { message: "Continuing confirmed native work under the original request and budget" }]);
+    await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
+export async function extendNativePartialJob(ownerId: string, projectId: string, jobId: string): Promise<void> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const project = await client.query("SELECT 1 FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [projectId, ownerId]);
+    if (!project.rowCount) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
+    const result = await client.query<{ kind: string; state: string; error_code: string | null; request: Record<string, unknown> }>("SELECT kind,state,error_code,request FROM job WHERE id=$1 AND project_id=$2 AND owner_id=$3 FOR UPDATE", [jobId, projectId, ownerId]);
+    const row = result.rows[0];
+    if (!row || !["native-generation", "native-revision"].includes(row.kind)) throw Object.assign(new Error("Native construction request not found"), { statusCode: 404 });
+    if (row.state !== "needs_attention" || row.error_code !== "NATIVE_PARTIAL") throw Object.assign(new Error("Only a safely paused construction draft can extend its allowance"), { statusCode: 409 });
+    const old = jobNativeRunLimits(row.request);
+    if (!old || old.profile !== "standard") throw Object.assign(new Error("This request has no available profile extension"), { statusCode: 409 });
+    const expectedHead = typeof row.request.expectedNativeHeadId === "string" ? row.request.expectedNativeHeadId : null;
+    const currentHead = await head(client, ownerId, projectId, true);
+    if (currentHead !== expectedHead) throw Object.assign(new Error("The selected version changed; this draft cannot extend"), { statusCode: 409 });
+    const effects = await client.query<{ step: string; state: string; cost_status: string }>("SELECT step,state,cost_status FROM effect WHERE job_id=$1 FOR UPDATE", [jobId]);
+    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A provider outcome needs reconciliation before extension"), { statusCode: 409 });
+    const target = nativeRunLimits("extended");
+    const next = { ...old, profile: "extended" as const, maxCalls: Math.max(old.maxCalls, target.maxCalls), maxInputTokens: Math.max(old.maxInputTokens, target.maxInputTokens), maxOutputTokens: Math.max(old.maxOutputTokens, target.maxOutputTokens), deadlineSeconds: Math.max(old.deadlineSeconds, target.deadlineSeconds), maxJobCostUsd: Math.max(old.maxJobCostUsd, target.maxJobCostUsd) };
+    if (next.maxCalls === old.maxCalls && next.maxInputTokens === old.maxInputTokens && next.maxOutputTokens === old.maxOutputTokens && next.deadlineSeconds === old.deadlineSeconds && next.maxJobCostUsd === old.maxJobCostUsd) throw Object.assign(new Error("The configured installation has no higher allowance available"), { statusCode: 409 });
+    const updatedRequest = { ...originalNativeRequest(row.request), _nativeRunCurrent: next };
+    await client.query("UPDATE job SET request=$2::jsonb,updated_at=now() WHERE id=$1", [jobId, JSON.stringify(updatedRequest)]);
+    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'allowance_extended',$2 FROM job WHERE id=$1", [jobId, { before: { profile: old.profile, maxCalls: old.maxCalls, maxJobCostUsd: old.maxJobCostUsd }, after: { profile: next.profile, maxCalls: next.maxCalls, maxJobCostUsd: next.maxJobCostUsd }, message: "Explicitly extended this saved construction request; prior effects and steps remain attached" }]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -160,9 +198,48 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const expectedHead = typeof request.expectedNativeHeadId === "string" ? request.expectedNativeHeadId : null;
   const headMatches = (currentHead.rows[0]?.revision_id ?? null) === expectedHead;
   const effects = await getPool().query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [jobId]);
-  const canContinue = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effects.rows.length < getConfig().MAX_MODEL_CALLS_PER_JOB && effects.rows.every((effect) => effect.state === "succeeded" && effect.cost_status === "observed");
-  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : effects.rows.length >= getConfig().MAX_MODEL_CALLS_PER_JOB ? "This request has used its configured model-call allowance." : effects.rows.some((effect) => effect.state !== "succeeded" || effect.cost_status !== "observed") ? "A provider outcome needs reconciliation before continuation." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
-  return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, canContinue, continuationReason };
+  const otherEffects = await getPool().query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step<>'native-producer-result' AND step<>'producer-model-call'", [jobId]);
+  const effectsKnown = [...effects.rows, ...otherEffects.rows].every((effect) => effect.state === "succeeded" && effect.cost_status === "observed");
+  const runLimits = jobNativeRunLimits(request);
+  const callLimit = runLimits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB;
+  const canContinue = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effects.rows.length < callLimit && effectsKnown;
+  const target = runLimits?.profile === "standard" ? nativeRunLimits("extended") : null;
+  const canExtend = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effectsKnown && !!runLimits && !!target && (target.maxCalls > runLimits.maxCalls || target.maxInputTokens > runLimits.maxInputTokens || target.maxOutputTokens > runLimits.maxOutputTokens || target.deadlineSeconds > runLimits.deadlineSeconds || target.maxJobCostUsd > runLimits.maxJobCostUsd);
+  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
+  return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, plan: await loadNativePlan(jobId), runLimits, canContinue, canExtend, continuationReason };
+}
+
+export async function loadNativePlan(jobId: string): Promise<{ plan: NativePlan; stage: NativeStage; inspectedDocumentHash: string | null } | null> {
+  const result = await getPool().query<{ plan: unknown; stage: string; inspected_document_hash: string | null }>("SELECT plan,stage,inspected_document_hash FROM native_job_plan WHERE job_id=$1", [jobId]);
+  const row = result.rows[0];
+  return row ? { plan: nativePlanSchema.parse(row.plan), stage: nativeStageSchema.parse(row.stage), inspectedDocumentHash: row.inspected_document_hash } : null;
+}
+
+export async function saveNativePlan(job: JobRecord, raw: NativePlan): Promise<void> {
+  const plan = nativePlanSchema.parse(raw);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertSyncLease(client, job);
+    await client.query("INSERT INTO native_job_plan(job_id,plan,stage) VALUES($1,$2,'planned') ON CONFLICT(job_id) DO UPDATE SET plan=EXCLUDED.plan,updated_at=now()", [job.id, JSON.stringify(plan)]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
+export async function advanceNativePlan(job: JobRecord, stage: Exclude<NativeStage, "planned">, documentHash: string): Promise<void> {
+  const rank = { planned: 0, building: 1, refining: 2, reviewed: 3 };
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await assertSyncLease(client, job);
+    const current = await client.query<{ stage: NativeStage }>("SELECT stage FROM native_job_plan WHERE job_id=$1 FOR UPDATE", [job.id]);
+    if (!current.rows[0]) throw new Error("Record a producer plan before advancing its stage");
+    if (rank[stage] < rank[current.rows[0].stage]) throw new Error("Producer stage cannot move backwards");
+    await client.query("UPDATE native_job_plan SET stage=$2,inspected_document_hash=$3,updated_at=now() WHERE job_id=$1", [job.id, stage, documentHash]);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
 }
 
 export async function loadNativeSteps(jobId: string): Promise<Array<{ key: string; operations: NativeOperation[]; predecessorHash: string | null; resultHash: string }>> {

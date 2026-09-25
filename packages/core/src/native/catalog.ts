@@ -5,7 +5,7 @@ import { getSchemaLocationDetails, schemaPathToSchemaLocation, type SchemaPath }
 import { nativeParameterRanges } from "./model.js";
 
 export const NATIVE_CATALOG_VERSION = "nexus-0.0.17-schema-v1";
-const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
+const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "audioSplitter", "audioMerger", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
 const musicalMeaning: Record<string, { family: string; purpose: string; caveat?: string }> = {
   heisenberg: { family: "instrument", purpose: "Subtractive synth for basses, pads and leads." },
   pulverisateur: { family: "instrument", purpose: "Alternate pitched synth voice for contrasting timbres." },
@@ -25,11 +25,16 @@ const musicalMeaning: Record<string, { family: string; purpose: string; caveat?:
   mixerDelayAux: { family: "routing", purpose: "One shared tempo-stepped delay return selected by part send levels." },
   mixerSideChainCable: { family: "routing", purpose: "Validated control link from a part channel to a group compressor." },
   desktopAudioCable: { family: "routing", purpose: "Connects an instrument or effect output to a compatible audio input." },
+  audioSplitter: { family: "routing", purpose: "Duplicates a part signal into separate dry and processed paths." },
+  audioMerger: { family: "routing", purpose: "Blends a part's dry and processed paths before its mixer channel." },
   stompboxDelay: { family: "effect", purpose: "Time-based repeats; timing and feedback need bounded parameter checks." },
   stompboxReverb: { family: "effect", purpose: "Spatial decay; structure cannot prove mix quality." },
   stompboxCompressor: { family: "effect", purpose: "Dynamics control; structural presence does not establish loudness quality." },
   stompboxParametricEqualizer: { family: "effect", purpose: "Frequency shaping on a routed signal." },
   autoFilter: { family: "effect", purpose: "Filter movement and modulation." },
+  stompboxTube: { family: "effect", purpose: "Tube-style harmonic saturation on one routed signal." },
+  stompboxChorus: { family: "effect", purpose: "Modulated stereo width on one routed signal." },
+  stompboxPitchDelay: { family: "effect", purpose: "Tempo-stepped repeats with per-repeat pitch movement." },
   automationEvent: { family: "automation", purpose: "A time-addressed parameter value in a native automation collection." }
 };
 

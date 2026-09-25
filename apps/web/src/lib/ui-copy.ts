@@ -42,7 +42,10 @@ export function readableEffect(type: string) {
     stompboxReverb: "Reverb",
     stompboxCompressor: "Compressor",
     stompboxParametricEqualizer: "EQ",
-    autoFilter: "Filter"
+    autoFilter: "Filter",
+    stompboxTube: "Tube saturation",
+    stompboxChorus: "Chorus",
+    stompboxPitchDelay: "Pitch delay"
   }
   return names[type] ?? "Effect"
 }
