@@ -185,7 +185,7 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("addPart"), part }),
   z.object({ kind: z.literal("defineMotif"), motif }),
   z.object({ kind: z.literal("replaceMotif"), motif }),
-  z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
+  z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional(), noteEdits: z.array(z.object({ noteId: id, omit: z.boolean().optional(), pitch: z.number().int().min(0).max(127).optional(), startTick: z.number().int().min(0).optional(), durationTicks: z.number().int().positive().optional(), velocity: z.number().min(0.01).max(1).optional() })).max(64).optional() }),
   z.object({ kind: z.literal("developSectionNotes"), partId: id, sectionId: id, pitchShiftSemitones: z.number().int().min(-12).max(12).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
   z.object({ kind: z.literal("silenceSectionClips"), partId: id, sectionId: id }),
   z.object({ kind: z.literal("placeMotif"), partId: id, placement: part.shape.placements.unwrap().element }),
@@ -327,8 +327,14 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         if (!source || !source.notes.length) throw new Error("A nonempty source motif is required for local variation");
         if (next.motifs.some((value) => value.id === op.newMotifId)) throw new Error(`Motif ID ${op.newMotifId} already exists`);
         const pitchShift = op.pitchShiftSemitones ?? 0, timeShift = op.timeShiftTicks ?? 0, durationFactor = op.durationFactor ?? 1, velocityFactor = op.velocityFactor ?? 1;
-        if (!pitchShift && !timeShift && durationFactor === 1 && velocityFactor === 1 && !op.omitEvery) throw new Error("A motif variation must change musical material");
-        const notes = source.notes.filter((_, index) => !op.omitEvery || (index + 1) % op.omitEvery !== 0).map((value) => ({ ...value, pitch: value.pitch + pitchShift, startTick: value.startTick + timeShift, durationTicks: Math.max(1, Math.round(value.durationTicks * durationFactor)), velocity: Number((value.velocity * velocityFactor).toFixed(4)) }));
+        const noteEdits = new Map((op.noteEdits ?? []).map((edit) => [edit.noteId, edit]));
+        if (noteEdits.size !== (op.noteEdits?.length ?? 0) || [...noteEdits.keys()].some((noteId) => !source.notes.some((value) => value.id === noteId))) throw new Error("Motif note edits must identify distinct notes in the original phrase");
+        if (!pitchShift && !timeShift && durationFactor === 1 && velocityFactor === 1 && !op.omitEvery && !noteEdits.size) throw new Error("A motif variation must change musical material");
+        const notes = source.notes.filter((value, index) => (!op.omitEvery || (index + 1) % op.omitEvery !== 0) && !noteEdits.get(value.id)?.omit).map((value) => {
+          const edit = noteEdits.get(value.id);
+          return { ...value, pitch: edit?.pitch ?? value.pitch + pitchShift, startTick: edit?.startTick ?? value.startTick + timeShift, durationTicks: edit?.durationTicks ?? Math.max(1, Math.round(value.durationTicks * durationFactor)), velocity: edit?.velocity ?? Number((value.velocity * velocityFactor).toFixed(4)) };
+        });
+        if (JSON.stringify(notes) === JSON.stringify(source.notes)) throw new Error("A motif variation must change musical material");
         if (!notes.length || notes.some((value) => value.startTick < 0 || value.startTick + value.durationTicks > source.lengthTicks || value.pitch < 0 || value.pitch > 127 || value.velocity < 0.01 || value.velocity > 1)) throw new Error("Motif variation exceeds the original phrase bounds, MIDI range or velocity range");
         next.motifs.push({ ...source, id: op.newMotifId, name: op.name, notes });
         placement.motifId = op.newMotifId;

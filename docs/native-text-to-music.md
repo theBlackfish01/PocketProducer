@@ -18,7 +18,7 @@ Hard role constraints are conservatively extracted from the brief: a global excl
 
 | Area | Local operation / mapping | Boundary |
 | --- | --- | --- |
-| Musical form | Tempo, meter, up to 128 bars / 24 sections, parts, exact MIDI notes, motifs, local variations and section edits | Structural timing; no audible judgment |
+| Musical form | Tempo, meter, up to 128 bars / 24 sections, parts, exact MIDI notes, motifs, local variations and section edits; one motif placement can receive exact source-note omissions/onset/pitch/duration/velocity edits without changing another placement | Structural timing; no audible judgment |
 | Harmony and groove | `harmonizeSection` writes model-chosen exact polyphonic voicings over a repeated cycle; `sequenceSectionPattern` writes pitch, velocity, duration and bounded timing offsets within a section | Best with MIDI-capable instruments; Beatbox8 remains boolean-step only |
 | Instruments | Heisenberg A–D waveforms/detune/phase-modulation links, selected envelopes/LFO, Pulverisateur drive/filter, Gakki with pinned sound discovery, Beatbox8 voice shaping | Only allow-listed SDK ranges mapped into real constructor fields |
 | Effects | Ordered per-part compressor, EQ, filter, reverb, delay, pitch delay, chorus and tube saturation; a real part-level dry/wet split, processed branch and blend; automation of selected targets | Parallel is per part, not a shared group bus |

@@ -70,6 +70,21 @@ describe("native construction contracts", () => {
     expect(new Set(developed.parts[0]?.notes.map((event) => event.id)).size).toBe(developed.parts[0]?.notes.length);
     expect((await validateNativeOffline(developed)).readback.noteEntities).toBe(3);
   });
+  it("changes one motif ending precisely while other placements retain the original phrase", async () => {
+    const base = applyNativeOperations(seedNativeDocument("A theme that returns with a changed answer"), [
+      { kind: "setStructure", bars: 8, sections: [{ id: "first", name: "First", startBar: 0, endBar: 4, intent: "Theme" }, { id: "return", name: "Return", startBar: 4, endBar: 8, intent: "New ending" }] },
+      { kind: "defineMotif", motif: { id: "call", partId: "starting-voice", name: "Call", lengthTicks: 3840, notes: [{ id: "opening", startTick: 0, durationTicks: 480, pitch: 62, velocity: 0.7 }, { id: "ending", startTick: 2880, durationTicks: 480, pitch: 65, velocity: 0.55 }] } },
+      { kind: "placeMotif", partId: "starting-voice", placement: { id: "first-call", motifId: "call", startTick: 0, repeats: 1, transpose: 0 } },
+      { kind: "placeMotif", partId: "starting-voice", placement: { id: "return-call", motifId: "call", startTick: 15360, repeats: 1, transpose: 0 } }
+    ]);
+    const varied = applyNativeOperations(base, [{ kind: "varyMotifInstance", partId: "starting-voice", placementId: "return-call", newMotifId: "call-with-answer", name: "Answer", noteEdits: [{ noteId: "ending", startTick: 2640, durationTicks: 720, pitch: 69, velocity: 0.63 }] }]);
+    expect(varied.motifs.find((motif) => motif.id === "call")?.notes.find((note) => note.id === "ending")?.pitch).toBe(65);
+    expect(varied.parts[0]?.placements.map((placement) => placement.motifId)).toEqual(["call", "call-with-answer"]);
+    expect(materializedNotes(varied, "starting-voice").map((note) => note.pitch)).toEqual([62, 65, 62, 69]);
+    expect((await validateNativeOffline(varied)).readback.noteEntities).toBe(4);
+    expect(() => applyNativeOperations(base, [{ kind: "varyMotifInstance", partId: "starting-voice", placementId: "return-call", newMotifId: "bad-answer", name: "Bad", noteEdits: [{ noteId: "missing", pitch: 69 }] }])).toThrow(/distinct notes/);
+    expect(() => applyNativeOperations(base, [{ kind: "varyMotifInstance", partId: "starting-voice", placementId: "return-call", newMotifId: "unchanged-answer", name: "Same", noteEdits: [{ noteId: "ending", pitch: 65 }] }])).toThrow(/must change musical material/);
+  });
   it("silences a section of a crossing one-shot clip while retaining its exact outside source offsets", async () => {
     const base = seedNativeDocument("Let the recorded texture stop during the arrival");
     const built = applyNativeOperations(base, [
