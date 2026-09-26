@@ -8,6 +8,7 @@ import { createDeepAgent } from "deepagents";
 import { createMiddleware } from "langchain";
 import { z } from "zod";
 import { getConfig, REPOSITORY_ROOT } from "../config.js";
+import { producerTraceConfig } from "../observability.js";
 import { canonicalHash } from "../domain/composition.js";
 import type { JobRecord } from "../db/repository.js";
 import { AccountedOpenAICalls, checkpoint } from "../agent/producer.js";
@@ -547,7 +548,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
       // A failed graph may retain a depleted remaining-steps state. A fresh
       // attempt gets fresh graph memory; the durable plan, steps and effects
       // remain on the original logical job and are injected above.
-      await agent.invoke({ messages: [{ role: "user", content: pass === 0 ? continuation : `The previous turn stopped before satisfying these objective requirements: ${completionIssues.join("; ")}. Inspect confirmed state and complete only what is missing; do not claim audio was heard.` }], files } as never, { configurable: { thread_id: `${input.session.job.id}:${input.session.job.attemptId ?? "local"}` }, recursionLimit: input.scriptedModel && input.testGraphStepLimit ? input.testGraphStepLimit : Math.min(1200, Math.max(80, (run?.maxCalls ?? config.MAX_MODEL_CALLS_PER_JOB) * 5 + 20)), callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) });
+      await agent.invoke({ messages: [{ role: "user", content: pass === 0 ? continuation : `The previous turn stopped before satisfying these objective requirements: ${completionIssues.join("; ")}. Inspect confirmed state and complete only what is missing; do not claim audio was heard.` }], files } as never, { ...producerTraceConfig(input.session.job, "native", input.scriptedModel ? "scripted" : modelName, pass), configurable: { thread_id: `${input.session.job.id}:${input.session.job.attemptId ?? "local"}` }, recursionLimit: input.scriptedModel && input.testGraphStepLimit ? input.testGraphStepLimit : Math.min(1200, Math.max(80, (run?.maxCalls ?? config.MAX_MODEL_CALLS_PER_JOB) * 5 + 20)), callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) });
       completionIssues = nativeCompletionIssues(input.session.document, input.direction, input.mode, input.sources.map((source) => source.assetId), input.session.initialDocument, typeof input.session.job.request.targetSectionId === "string" ? input.session.job.request.targetSectionId : null);
       if (!input.scriptedModel) { const plan = await loadNativePlan(input.session.job.id); if (!plan) completionIssues.push("Record a durable production plan"); else if (plan.stage !== "reviewed" || plan.inspectedDocumentHash !== canonicalHash(input.session.document)) completionIssues.push("Inspect current sections after the final edit and mark the plan reviewed"); }
       if (!completionIssues.length) break;

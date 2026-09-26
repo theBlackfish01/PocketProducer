@@ -3,6 +3,7 @@ export * from "./audio/repair.js";
 export * from "./audio/wav.js";
 export * from "./agent/producer.js";
 export * from "./config.js";
+export * from "./observability.js";
 export * from "./db/pool.js";
 export * from "./db/repository.js";
 export * from "./domain/composition.js";

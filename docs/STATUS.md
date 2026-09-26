@@ -1,5 +1,11 @@
 # Live implementation status
 
+## LangSmith producer observability (2026-09-26)
+
+The configured ignored `.env` already contains a LangSmith key, endpoint, project and enabled tracing switch; no value was printed or replaced. Native Deep Agent construction and the legacy arrangement planner now name runs and attach bounded job/attempt/lease/model metadata for correlation. Server configuration hides trace inputs and outputs by default, enforces a key when non-fixture tracing is enabled, and forces fixture tracing off. The long-running worker flushes pending callbacks on graceful stop. [Observability setup and privacy](observability.md) cover the controls and the boundary between diagnostics and the PostgreSQL effect ledger.
+
+Verification: `pnpm check` passed lint, strict types, **18 unit files / 116 tests** and production build (existing large-chunk warning). `pnpm test:integration` passed **2 files / 56 tests** with scripted provider paths and isolated PostgreSQL. `pnpm test:e2e` passed **9 Chromium journeys** with fixture API/worker child processes and tracing explicitly disabled. These checks made no OpenAI, Gemini, Audiotool or LangSmith request and incurred no new provider spend. Live LangSmith ingestion and UI visibility remain unverified; the next real producer job, if separately authorized under the existing budget policy, is the first end-to-end trace check. The user's concurrent course and producer-workspace planning edits were preserved.
+
 ## Current: focused Listening Room and confirmed-change polish (2026-09-26)
 
 Implemented locally on `7563021`, preserving the logo, palette, stack, accepted versions, provider ledger and deferred native-audio boundary. Inspection now has its own section selection; only explicit **Change** actions set the request scope. Any part opens a responsive inspector, including from the whole-piece overview. The direction form follows the score, with a keyboard-safe phone shortcut; Sounds/tools and the repeated part-card grid are optional. Established sessions use a compact header. Section focus hides the overview until requested, reducing duplicated content and SVG work.

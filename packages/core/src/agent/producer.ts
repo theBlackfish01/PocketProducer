@@ -11,6 +11,7 @@ import { createDeepAgent } from "deepagents";
 import { providerStrategy } from "langchain";
 import { z } from "zod";
 import { getConfig, REPOSITORY_ROOT } from "../config.js";
+import { producerTraceConfig } from "../observability.js";
 import { arrangementPlanSchema, canonicalHash, type ArrangementPlan } from "../domain/composition.js";
 import { getPool } from "../db/pool.js";
 import type { JobRecord } from "../db/repository.js";
@@ -292,7 +293,7 @@ export async function produceArrangement(input: { job: JobRecord; direction: str
     const agentInput = { messages: [{ role: "user", content: "Plan this supported instrumental now. Use the source only when its typed descriptors and the direction support a real role." }], files: await runtimeFiles(input.direction, input.source) };
     const result = await agent.invoke(
       agentInput as never,
-      { configurable: { thread_id: input.job.id }, recursionLimit: 8, callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) }
+      { ...producerTraceConfig(input.job, "legacy", config.OPENAI_MODEL), configurable: { thread_id: input.job.id }, recursionLimit: 8, callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) }
     );
     const plan = arrangementPlanSchema.parse((result as unknown as { structuredResponse: unknown }).structuredResponse);
     const producerResult = producerResultSchema.parse({ plan, provider: "openai-deep-agent", model: config.OPENAI_MODEL, costUsd: accounting.costMicrousd / 1_000_000, usage: accounting.usage });

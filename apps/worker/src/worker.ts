@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
 import {
   analyzePreview, appendAttemptEvent, attemptBoundedDrumRepair, canonicalHash, claimNextJob, closePool, commitCancelled, commitExportPreparation, commitRevision, compileArrangement, completeProviderEffect, compositionSourceLineage, createAudiotoolServerClient, decodeWav, dispatchOutbox, expireJob, exportManifestToAudiotool, exportResumeState, failJob, failProviderEffect,
   getConfig, getRevision, heartbeat, isCancelled, markEffectDispatched, needsAttentionJob, produceArrangement, protectedTrackHash, providerAvailability, recordExportProgress, requeueJob, reserveProviderEffect,
@@ -559,6 +560,10 @@ export async function runWorker(): Promise<void> {
     if (job) await processJob(job);
     else await new Promise((resolve) => setTimeout(resolve, 600));
   }
+  // The long-running worker submits traces in the background. Flush pending
+  // callbacks on a graceful stop without making observability job-critical.
+  try { await awaitAllCallbacks(); }
+  catch { process.stderr.write("Trace callback flush failed\n"); }
   await closePool();
   process.stdout.write("Worker stopped after current job\n");
 }

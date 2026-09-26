@@ -9,6 +9,7 @@
     "start": "tsx src/worker.ts"
   },
   "dependencies": {
+    "@langchain/core": "1.2.11",
     "@pocket/core": "workspace:*"
   }
 }

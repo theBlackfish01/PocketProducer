@@ -6,6 +6,8 @@ The user deliberately deferred native rendering/playback. The current vertical s
 
 The producer sees a pinned workspace, three project-local skills, the original brief, paged reads of real musical state, owned-source profiles, SDK discovery/local resource recipes and, when connected, server-mediated Audiotool sample/preset discovery. It records a durable plan, proposes an optional initial form and validated development batches; trusted code re-resolves resource identities and maps only curated writable parameters. It cannot edit arbitrary files, call remote mutation SDK methods, remove user protections or claim audio quality. Tools regenerate context after writes; dispatch compaction retains the original brief and ordered discovery/skill/error results. Fixture mode uses the same domain-operation validator without provider access, while scripted-model integration tests traverse the real Deep Agent. No subjective listening result is claimed.
 
+The worker's Deep Agent runs can emit LangSmith traces with safe job/attempt correlation and hidden inputs/outputs by default. Tracing is diagnostic and never substitutes for the durable plan, native step ledger, provider-effect accounting or accepted version. Fixture mode disables tracing. See [observability setup and privacy](observability.md).
+
 ## Preserved legacy audio architecture
 
 ## Runtime shape

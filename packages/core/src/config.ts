@@ -17,6 +17,10 @@ const configSchema = z.object({
   OBJECT_STORAGE_LOCAL_ROOT: z.string().default(".local/audio"),
   OPENAI_API_KEY: optionalSecret,
   OPENAI_MODEL: z.string().min(1).default("gpt-6-astra"),
+  LANGSMITH_API_KEY: optionalSecret,
+  LANGSMITH_TRACING: booleanString.default(false),
+  LANGSMITH_HIDE_INPUTS: booleanString.default(true),
+  LANGSMITH_HIDE_OUTPUTS: booleanString.default(true),
   GEMINI_API_KEY: optionalSecret,
   GOOGLE_API_KEY: optionalSecret,
   GEMINI_MODEL: z.string().min(1).default("gemini-3-flash-preview"),
@@ -50,6 +54,16 @@ let cachedConfig: AppConfig | undefined;
 
 export function getConfig(): AppConfig {
   cachedConfig ??= configSchema.parse(process.env);
+  // LangChain reads these flags directly. Keep fixture tests offline even when
+  // the developer's ignored .env enables tracing, and hide owned material by
+  // default while retaining timing, run structure and safe metadata.
+  process.env.LANGSMITH_TRACING = String(cachedConfig.LANGSMITH_TRACING && !cachedConfig.FIXTURE_MODE);
+  process.env.LANGSMITH_HIDE_INPUTS = String(cachedConfig.LANGSMITH_HIDE_INPUTS);
+  process.env.LANGSMITH_HIDE_OUTPUTS = String(cachedConfig.LANGSMITH_HIDE_OUTPUTS);
+  process.env.LANGCHAIN_CALLBACKS_BACKGROUND ??= "true";
+  if (cachedConfig.LANGSMITH_TRACING && !cachedConfig.FIXTURE_MODE && !cachedConfig.LANGSMITH_API_KEY) {
+    throw new Error("LANGSMITH_TRACING=true requires LANGSMITH_API_KEY");
+  }
   if (cachedConfig.APP_ENV === "production" && cachedConfig.DEV_LOCAL_AUTH) {
     throw new Error("DEV_LOCAL_AUTH must be false in production");
   }

@@ -1,5 +1,9 @@
 # Verification record
 
+## LangSmith observability (2026-09-26)
+
+`pnpm check` passed lint, strict types, 18 unit files / 116 tests and production build; `pnpm test:integration` passed 2 files / 56 tests; `pnpm test:e2e` passed nine Chromium journeys with the API and worker as separate fixture child processes. The observability unit tests check that fixture mode disables tracing, that payload hiding is active, and that producer metadata omits directions, source names and owner/project identifiers. Existing scripted Deep Agent integration paths still pass with trace run config attached. No live LangSmith ingestion was attempted; fixture/test processes force `LANGSMITH_TRACING=false` and blank its key. No paid model or Audiotool effect occurred. The build retains the existing large-chunk warning.
+
 ## Focused score and motion polish (2026-09-26)
 
 Provider-free verification after `7563021`:
