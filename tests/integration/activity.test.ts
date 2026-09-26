@@ -113,3 +113,21 @@ it("rolls back projection with state and serializes cursor commit order without 
     await expect(readProjectActivity(ownerId, projectId)).rejects.toThrow(/not found/);
   } finally { await a.query("ROLLBACK"); await b.query("ROLLBACK"); a.release(); b.release(); }
 });
+
+it("does not reverse project and clock locks when selection overlaps a worker update", async () => {
+  const projectId = await room();
+  await getPool().query("INSERT INTO project_activity_clock(project_id) VALUES($1)", [projectId]);
+  const selecting = await getPool().connect(), publishing = await getPool().connect();
+  try {
+    await selecting.query("BEGIN"); await publishing.query("BEGIN");
+    await selecting.query("SELECT id FROM project WHERE id=$1 FOR UPDATE", [projectId]);
+    await publishing.query("SELECT cursor FROM project_activity_clock WHERE project_id=$1 FOR UPDATE", [projectId]);
+    // Mirrors selection's project -> clock order against a publisher that already
+    // owns its clock. The old direct FK tried project KEY SHARE after this lock.
+    await Promise.all([
+      appendPublicActivity(publishing, { ownerId, projectId }, "worker", { version: 1, kind: "working", text: "Confirmed progress" }).then(() => publishing.query("COMMIT")),
+      appendPublicActivity(selecting, { ownerId, projectId }, "selection", { version: 1, kind: "selected", text: "Explicit selection" }).then(() => selecting.query("COMMIT")),
+    ]);
+    expect((await readProjectActivity(ownerId, projectId)).events.map((event) => event.payload.text)).toEqual(["Confirmed progress", "Explicit selection"]);
+  } finally { await Promise.all([selecting.query("ROLLBACK"), publishing.query("ROLLBACK")]); selecting.release(); publishing.release(); }
+});

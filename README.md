@@ -21,7 +21,7 @@ Open `http://127.0.0.1:5173`, create a session, and in **Arrange** enter either 
 
 The root `.env` is loaded only by server code and remains ignored. Do not add secrets under `VITE_*`. For a no-cost deterministic run, launch the services with `FIXTURE_MODE=true`; live OpenAI creation requires the existing `OPENAI_API_KEY` and is fenced by `INITIAL_BUILD_API_BUDGET_USD` and `MAX_JOB_COST_USD`.
 
-The current journey is **Start → Producer workspace**: accepted requests have saved conversation/activity, a shareable local session URL, and a score/Producer split on wide screens (a view switch on phone/tablet). Sounds, versions, usage and Audiotool are secondary panels. See the [hands-on guide](docs/native-production-guide.md). Existing checkouts need additive migration **015_public_activity.sql** via `pnpm db:migrate` before restarting API/worker; it preserves music, assets and spending and labels older directions as historical. No tracing settings need changing: configured LangSmith remains private diagnostic telemetry, not the user-facing feed.
+The current journey is **Start → Producer workspace**: accepted requests have saved conversation/activity, a shareable local session URL, and a score/Producer split on wide screens (a view switch on phone/tablet). Sounds, versions, usage and Audiotool are secondary panels. See the [hands-on guide](docs/native-production-guide.md). Existing checkouts need additive migrations **015–016** via `pnpm db:migrate` before restarting API/worker; they preserve music, assets and spending and label older directions as historical. No tracing settings need changing: configured LangSmith remains private diagnostic telemetry, not the user-facing feed.
 
 ## Useful commands
 
