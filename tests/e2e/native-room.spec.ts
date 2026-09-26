@@ -41,7 +41,7 @@ test("native construct, protect, revise, compare and restore survives reload", a
   await detailDialog.getByRole("button", { name: "Close" }).first().click();
   await expect(leadCard.getByRole("button", { name: "Details" })).toBeFocused();
   await page.getByRole("button", { name: "Change Soft pulse" }).click();
-  await page.getByRole("button", { name: /Ascent.*Bars/i }).click();
+  await page.locator(".score-section-choice").filter({ hasText: "Ascent" }).click();
   await expect(page.getByText(/In Ascent · change Soft pulse/)).toBeVisible();
   await direction.fill("Vary the rhythmic phrase in the later section while preserving the slow lead");
   const pending = "Vary the rhythmic phrase in the later section while preserving the slow lead";
@@ -60,16 +60,24 @@ test("native construct, protect, revise, compare and restore survives reload", a
   await expect(direction).toHaveValue(pending);
   await expect(page.getByText(/In Ascent · change Soft pulse/)).toBeVisible();
   await page.getByRole("button", { name: "Shape the arrangement" }).click();
-  await expect(page.getByText(/2 saved versions/)).toBeVisible({ timeout: 90_000 });
-  await page.getByRole("button", { name: "Compare" }).click();
-  const dialog = page.getByRole("dialog", { name: "Compare arrangements" });
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole("radio", { name: "Version 1" }).click();
-  await expect(dialog.getByText(/Allowed to change:.*Slow lead/)).toBeVisible();
-  await dialog.getByRole("button", { name: "Restore this version" }).click();
+  const dialog = page.getByRole("dialog", { name: "Before and after" });
+  await expect(dialog).toBeVisible({ timeout: 90_000 });
+  await expect(dialog.getByRole("button", { name: "Changes" })).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.getByText(/Verified unchanged here:/)).toBeVisible();
+  const revisedHead = (await (await page.request.get(`/api/v1/projects/${projectId}/native`)).json() as { currentRevisionId: string }).currentRevisionId;
+  expect(revisedHead).not.toBe(currentNativeId);
+  await dialog.getByRole("button", { name: "Before · v1", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "Before · v1", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect((await (await page.request.get(`/api/v1/projects/${projectId}/native`)).json() as { currentRevisionId: string }).currentRevisionId).toBe(revisedHead);
+  await dialog.screenshot({ path: `${evidence}/native-comparison-desktop.png` });
+  await dialog.getByRole("button", { name: /Use Before · v1/ }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByText(/2 saved versions/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Keep unchanged Slow lead for the next change" })).toHaveAttribute("aria-pressed", "false");
+  await page.locator(".version-quick-list button").filter({ hasText: "Version 2" }).click();
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: /Use After · v2/ }).click();
+  await expect(dialog).toBeHidden();
   await page.reload();
   await page.locator(`.session-rail .rail-session[data-project-id="${projectId}"]`).click();
   await expect(page.getByText(/64 bars.*8 editable parts/)).toBeVisible();
@@ -94,13 +102,45 @@ test("native phone layout preserves direction focus and compare dialog return", 
   expect(box).not.toBeNull();
   expect((box?.x ?? 1_000) + (box?.width ?? 1_000)).toBeLessThanOrEqual(390);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.locator(".score-section-choice").first().focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".score-detail")).toBeVisible();
+  await page.getByRole("button", { name: "Shape the arrangement" }).click();
+  await expect(page.getByRole("dialog", { name: "Before and after" })).toBeVisible({ timeout: 90_000 });
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Compare" }).click();
-  const dialog = page.getByRole("dialog", { name: "Compare arrangements" });
+  const dialog = page.getByRole("dialog", { name: "Before and after" });
   await expect(dialog).toBeVisible();
+  await dialog.screenshot({ path: `${evidence}/native-comparison-mobile.png` });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Compare" })).toBeFocused();
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: `${evidence}/native-mobile.png`, fullPage: true });
+});
+
+test("a late preservation response cannot submit or alter another room", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  const direction = page.getByRole("textbox", { name: "Describe your arrangement" });
+  await direction.fill("A gentle 16-bar theme with bass and melody");
+  await page.getByRole("button", { name: "Create arrangement" }).click();
+  await expect(page.getByText(/1 saved version/)).toBeVisible({ timeout: 90_000 });
+  const projectId = (await (await page.request.get("/api/v1/projects")).json() as { projects: Array<{ id: string }> }).projects[0]!.id;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve });
+  let previews = 0, revisions = 0;
+  await page.route(`**/api/v1/projects/${projectId}/native/preservation-preview`, async (route) => { previews++; await gate; await route.continue(); });
+  await page.route(`**/api/v1/projects/${projectId}/native/revisions`, async (route) => { revisions++; await route.continue(); });
+  await direction.fill("Change the bass, but keep the melody");
+  await page.getByRole("button", { name: "Shape the arrangement" }).click();
+  await expect.poll(() => previews).toBeGreaterThan(0);
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await expect(page.getByRole("heading", { name: "Make something yours" })).toBeVisible();
+  expect(revisions).toBe(0);
+  release();
+  await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toHaveValue("Build an evolving instrumental with a clear motif and contrasting sections.");
+  await expect.poll(() => revisions, { timeout: 3000 }).toBe(0);
+  expect((await (await page.request.get(`/api/v1/projects/${projectId}/native`)).json() as { versions: unknown[] }).versions).toHaveLength(1);
 });
 
 test("saved partial work stays separate from the selected version and explains an exhausted continuation", async ({ page }) => {
@@ -167,7 +207,7 @@ test("a queued and running sync never polls a construction draft or erases an un
   await expect(page.getByText(/The saved draft could not be checked/)).toHaveCount(0);
 });
 
-test("tablet progressively discloses a large arrangement without horizontal overflow", async ({ page }) => {
+test("tablet progressively discloses a 128-bar, 24-part arrangement without horizontal overflow", async ({ page }) => {
   await page.goto("/");
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
   await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("An evolving arrangement with many interacting parts");
@@ -175,21 +215,28 @@ test("tablet progressively discloses a large arrangement without horizontal over
   await expect(page.getByText(/1 saved version/)).toBeVisible({ timeout: 90_000 });
   await page.route("**/api/v1/projects/*/native", async (route) => {
     const response = await route.fetch();
-    const snapshot = await response.json() as { current: { document: { parts: Array<{ id: string; name: string }> } } | null };
+    const snapshot = await response.json() as { current: { document: { bars: number; sections: Array<{ endBar: number }>; parts: Array<{ id: string; name: string }> } } | null };
     if (snapshot.current) {
-      const parts = snapshot.current.document.parts;
-      snapshot.current.document.parts = [...parts, ...parts.map((part) => ({ ...part, id: `${part.id}-second`, name: `${part.name} second voice` }))];
+      const document = snapshot.current.document;
+      document.bars = 128;
+      document.sections.at(-1)!.endBar = 128;
+      const parts = document.parts;
+      document.parts = [...parts, ...parts.map((part) => ({ ...part, id: `${part.id}-second`, name: `${part.name} second voice` })), ...parts.map((part) => ({ ...part, id: `${part.id}-third`, name: `${part.name} third voice` }))];
     }
     await route.fulfill({ response, json: snapshot });
   });
   await page.setViewportSize({ width: 820, height: 1180 });
+  const started = Date.now();
   await page.reload();
   await expect(page.getByRole("group", { name: "Filter parts by role" })).toBeVisible();
+  expect(Date.now() - started).toBeLessThan(10_000);
   await expect(page.locator(".native-part-card")).toHaveCount(8);
   await page.getByRole("button", { name: /Show more parts/ }).click();
   await expect(page.locator(".native-part-card")).toHaveCount(16);
+  await page.getByRole("button", { name: /Show more parts/ }).click();
+  await expect(page.locator(".native-part-card")).toHaveCount(24);
   await page.getByRole("group", { name: "Filter parts by role" }).getByRole("button", { name: /percussion/i }).click();
-  await expect(page.locator(".native-part-card")).toHaveCount(4);
+  await expect(page.locator(".native-part-card")).toHaveCount(6);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(820);
   await page.screenshot({ path: `${evidence}/native-tablet-large.png`, fullPage: true });
 });

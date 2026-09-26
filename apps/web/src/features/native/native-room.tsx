@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { ArrowRight, Check, GitCompareArrows, Headphones, LockKeyhole, Music2, Play, Plus, RotateCcw, Search, ShieldCheck, Sparkles } from "lucide-react"
 import { api, type Asset, type Job, type NativeDraftView, type NativeSnapshot } from "../../lib/api"
 import { arrangementSummary, friendlyIssue, jobProgress, readableDevice, readableEffect } from "../../lib/ui-copy"
@@ -8,6 +8,8 @@ import { Textarea } from "../../components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog"
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group"
 import { defaultNativeDirection, freshNativeDraft, nativeDraftKey, reconcileNativeDraft } from "./native-draft"
+import { NativeScore } from "./native-score"
+import { compareScoreSection } from "./score"
 
 const terminal = new Set(["succeeded", "failed", "cancelled", "needs_attention"])
 const clipTransform = (region: { playbackRate?: number; stretchMode?: string; pitchShiftSemitones?: number }) =>
@@ -48,6 +50,18 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
   const [compareOpen, setCompareOpen] = useState(false)
   const [compareId, setCompareId] = useState<string | null>(null)
   const [detailsPartId, setDetailsPartId] = useState<string | null>(null)
+  const [inspectedPartId, setInspectedPartId] = useState<string | null>(null)
+  const [draftSectionId, setDraftSectionId] = useState<string | null>(null)
+  const [draftPartId, setDraftPartId] = useState<string | null>(null)
+  const [compareMode, setCompareMode] = useState<"before" | "after" | "changes">("changes")
+  const [compareSectionId, setCompareSectionId] = useState<string | null>(null)
+  const [comparePair, setComparePair] = useState<{ beforeId: string; afterId: string } | null>(null)
+  const [preservationPreview, setPreservationPreview] = useState<Awaited<ReturnType<typeof api.nativePreservationPreview>> | null>(null)
+  const pendingCompare = useRef<{ projectId: string; jobId: string; baseId: string; sectionId: string | null } | null>(null)
+  const activeProjectRef = useRef(projectId)
+  const roomActiveRef = useRef(true)
+  activeProjectRef.current = projectId
+  const stillInProject = () => roomActiveRef.current && activeProjectRef.current === projectId
   const [roleFilter, setRoleFilter] = useState("all")
   const [partLimit, setPartLimit] = useState(8)
   const [capabilityQuery, setCapabilityQuery] = useState("")
@@ -69,7 +83,8 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
 
   useEffect(() => {
     let active = true
-    setDraftProjectId(null); setLoading(true); setSnapshot(null); setJob(null); setTentative(null); setTentativeError(null); setError(null); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds([]); setSourceIds([]); setRoleFilter("all"); setPartLimit(8)
+    roomActiveRef.current = true
+    pendingCompare.current = null; setDraftProjectId(null); setLoading(true); setBusy(false); setSnapshot(null); setJob(null); setTentative(null); setTentativeError(null); setError(null); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds([]); setSourceIds([]); setRoleFilter("all"); setPartLimit(8); setCompareOpen(false); setComparePair(null); setInspectedPartId(null)
     void api.nativeSnapshot(projectId).then((value) => {
       if (!active) return
       let stored: unknown = null
@@ -81,18 +96,25 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
         const raw = localStorage.getItem(receiptKey)
         if (raw) {
           const receipt = JSON.parse(raw) as Receipt
-          if (receipt.jobId) void api.job(receipt.jobId).then(async (value) => { if (active) { setJob(value); if (terminal.has(value.state)) setSnapshot(await api.nativeSnapshot(projectId)) } })
-          else void api.commandReceipt(projectId, receipt.operation, receipt.key).then(async ({ job: found }) => { if (active && found) { setJob(found); localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: found.id })); if (terminal.has(found.state)) setSnapshot(await api.nativeSnapshot(projectId)) } })
+          if (receipt.jobId) void api.job(receipt.jobId).then(async (value) => { if (active) { setJob(value); if (terminal.has(value.state)) { const fresh = await api.nativeSnapshot(projectId); if (active) setSnapshot(fresh) } } })
+          else void api.commandReceipt(projectId, receipt.operation, receipt.key).then(async ({ job: found }) => { if (active && found) { setJob(found); localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: found.id })); if (terminal.has(found.state)) { const fresh = await api.nativeSnapshot(projectId); if (active) setSnapshot(fresh) } } })
         }
       } catch { /* A malformed local receipt cannot change server state. */ }
     }).catch((cause: unknown) => { if (active) { setLoading(false); setError(cause instanceof Error ? cause.message : "Unable to load native construction") } })
-    return () => { active = false }
+    return () => { active = false; roomActiveRef.current = false }
   }, [projectId, receiptKey])
 
   useEffect(() => {
     if (draftProjectId !== projectId) return
     localStorage.setItem(nativeDraftKey(projectId), JSON.stringify({ headId: snapshot?.currentRevisionId ?? null, direction, profile, targetPartId, targetSectionId, protectedPartIds, sourceIds }))
   }, [draftProjectId, projectId, snapshot?.currentRevisionId, direction, profile, targetPartId, targetSectionId, protectedPartIds, sourceIds])
+
+  useEffect(() => {
+    if (!current?.id || !direction.trim()) { setPreservationPreview(null); return }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => { void api.nativePreservationPreview(projectId, direction, current.id, targetSectionId, controller.signal).then((value) => { if (!controller.signal.aborted) setPreservationPreview(value) }).catch(() => { if (!controller.signal.aborted) setPreservationPreview(null) }) }, 380)
+    return () => { controller.abort(); window.clearTimeout(timer) }
+  }, [projectId, current?.id, direction, targetSectionId])
 
   useEffect(() => {
     let active = true
@@ -108,7 +130,7 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
         if (!active) return
         if (terminal.has(value.state)) {
           const fresh = await api.nativeSnapshot(projectId)
-          if (active) { setSnapshot(fresh); setJob(value); if (value.state === "succeeded") { if (value.kind !== "native-sync") { const reset = freshNativeDraft(fresh); setDirection(reset.direction); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds(reset.protectedPartIds); setSourceIds([]); setDraftNotices([]) } setTentative(null); setTentativeError(null); localStorage.removeItem(receiptKey); onProjectUpdated() } }
+          if (active) { setSnapshot(fresh); setJob(value); if (value.state === "succeeded") { if (value.kind !== "native-sync") { const prior = pendingCompare.current; if (prior && prior.projectId === projectId && prior.jobId === value.id && fresh.currentRevisionId && fresh.currentRevisionId !== prior.baseId) { setComparePair({ beforeId: prior.baseId, afterId: fresh.currentRevisionId }); setCompareSectionId(prior.sectionId); setCompareMode("changes"); setCompareOpen(true) } pendingCompare.current = null; const reset = freshNativeDraft(fresh); setDirection(reset.direction); setTargetPartId(null); setTargetSectionId(prior?.sectionId ?? null); setProtectedPartIds(reset.protectedPartIds); setSourceIds([]); setDraftNotices([]) } setTentative(null); setTentativeError(null); localStorage.removeItem(receiptKey); onProjectUpdated() } }
         } else if (active) setJob(value)
       }).catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "Unable to check construction progress") })
     }, 900)
@@ -124,14 +146,16 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
     return () => { active = false; if (timer !== null) window.clearInterval(timer) }
   }, [job?.id, job?.state, projectId])
 
-  const selectedVersion = useMemo(() => snapshot?.versions.find((value) => value.id === compareId) ?? null, [snapshot, compareId])
   const activeJob = job && !terminal.has(job.state) ? job : null
   const selectedSection = current?.document.sections.find((section) => section.id === targetSectionId)
   const selectedPart = current?.document.parts.find((part) => part.id === targetPartId)
   const detailsPart = current?.document.parts.find((part) => part.id === detailsPartId)
   const detailsGroup = detailsPart?.groupId ? current?.document.groups?.find((group) => group.id === detailsPart.groupId) : undefined
-  const comparison = selectedVersion ? snapshot?.comparisons[selectedVersion.id] : null
-  const partName = (id: string) => current?.document.parts.find((part) => part.id === id)?.name ?? selectedVersion?.document.parts.find((part) => part.id === id)?.name ?? id
+  const beforeVersion = snapshot?.versions.find((value) => value.id === comparePair?.beforeId) ?? null
+  const afterVersion = snapshot?.versions.find((value) => value.id === comparePair?.afterId) ?? null
+  const compareSection = beforeVersion?.document.sections.find((value) => value.id === compareSectionId) ?? beforeVersion?.document.sections[0] ?? null
+  const comparison = beforeVersion && afterVersion && compareSection ? compareScoreSection(beforeVersion.document, afterVersion.document, compareSection.id) : null
+  const partName = (id: string) => current?.document.parts.find((part) => part.id === id)?.name ?? beforeVersion?.document.parts.find((part) => part.id === id)?.name ?? id
   const focusDirection = () => document.getElementById("native-direction")?.focus()
   const suggest = (value: string) => { setDirection(value); window.requestAnimationFrame(focusDirection) }
   const searchLibrary = async () => {
@@ -171,27 +195,42 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
     localStorage.setItem(receiptKey, JSON.stringify(receipt))
     setBusy(true); setError(null)
     try {
+      if (head) { const preview = await api.nativePreservationPreview(projectId, direction.trim(), head, targetSectionId); if (!stillInProject()) return; setPreservationPreview(preview); if (preview.unresolved.length) throw new Error(preview.unresolved.join(". ")) }
       const savedProtections = current?.document.protectedPartIds ?? []
       const protectionChanged = JSON.stringify([...savedProtections].sort()) !== JSON.stringify([...protectedPartIds].sort())
       const result = head ? await api.reviseNative(projectId, { direction: direction.trim(), profile, baseNativeRevisionId: head, expectedNativeHeadId: head, ...(targetPartId ? { targetPartId } : {}), ...(targetSectionId ? { targetSectionId } : {}), ...(protectionChanged ? { protectionChange: { expectedPartIds: savedProtections, desiredPartIds: protectedPartIds } } : {}), sourceAssetIds: sourceIds }, key) : await api.constructNative(projectId, direction.trim(), sourceIds, key, profile)
+      if (!stillInProject()) return
+      if (head) pendingCompare.current = { projectId, jobId: result.jobId, baseId: head, sectionId: targetSectionId }
       localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: result.jobId }))
       const accepted = await api.job(result.jobId)
+      if (!stillInProject()) return
       setJob(accepted)
-      if (terminal.has(accepted.state)) { const fresh = await api.nativeSnapshot(projectId); setSnapshot(fresh); if (accepted.state === "succeeded") { const reset = freshNativeDraft(fresh); setDirection(reset.direction); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds(reset.protectedPartIds); setSourceIds([]); setDraftNotices([]); localStorage.removeItem(receiptKey) } }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Construction request failed. Its receipt remains available for reconciliation.") }
-    finally { setBusy(false) }
+      if (terminal.has(accepted.state)) { const fresh = await api.nativeSnapshot(projectId); if (!stillInProject()) return; setSnapshot(fresh); if (accepted.state === "succeeded") { if (head && fresh.currentRevisionId && fresh.currentRevisionId !== head) { setComparePair({ beforeId: head, afterId: fresh.currentRevisionId }); setCompareSectionId(targetSectionId); setCompareMode("changes"); setCompareOpen(true) } const reset = freshNativeDraft(fresh); setDirection(reset.direction); setTargetPartId(null); setProtectedPartIds(reset.protectedPartIds); setSourceIds([]); setDraftNotices([]); localStorage.removeItem(receiptKey) } }
+    } catch (cause) { if (stillInProject()) setError(cause instanceof Error ? cause.message : "Construction request failed. Its receipt remains available for reconciliation.") }
+    finally { if (stillInProject()) setBusy(false) }
   }
 
-  const restore = async () => {
-    if (!snapshot?.currentRevisionId || !selectedVersion || busy) return
+  const openComparison = (versionId?: string) => {
+    if (!snapshot?.current) return
+    const selected = snapshot.versions.find((version) => version.id === versionId) ?? snapshot.current
+    const other = selected.id === snapshot.current.id ? snapshot.versions.find((version) => version.id === selected.parentRevisionId) ?? snapshot.versions.find((version) => version.id !== selected.id) : snapshot.current
+    if (!other) return
+    const [before, after] = other.ordinal < selected.ordinal ? [other, selected] : [selected, other]
+    setCompareId(selected.id); setComparePair({ beforeId: before.id, afterId: after.id }); setCompareSectionId(targetSectionId ?? before.document.sections[0]?.id ?? null); setCompareMode("changes"); setCompareOpen(true)
+  }
+
+  const selectComparedVersion = async (revisionId: string) => {
+    if (!snapshot?.currentRevisionId || busy || !snapshot.versions.some((version) => version.id === revisionId)) return
+    if (revisionId === snapshot.currentRevisionId) { setCompareOpen(false); return }
     setBusy(true); setError(null)
     try {
-      await api.selectNativeVersion(projectId, selectedVersion.id, snapshot.currentRevisionId)
+      await api.selectNativeVersion(projectId, revisionId, snapshot.currentRevisionId)
       const fresh = await api.nativeSnapshot(projectId)
+      if (!stillInProject()) return
       const restored = reconcileNativeDraft({ headId: snapshot.currentRevisionId, direction, targetPartId, targetSectionId, protectedPartIds, sourceIds }, fresh, assets)
       setSnapshot(fresh); setDirection(restored.draft.direction); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.notices); setCompareOpen(false)
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to restore native version") }
-    finally { setBusy(false) }
+    } catch (cause) { if (stillInProject()) { setError(cause instanceof Error ? cause.message : "The selected version changed; refresh and compare again"); const fresh = await api.nativeSnapshot(projectId); if (stillInProject()) setSnapshot(fresh) } }
+    finally { if (stillInProject()) setBusy(false) }
   }
 
   const synchronize = async () => {
@@ -249,9 +288,8 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
     {job && tentative?.plan && tentative.jobId === job.id && job.state !== "succeeded" ? <section className="native-section native-draft-preview" aria-label="Production plan"><div className="section-heading"><div><h2>Where your music is heading</h2><p>{tentative.plan.stage === "planned" ? "Planning the piece" : tentative.plan.stage === "building" ? "Building the arrangement" : tentative.plan.stage === "refining" ? "Adding detail" : "Reviewing the structure"} · saved with this request</p></div></div><p>{tentative.plan.plan.intent}</p><ol>{tentative.plan.plan.sections.map((section, index) => <li key={`${section.name}-${index}`}><strong>{section.name}</strong> — {section.purpose}</li>)}</ol>{tentative.plan.plan.developmentTasks.length ? <p><strong>Still to develop:</strong> {tentative.plan.plan.developmentTasks.join(" · ")}</p> : null}<p className="section-footnote">This is a construction plan, not accepted music or a playable preview.</p></section> : null}
     {job && tentative?.document && tentative.jobId === job.id && job.state !== "succeeded" ? <section className="native-section native-draft-preview" aria-label="Unfinished arrangement preview">
       <div className="section-heading"><div><h2>Work in progress</h2><p>Not your current version · {tentative.stepCount} confirmed {tentative.stepCount === 1 ? "change" : "changes"}</p></div></div>
-      <p>{tentative.document.bars} bars across {tentative.document.sections.length} sections. {tentative.document.parts.length} editable {tentative.document.parts.length === 1 ? "part" : "parts"} currently in the draft.</p>
-      <p><strong>Sections:</strong> {tentative.document.sections.map((section) => `${section.name} (${section.endBar - section.startBar} bars)`).join(" · ")}</p>
-      <p><strong>Parts so far:</strong> {tentative.document.parts.slice(0, 8).map((part) => part.name).join(", ")}{tentative.document.parts.length > 8 ? ` and ${tentative.document.parts.length - 8} more` : ""}</p>
+      <p>{tentative.document.bars} bars · {tentative.document.sections.length} sections · {tentative.document.parts.length} parts. Only persisted, validated steps appear below.</p>
+      <NativeScore document={tentative.document} identity={`${projectId}:${tentative.jobId}:${tentative.documentHash}:${tentative.stepCount}`} selectedSectionId={draftSectionId} onSelectSection={setDraftSectionId} selectedPartId={draftPartId} onInspectPart={setDraftPartId} animateConfirmed confirmedStepCount={tentative.stepCount} draft />
       <p className="section-footnote">This is a saved structural draft. It is not selected, synchronized or playable.</p>
     </section> : null}
     {tentativeError ? <p className="provider-note" role="alert">The saved draft could not be inspected: {tentativeError}</p> : null}
@@ -260,7 +298,7 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
     <div className="workspace-panel">
       <div className="workspace-main">
         {current ? <>
-          <section className="native-section arrangement-section" aria-labelledby="arrangement-heading"><div className="section-heading"><div><h2 id="arrangement-heading">Arrangement</h2><p>Choose a section to focus your next change.</p></div><Button variant="outline" size="sm" aria-pressed={targetSectionId === null} onClick={() => setTargetSectionId(null)}>Whole piece</Button></div><div className="native-section-grid">{current.document.sections.map((section, index) => <button key={section.id} type="button" className="native-section-card" aria-pressed={targetSectionId === section.id} onClick={() => setTargetSectionId((prior) => prior === section.id ? null : section.id)}><span className="section-card-copy"><small>{String(index + 1).padStart(2, "0")}</small><strong>{section.name}</strong><span>Bars {section.startBar + 1}–{section.endBar}</span><em>{section.intent}</em></span><span className={`section-card-art art-variant-${index % 5}`} aria-hidden="true" /></button>)}</div></section>
+          <section className="native-section arrangement-section" aria-labelledby="arrangement-heading"><div className="section-heading"><div><h2 id="arrangement-heading">Your arrangement</h2><p>Follow each part across musical time. Select a section to inspect what is actually there and focus your next change.</p></div><Button variant="outline" size="sm" aria-pressed={targetSectionId === null} onClick={() => setTargetSectionId(null)}>Whole piece</Button></div><NativeScore document={current.document} identity={`${projectId}:${current.id}:${current.documentHash}`} selectedSectionId={targetSectionId} onSelectSection={setTargetSectionId} selectedPartId={inspectedPartId} onInspectPart={setInspectedPartId} /></section>
           <section className="native-section parts-section" aria-labelledby="parts-heading">
             <div className="section-heading"><div><h2 id="parts-heading">Parts & instruments</h2><p>Choose one part to change, or let the producer decide.</p></div><Button variant="outline" size="sm" aria-pressed={targetPartId === null} onClick={() => setTargetPartId(null)}>Any part</Button></div>
             {current.document.parts.length > 8 ? <div className="native-role-filters" role="group" aria-label="Filter parts by role">{["all", ...partRoles].map((role) => <Button key={role} size="sm" variant={roleFilter === role ? "default" : "outline"} aria-pressed={roleFilter === role} onClick={() => { setRoleFilter(role); setPartLimit(8) }}>{role === "all" ? `All (${current.document.parts.length})` : `${role} (${current.document.parts.filter((part) => part.role === role).length})`}</Button>)}</div> : null}
@@ -270,9 +308,9 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
           </section>
         </> : <section className="native-start"><Music2 className="size-8 text-primary" /><h2>Start with your idea</h2><p>A few words are enough. Adding a sound is optional, and your first arrangement can be changed later.</p></section>}
 
-        <section className="direction-section" aria-labelledby="direction-heading"><div className="section-heading"><div><h2 id="direction-heading">{current ? "What would you like to change?" : "What are you making?"}</h2><p>{current ? `${selectedSection ? `In ${selectedSection.name}` : "Across the whole piece"} · ${selectedPart ? `change ${selectedPart.name}` : "choose any part"}${protectedPartIds.length ? ` · keep ${protectedPartIds.map(partName).join(", ")} unchanged` : ""}` : "Describe a mood, rhythm, instrument or moment. A detailed brief is welcome; recordings are optional."}</p></div></div>{draftNotices.length ? <div className="job-status" role="status">{draftNotices.map((notice) => <p key={notice}>{notice}</p>)}</div> : null}<form className="composer native-composer" onSubmit={(event) => { event.preventDefault(); void submit() }}><label htmlFor="native-direction" className="sr-only">Describe your arrangement</label><Textarea id="native-direction" value={direction} maxLength={32_768} onChange={(event) => setDirection(event.target.value)} placeholder={current ? "For example: Make the later section feel bigger with a brighter pad." : "For example: A slow, spacious instrumental with a clear melody."} disabled={Boolean(activeJob)} /><div className="native-brief-options"><span>{direction.length.toLocaleString()} / 32,768 characters</span><label htmlFor="native-profile">Depth <select id="native-profile" value={profile} onChange={(event) => setProfile(event.target.value as "standard" | "extended")} disabled={Boolean(activeJob)}><option value="standard">Standard — focused arrangement</option><option value="extended">Extended — detailed composition</option></select></label></div><div className="composer-actions"><div className="chips"><span className="chip"><Sparkles className="mr-1 size-3" /> {current ? selectedSection?.name ?? "Whole piece" : "New arrangement"}</span>{selectedPart ? <span className="chip">{selectedPart.name}</span> : null}{protectedPartIds.length ? <span className="chip"><ShieldCheck className="mr-1 size-3" /> Keep {protectedPartIds.length} {protectedPartIds.length === 1 ? "part" : "parts"}</span> : null}{sourceIds.length ? <span className="chip">{sourceIds.length} {sourceIds.length === 1 ? "sound" : "sounds"} selected</span> : null}</div><Button type="submit" disabled={busy || Boolean(activeJob) || direction.trim().length < 3}><Sparkles className="size-4" /> {current ? "Shape the arrangement" : "Create arrangement"} <ArrowRight className="size-4" /></Button></div></form><p className="section-footnote">{current ? "A successful change becomes the current version automatically. You can compare or restore any earlier version." : "This creates an editable arrangement, not a playable recording."} Extended requests may take longer and use more of the installation's remaining provider allowance.</p></section>
+        <section className="direction-section" aria-labelledby="direction-heading"><div className="section-heading"><div><h2 id="direction-heading">{current ? "What would you like to change?" : "What are you making?"}</h2><p>{current ? `${selectedSection ? `In ${selectedSection.name}` : "Across the whole piece"} · ${selectedPart ? `change ${selectedPart.name}` : "choose any part"}${protectedPartIds.length ? ` · keep ${protectedPartIds.map(partName).join(", ")} unchanged` : ""}` : "Describe a mood, rhythm, instrument or moment. A detailed brief is welcome; recordings are optional."}</p></div></div>{draftNotices.length ? <div className="job-status" role="status">{draftNotices.map((notice) => <p key={notice}>{notice}</p>)}</div> : null}<form className="composer native-composer" onSubmit={(event) => { event.preventDefault(); void submit() }}><label htmlFor="native-direction" className="sr-only">Describe your arrangement</label><Textarea id="native-direction" value={direction} maxLength={32_768} onChange={(event) => setDirection(event.target.value)} placeholder={current ? "For example: In this section, thin the drums and shorten the ambience, but keep the theme and bass." : "For example: A slow, spacious instrumental with a clear melody."} disabled={Boolean(activeJob)} /><div className="native-brief-options"><span>{direction.length.toLocaleString()} / 32,768 characters</span><label htmlFor="native-profile">Depth <select id="native-profile" value={profile} onChange={(event) => setProfile(event.target.value as "standard" | "extended")} disabled={Boolean(activeJob)}><option value="standard">Standard — focused arrangement</option><option value="extended">Extended — detailed composition</option></select></label></div><div className="composer-actions"><div className="chips"><span className="chip"><Sparkles className="mr-1 size-3" /> {current ? selectedSection?.name ?? "Whole piece" : "New arrangement"}</span>{selectedPart ? <span className="chip">{selectedPart.name}</span> : null}{protectedPartIds.length ? <span className="chip"><ShieldCheck className="mr-1 size-3" /> Keep {protectedPartIds.length} {protectedPartIds.length === 1 ? "part" : "parts"}</span> : null}{sourceIds.length ? <span className="chip">{sourceIds.length} {sourceIds.length === 1 ? "sound" : "sounds"} selected</span> : null}</div><Button type="submit" disabled={busy || Boolean(activeJob) || direction.trim().length < 3}><Sparkles className="size-4" /> {current ? "Shape the arrangement" : "Create arrangement"} <ArrowRight className="size-4" /></Button></div></form>{current && preservationPreview?.revisionId === current.id && (preservationPreview.namedParts.length || preservationPreview.theme || preservationPreview.unresolved.length) ? <div className="preservation-preview" role="status"><strong>For this change, we'll keep:</strong> {preservationPreview.namedParts.map((item) => item.name).join(", ")}{preservationPreview.theme ? `${preservationPreview.namedParts.length ? " · " : ""}${preservationPreview.theme.label} theme phrase` : ""}{preservationPreview.unresolved.length ? <p role="alert">{preservationPreview.unresolved.join(". ")}. Name the part or phrase before sending.</p> : <p>These named parts and phrases are checked against the saved version before a result can be accepted.</p>}</div> : null}<p className="section-footnote">{current ? "A successful change becomes the current version automatically. Comparing is read-only; choosing another saved version is explicit." : "This creates an editable arrangement, not a playable recording."} Extended requests may take longer and use more of the installation's remaining provider allowance.</p></section>
 
-        <section className="native-section versions-section"><div className="section-heading"><div><h2>Versions</h2><p>{snapshot?.versions.length ? `${snapshot.versions.length} saved ${snapshot.versions.length === 1 ? "version" : "versions"}. Compare changes or return to an earlier one.` : "Your first saved arrangement will appear here."}</p></div><Button variant="outline" size="sm" onClick={() => { setCompareId(snapshot?.currentRevisionId ?? null); setCompareOpen(true) }} disabled={!snapshot?.versions.length}><GitCompareArrows className="size-4" /> Compare</Button></div>{current ? <p className="version-current"><Check className="size-4" /> Version {current.ordinal} is current · {arrangementSummary(current)}</p> : null}</section>
+        <section className="native-section versions-section"><div className="section-heading"><div><h2>Saved versions</h2><p>{snapshot?.versions.length ? `${snapshot.versions.length} saved ${snapshot.versions.length === 1 ? "version" : "versions"}. Previewing a version never changes your current arrangement.` : "Your first saved arrangement will appear here."}</p></div><Button variant="outline" size="sm" onClick={() => openComparison()} disabled={!snapshot?.versions.length || snapshot.versions.length < 2}><GitCompareArrows className="size-4" /> Compare</Button></div>{current ? <p className="version-current"><Check className="size-4" /> Version {current.ordinal} is current · {arrangementSummary(current)}</p> : null}{snapshot && snapshot.versions.length > 1 ? <div className="version-quick-list">{snapshot.versions.slice(0, 6).map((version) => <button type="button" key={version.id} onClick={() => openComparison(version.id)}>Version {version.ordinal}{version.id === snapshot.currentRevisionId ? " · current" : ""}<span>{version.changeSummary}</span></button>)}</div> : null}</section>
       </div>
 
       <aside className="workspace-side" aria-label="Arrangement tools">
@@ -314,13 +352,16 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
     </Dialog>
 
     <Dialog open={compareOpen} onOpenChange={setCompareOpen}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto bg-popover p-6">
-        <DialogHeader><DialogTitle className="font-heading text-2xl">Compare arrangements</DialogTitle><DialogDescription>See what changed from the current version. Restoring one changes only this room's selected version; it does not rewrite Audiotool.</DialogDescription></DialogHeader>
-        <RadioGroup value={compareId ?? undefined} onValueChange={setCompareId} aria-label="Version to compare" className="version-list">
-          {snapshot?.versions.map((version) => <label key={version.id} className="version-option"><RadioGroupItem value={version.id} aria-label={`Version ${version.ordinal}`} /><span><span className="version-title">Version {version.ordinal} {version.id === snapshot.currentRevisionId ? <span className="chip"><Check className="mr-1 size-3" /> Current</span> : null}</span><p>{arrangementSummary(version)}</p><small>{version.document.bars} bars · {version.document.parts.length} parts</small></span></label>)}
-        </RadioGroup>
-        {selectedVersion && comparison ? <div className="native-diff"><strong>Version {selectedVersion.ordinal} compared with current version {snapshot?.current?.ordinal}</strong><p><b>Parts added:</b> {comparison.addedParts.map(partName).join(", ") || "None"} · <b>Changed:</b> {comparison.changedParts.map(partName).join(", ") || "None"} · <b>Removed:</b> {comparison.removedParts.map(partName).join(", ") || "None"}</p>{comparison.partChanges.length ? <ul>{comparison.partChanges.map((change) => <li key={change.partId}><b>{partName(change.partId)}:</b> {change.fields.map((field) => ({ device: "instrument or preset", sourceRegions: "owned clips", libraryRegions: "library clips", groupId: "group routing", sends: "shared sends", automation: "changing controls", placements: "phrases" } as Record<string, string>)[field] ?? field).join(", ")}</li>)}</ul> : null}<p><b>Sections changed:</b> {comparison.changedSections.join(", ") || "None"} · <b>Tempo:</b> {comparison.tempoChange ? `${comparison.tempoChange.from} → ${comparison.tempoChange.to} BPM` : "Unchanged"} · <b>Shared routing:</b> {comparison.routingChange ? "Changed" : "Unchanged"}</p><p><b>Parts kept unchanged:</b> {comparison.protectionChange.added.map(partName).join(", ") || "None"} · <b>Allowed to change:</b> {comparison.protectionChange.removed.map(partName).join(", ") || "None"}</p></div> : null}
-        <DialogFooter className="-mx-6 -mb-6"><Button variant="outline" onClick={() => setCompareOpen(false)}>Keep current</Button><Button onClick={() => void restore()} disabled={!selectedVersion || selectedVersion.id === snapshot?.currentRevisionId || busy}><RotateCcw className="size-4" /> Restore this version</Button></DialogFooter>
+      <DialogContent className="comparison-dialog max-h-[92vh] max-w-5xl overflow-y-auto bg-popover p-6">
+        <DialogHeader><DialogTitle className="font-heading text-2xl">Before and after</DialogTitle><DialogDescription>Version {beforeVersion?.ordinal ?? "?"} → version {afterVersion?.ordinal ?? "?"}. Preview and section navigation are read-only. A successful revision is selected automatically; choosing another saved version below is explicit and does not rewrite Audiotool.</DialogDescription></DialogHeader>
+        {snapshot && snapshot.versions.length > 2 ? <details className="comparison-history"><summary>Compare another saved version</summary><RadioGroup value={compareId ?? undefined} onValueChange={(id) => openComparison(id)} aria-label="Version to compare" className="version-list">{snapshot.versions.map((version) => <label key={version.id} className="version-option"><RadioGroupItem value={version.id} aria-label={`Version ${version.ordinal}`} /><span><span className="version-title">Version {version.ordinal} {version.id === snapshot.currentRevisionId ? <span className="chip"><Check className="mr-1 size-3" /> Current</span> : null}</span><p>{arrangementSummary(version)}</p></span></label>)}</RadioGroup></details> : null}
+        {beforeVersion && afterVersion ? <>
+          <div className="comparison-tabs" role="group" aria-label="Comparison view"><Button variant={compareMode === "before" ? "default" : "outline"} aria-pressed={compareMode === "before"} onClick={() => setCompareMode("before")}>Before · v{beforeVersion.ordinal}{snapshot?.currentRevisionId === beforeVersion.id ? " · current" : ""}</Button><Button variant={compareMode === "after" ? "default" : "outline"} aria-pressed={compareMode === "after"} onClick={() => setCompareMode("after")}>After · v{afterVersion.ordinal}{snapshot?.currentRevisionId === afterVersion.id ? " · current" : ""}</Button><Button variant={compareMode === "changes" ? "default" : "outline"} aria-pressed={compareMode === "changes"} onClick={() => setCompareMode("changes")}>Changes</Button></div>
+          <div className="comparison-section-list" role="group" aria-label="Section to compare">{beforeVersion.document.sections.map((section) => <Button key={section.id} size="sm" variant={compareSection?.id === section.id ? "default" : "outline"} aria-pressed={compareSection?.id === section.id} onClick={() => setCompareSectionId(section.id)}>{section.name}</Button>)}</div>
+          {compareMode === "changes" && comparison ? <div className="comparison-facts" role="status"><strong>{compareSection?.name}: {comparison.status === "preserved" ? "musical structure unchanged" : comparison.status === "unverified" ? "some differences cannot be verified" : "structural changes found"}</strong><p>{comparison.addedNotes} added · {comparison.removedNotes} removed · {comparison.modifiedNotes} modified note events. {comparison.verifiedUnchangedParts.length ? `Verified unchanged here: ${comparison.verifiedUnchangedParts.join(", ")}.` : "No part is fully verified unchanged here."}</p>{comparison.caveats.map((caveat) => <p key={caveat}>{caveat}</p>)}<ul>{comparison.parts.filter((part) => part.status !== "preserved" || part.metadataChanged).map((part) => <li key={part.partId}><b>{part.name}:</b> {part.status}{part.addedNotes.length || part.removedNotes.length || part.modifiedNotes.length ? ` · notes +${part.addedNotes.length} / −${part.removedNotes.length} / ~${part.modifiedNotes.length}` : ""}{part.clipStatus !== "preserved" ? ` · clips ${part.clipStatus}` : ""}{part.controlsChanged ? " · changing controls differ" : ""}{part.dependenciesChanged ? " · instrument or shared processing differs" : ""}{part.metadataChanged ? " · description changed" : ""}</li>)}</ul><p className="section-footnote">A verified unchanged structure is not proof that rendered audio sounds identical. Requested locks are separate from this comparison.</p></div> : null}
+          <NativeScore document={compareMode === "before" ? beforeVersion.document : afterVersion.document} comparisonBefore={compareMode === "changes" ? beforeVersion.document : undefined} identity={`${projectId}:compare:${compareMode}:${compareMode === "before" ? beforeVersion.documentHash : afterVersion.documentHash}`} selectedSectionId={compareSection?.id ?? null} onSelectSection={setCompareSectionId} selectedPartId={inspectedPartId} onInspectPart={setInspectedPartId} />
+        </> : <p>Both saved versions must still be available to compare.</p>}
+        <DialogFooter className="-mx-6 -mb-6 comparison-actions"><Button variant="outline" onClick={() => setCompareOpen(false)}>Keep current version</Button>{beforeVersion ? <Button variant="outline" disabled={busy || beforeVersion.id === snapshot?.currentRevisionId} onClick={() => void selectComparedVersion(beforeVersion.id)}><RotateCcw className="size-4" /> Use Before · v{beforeVersion.ordinal}</Button> : null}{afterVersion ? <Button disabled={busy || afterVersion.id === snapshot?.currentRevisionId} onClick={() => void selectComparedVersion(afterVersion.id)}>Use After · v{afterVersion.ordinal}</Button> : null}</DialogFooter>
       </DialogContent>
     </Dialog>
   </div>

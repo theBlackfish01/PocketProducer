@@ -1,5 +1,13 @@
 # Verification record
 
+## Living arrangement and scoped revision (2026-09-26)
+
+`pnpm check` passed lint, strict types, 17 unit files / 108 tests and production build; Vite retains its large-chunk warning. `pnpm test:integration` passed 2 files / 56 tests on isolated `_test` PostgreSQL. Full `pnpm test:e2e` passed 9 Chromium journeys (1.2 minutes); a strengthened 128-bar/24-part tablet test passed again in isolation after the full run. No ordinary test contacts OpenAI, Gemini or Audiotool.
+
+New unit coverage compares independently expected note positions and transposition, provenance of a single changed motif instance, same-ID pitch changes, reidentified/split loop clips, local automation versus unchanged earlier sections, unverified easing/loop/timing, and bounded 128-bar/24-part projection. Intent tests cover ordinary negation/conjunction, named preservation, wrong bass and unchanged drums, and “bring in chords” not being mistaken for a section. The production scripted Deep Agent integration first proposes a valid-but-wrong bass edit, receives the completion issue, repairs by thinning the scoped drums, and commits a version with preserved named material. These are scripted-model results, not paid creative evaluation.
+
+Browser checks cover create → section/part/keep → revision → automatic new-head selection → read-only Before/After/Changes → explicit version switch → reload; they query the native API to confirm comparison navigation does not change the head. A delayed preservation preview released after leaving the room cannot submit a revision or alter the new room. The phone journey emulates 390 px and reduced motion, keyboard-selects a section, and checks dialog focus return. Desktop, comparison dialog, phone and tablet captures were inspected under ignored `.local/evidence/native-*.png`; the first desktop comparison capture revealed an undersized modal and was corrected before final inspection. The 128-bar/24-part tablet fixture met a 10-second local load assertion, expanded 8→16→24 cards and had no horizontal document overflow. These are fixture/emulated checks, not physical-phone, non-Chromium or heard-audio evidence.
+
 ## Sustained native construction expansion (2026-09-26)
 
 All ordinary tests use isolated `_test` PostgreSQL, scripted/fixture model transport and blank provider keys. Final command results are recorded in `STATUS.md`; the latest integrated reruns passed 15 unit files / 93 tests and 2 integration files / 55 tests. The production Vite build retains its existing large lazy SDK chunk warning. Browser verification covers eight Chromium journeys, including the partial-mobile no-overflow assertion. `git diff --check` is recorded at closeout.
