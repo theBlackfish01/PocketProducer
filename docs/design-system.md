@@ -1,6 +1,16 @@
 # Listening Room design system
 
-## Living score and comparison — 2026-09-26
+## Current: focused score and confirmed-change polish — 2026-09-26
+
+The working score takes the full panel width unless **Sounds & tools** is opened. A compact established-session hero retains the logo and editorial palette. Section inspection is separate from revision scope; focused detail replaces the overview until explicitly reopened. The direction form follows the score on every viewport, while phone users have a safe-area shortcut hidden during form focus. **Manage parts** discloses the secondary ensemble controls instead of repeating them by default.
+
+The responsive part inspector reuses the owned Base UI Sheet, with initial heading focus, Escape return and an explicit transfer to the direction field for **Change this part**. Comparison has a scrollable evidence body, visible header/footer, relevant-parts default and read-only Before/After/Changes. Family markers use names and original/variation relationships alongside a four-color sequence; color is supplementary and collisions are possible. Paired pitch/time coordinates, guides and exact musical facts carry the meaning.
+
+No dependency or primitive migration was needed. Owned `native-score.tsx`, `score-detail-lane.tsx`, `score-inspector.tsx` and `score-presentation.ts` compose the existing Motion/Base UI/SVG/CSS stack. Confirmed note changes animate for 360 ms, previous outlines 260 ms, clips 320 ms, curves 300 ms and grouped lane highlights 550 ms. Only a bounded changed subset animates; reduced motion presents final geometry. Late/duplicate receipts and reload cannot fake ongoing construction. Step/linear control plots reflect stored interpolation; unsupported curved easing is shown as points, not a guessed curve. There is no native playhead or audio-reactive behavior.
+
+Upgrade checklist: retain pinned compatible versions, review generated primitive changes, run `pnpm check`, `pnpm test:integration`, `pnpm test:e2e` and `pnpm test:visual`, inspect desktop/phone/tablet and motion evidence, and confirm scope/focus/version behavior. The React quality review led to stable score callbacks and comparison-only diff calculation so typing and opening history do not rebuild an unchanged large score. See [the behavior contract](living-arrangement.md) and [measured checks](testing.md). Earlier dated design decisions below describe their original pass, not the current layout.
+
+## Historical: first living score and comparison — 2026-09-26
 
 The central **Your arrangement** surface now projects the native document rather than decorating the five-section fixture. The existing ivory/forest/burnt-orange tokens, Pocket Producer logo, editorial headings, Base UI controls, Tailwind and Lucide remain. `native-score.tsx` adds an owned SVG/CSS lane composition with section-width proportions, per-bar note-start density, phrase and clip tracks, role labels, selected-section detail and a fact panel. Motif-family colors are a stable hash of explicit provenance, not a claim that similar-looking phrases sound alike. A focused section spans at most eight bars of detailed notes at once; larger pieces can be navigated without a DAW-scale DOM. The score shows a textual legend/caption and each SVG has a summary label, so color and motion are not the sole conveyors of meaning.
 
@@ -8,7 +18,7 @@ Pinned `motion@13.4.0` (Motion for React) is the only new visual dependency. It 
 
 Source/provenance: `apps/web/src/features/native/native-score.tsx` and `score.ts` are owned music-specific components above the existing locally owned shadcn/Base UI controls. The selected primitive family did not change and no CLI-generated component was added. When upgrading Motion, Base UI or Tailwind, keep exact pins, inspect component/dependency diffs, rerun the score projection and browser journeys, and visually review desktop, phone, tablet, dialog and reduced-motion states. See [the truth contract](living-arrangement.md) and [verification](testing.md).
 
-## Guided room redesign — 2026-09-24
+## Historical: guided room redesign — 2026-09-24
 
 The user-supplied arrangement mockup informed the new shared `RoomHero`, compact section artwork, two-column workspace, part cards, contextual direction composer and right-side sound/inspiration/Audiotool panels. It is a visual reference, not a source of licensed assets or a specification for unavailable play/share buttons. The existing Pocket Producer mark and wordmark remain in the desktop rail, mobile bar, navigation sheet and favicon. Hero and section art are owned CSS shapes; the mark itself is unchanged. At 390 px, the composer moves before the arrangement and parts so the first action is reachable without traversing a long card list. The playable-audio view uses the same hero, cards, spacing and language system, while keeping its actual waveform/player.
 
@@ -43,7 +53,7 @@ The generated Slider wrapper was intentionally amended to forward the consumer's
 
 Music-specific composition lives above primitives: `AudioPlayer`, source pills/tray, arrangement sections, the direction composer and version comparison. wavesurfer.js receives the same `HTMLAudioElement` used by the transport and has interaction disabled, avoiding competing playback clocks. Playback identity is explicit (`source` or immutable `revision` plus ID); source and A/B audition cannot silently leave the transport pointing at the wrong bytes.
 
-The native room reuses the same tokens and Base UI buttons/dialog/radio controls. Its arrangement cards, protected part grid, source selection, capability search and structural version comparison are composed locally in `apps/web/src/features/native/native-room.tsx`. The direction composer follows the cards on desktop and moves before them on phone. The advanced SDK catalogue is collapsed until requested. Explicit whole-piece/any-part controls avoid an accidental hard edit scope. Pairwise compare describes selected-versus-current structure; keep/unlock changes are explicit. The audio room is labeled **Playable audio** and remains a separate history. Sync shows local, past verification, uncertain or conflict state; a saved consent session is required to offer it. The 390 px fixture capture confirms composer placement and no horizontal overflow, not physical keyboard behavior.
+The native room reuses the same tokens and Base UI buttons/dialog/radio controls. Its arrangement cards, protected part grid, source selection, capability search and structural version comparison are composed locally in `apps/web/src/features/native/native-room.tsx`. The direction composer now follows the score directly in DOM order at every width. Part management and Sounds/tools are explicit disclosures; the established-session hero is compact. A phone-safe **Describe a change** dock focuses the inline form and disappears while the form has focus. The advanced SDK catalogue is collapsed until requested. Explicit whole-piece/any-part controls avoid an accidental hard edit scope. Pairwise compare describes selected-versus-current structure; keep/unlock changes are explicit. The audio room is labeled **Playable audio** and remains a separate history. Sync shows local, past verification, uncertain or conflict state; a saved consent session is required to offer it. The 390 px fixture capture confirms composer placement and no horizontal overflow, not physical keyboard behavior.
 
 ## Responsive and accessibility behavior
 
@@ -56,5 +66,5 @@ Verified behaviors and evidence are in `docs/testing.md`: computed 4.5:1 text/ac
 1. Update one primitive family/version at a time and keep exact dependency versions.
 2. Run the shadcn command against a temporary branch/worktree or inspect its diff before accepting generated changes.
 3. Preserve semantic tokens and the Slider accessible-name forwarding.
-4. Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:e2e` and inspect both evidence viewports.
+4. Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:e2e`, `pnpm test:visual` and inspect screenshots plus motion recordings.
 5. Record any generated-source divergence and migration note here.

@@ -1,6 +1,27 @@
 # Verification record
 
-## Living arrangement and scoped revision (2026-09-26)
+## Focused score and motion polish (2026-09-26)
+
+Provider-free verification after `7563021`:
+
+| Command | Observed result | Scope |
+| --- | --- | --- |
+| `pnpm check` | Passed: lint, strict types, 17 unit files / 114 tests, production build | Includes pure confirmed-frame/delta logic, stable comparison coordinates, parent-group dependencies and honest control interpolation. Large production chunk warning remains. |
+| `pnpm test:integration` | Passed: 2 files / 56 tests, 80.49 s | Isolated PostgreSQL; actual worker lifecycle/recovery/accounting and scripted producer paths, not real-provider creativity. Docker was initially unavailable; run completed after restart. |
+| `pnpm test:e2e` | Passed: 9 Chromium journeys, 2.3 min | Full local API/worker create/revise/compare/restore, source audition, legacy playback, partial recovery, late room responses, sync-state isolation, tablet/phone. |
+| `pnpm test:visual` | Passed: 3 Chromium journeys, final run 40.3 s | Vite-only UI network fixtures, no API/worker/database. Real SVG movement samples, added/removed/modified notes, clip/control updates, duplicate/late/reload, scope/focus/read-only comparison, reduced motion, computed text contrast and larger arrangements. |
+
+The additional suite is maintained in `tests/visual/score-motion.spec.ts` and runs in CI. `tests/visual.playwright.config.ts` starts a dedicated loopback Vite server on 15174, blanks model keys and intercepts application API requests; unexpected routes fail rather than dispatching mutations. `scripts/visual-teardown.ts` shuts down that test-owned server. ESLint ignores generated `.local` evidence and test output, not application source. The recommended browser CLI was unavailable, so the existing Playwright stack supplies browser verification.
+
+Screenshots under `.local/evidence/polish-{desktop,phone,inspector,compare-phone,motion-in-flight,confirmed-update,large-tablet}.png` were reviewed. A MutationObserver samples actual note bounding rectangles and transforms over animation frames, proving geometry changes rather than merely the presence of an animation attribute. Samples are saved in `polish-note-motion-samples.json`; video and Playwright traces are recorded in `score-visual-results/`. The review inspected still frames and measured motion, not a subjective full-video playback or usability study. New checks exposed and fixed both incorrect inspector return focus and initial autofocus scrolling into advanced details.
+
+Performance captures use Windows, AMD Ryzen 7 7435HS / 16 logical CPUs, development mode, trace/video recording, and a sparse 128-bar/24-part fixture. Focused detail initially renders 394 SVG descendants; it expands 8→16→24 lanes on request. `polish-performance.json` records click-to-two-animation-frame durations; `polish-browser-performance-trace.json` retains the CDP trace. Early expanded-overview comparison took about 556 ms; stable score callbacks reduced a subsequent sample to about 196 ms. Section focus samples varied from roughly 34–184 ms with concurrent local checks. These are individual diagnostic observations, not a production latency distribution or proof of the initial ~100 ms target on every interaction/device. Dense-score rendering and real-device profiling remain useful follow-up work.
+
+Keyboard Enter/Escape/focus return, title-first inspector focus, direction transfer, 390 px overflow, 480 px emulated keyboard-height layout, fixed compare actions, 4.5:1 sampled text contrast and reduced-motion final state are asserted. These checks are not an exhaustive accessibility audit and do not simulate a real OS keyboard or notch. Physical-phone/screen-reader/non-Chromium checks remain unverified. Native rendering/playback, Gemini listening, real-model creative evaluation and live Nexus fidelity were not exercised. No paid provider call or remote effect occurred; new spend is US$0.
+
+Final recorded performance sample: 111.8 ms to two frames after section focus, 173.6 ms after opening comparison from the expanded large score, 394 initial detail SVG descendants. The same development/recording caveats apply. This is an improvement over the diagnosed extra rerender, not a claim that all interactions meet 100 ms.
+
+## Historical: living arrangement and scoped revision (2026-09-26)
 
 `pnpm check` passed lint, strict types, 17 unit files / 108 tests and production build; Vite retains its large-chunk warning. `pnpm test:integration` passed 2 files / 56 tests on isolated `_test` PostgreSQL. Full `pnpm test:e2e` passed 9 Chromium journeys (1.2 minutes); a strengthened 128-bar/24-part tablet test passed again in isolation after the full run. No ordinary test contacts OpenAI, Gemini or Audiotool.
 
