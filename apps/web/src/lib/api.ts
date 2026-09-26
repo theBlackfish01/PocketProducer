@@ -24,7 +24,7 @@ export interface NativeDocument {
   schemaVersion: 2; ppq: 960; title: string; direction: string; currentObjective: string; assumptions: string[]; tempoBpm: number; meter: { numerator: number; denominator: number }; bars: number;
   sections: Array<{ id: string; name: string; startBar: number; endBar: number; intent: string }>;
   parts: NativePart[];
-  groups?: Array<{ id: string; name: string; gain: number; pan: number; parentId?: string; compressor?: { thresholdDb: number; ratio: number; attackMs: number; releaseMs: number; makeupGainDb: number; isActive: boolean }; sidechainFromPartId?: string; effects?: Array<{ id: string; type: string; parameters?: Record<string, number> }>; parallel?: { wetMix: number; effects: Array<{ id: string; type: string; parameters?: Record<string, number> }> }; automation?: Array<{ id: string; target: string; points: Array<{ tick: number; value: number }> }> }>;
+  groups?: Array<{ id: string; name: string; gain: number; pan: number; parentId?: string; compressor?: { thresholdDb: number; ratio: number; attackMs: number; releaseMs: number; makeupGainDb: number; isActive: boolean }; sidechainFromPartId?: string; effects?: Array<{ id: string; type: string; parameters?: Record<string, number> }>; parallel?: { wetMix: number; effects: Array<{ id: string; type: string; parameters?: Record<string, number> }> }; automation?: NativeAutomation[] }>;
   reverbBus?: { id: string; name: string; roomSize: number; preDelayMs: number; damp: number };
   delayBus?: { id: string; name: string; feedbackFactor: number; stepCount: number; stepLengthIndex: 1 | 2 | 3 };
   master?: { gain: number; pan: number; limiterEnabled: boolean };

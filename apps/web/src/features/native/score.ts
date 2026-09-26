@@ -144,6 +144,13 @@ function clipSegments(document: NativeDocument, part: NativePart, start: number,
 }
 
 export type ComparisonState = "preserved" | "changed" | "added" | "removed" | "unverified"
+export function partGroupChain(document: NativeDocument, partId: string): NonNullable<NativeDocument["groups"]> {
+  const result: NonNullable<NativeDocument["groups"]> = [], visited = new Set<string>()
+  const groups = new Map(document.groups?.map((group) => [group.id, group]))
+  let id = document.parts.find((part) => part.id === partId)?.groupId
+  while (id && !visited.has(id)) { visited.add(id); const group = groups.get(id); if (!group) break; result.push(group); id = group.parentId }
+  return result
+}
 export interface PartComparison { partId: string; name: string; status: ComparisonState; addedNotes: ScoreNote[]; removedNotes: ScoreNote[]; modifiedNotes: Array<{ before: ScoreNote; after: ScoreNote }>; preservedNotes: number; clipStatus: ComparisonState; controlsChanged: boolean; dependenciesChanged: boolean; metadataChanged: boolean }
 export interface SectionComparison { sectionId: string; status: ComparisonState; parts: PartComparison[]; addedNotes: number; removedNotes: number; modifiedNotes: number; verifiedUnchangedParts: string[]; caveats: string[] }
 
@@ -167,13 +174,13 @@ export function compareScoreSection(before: NativeDocument, after: NativeDocumen
     for (const note of current.notes) if (!oldMap.has(note.key)) addedNotes.push(note)
     const oldClips = clipSegments(before, old, start, end), newClips = clipSegments(after, next, start, end)
     const clipStatus = oldClips === null || newClips === null ? "unverified" : stable(oldClips) === stable(newClips) ? "preserved" : !oldClips.length ? "added" : !newClips.length ? "removed" : "changed"
-    const oldGroup = before.groups?.find((group) => group.id === old.groupId)
-    const newGroup = after.groups?.find((group) => group.id === next.groupId)
+    const oldGroups = partGroupChain(before, id), newGroups = partGroupChain(after, id)
     const partControls = sectionAutomationStatus(old.automation, next.automation, (target) => automationBaseline(old, target), (target) => automationBaseline(next, target), start, end)
-    const groupControls = oldGroup && newGroup ? sectionAutomationStatus(oldGroup.automation ?? [], newGroup.automation ?? [], (target) => groupBaseline(oldGroup, target), (target) => groupBaseline(newGroup, target), start, end) : "preserved"
+    const groupStates = oldGroups.map((oldGroup) => { const newGroup = newGroups.find((group) => group.id === oldGroup.id); return newGroup ? sectionAutomationStatus(oldGroup.automation ?? [], newGroup.automation ?? [], (target) => groupBaseline(oldGroup, target), (target) => groupBaseline(newGroup, target), start, end) : "changed" })
+    const groupControls = groupStates.includes("unverified") ? "unverified" : groupStates.includes("changed") ? "changed" : "preserved"
     const controlStatus = partControls === "unverified" || groupControls === "unverified" ? "unverified" : partControls === "changed" || groupControls === "changed" ? "changed" : "preserved"
     const controlsChanged = controlStatus === "changed"
-    const dependenciesChanged = stable({ device: old.device, gain: old.gain, pan: old.pan, effects: old.effects, parallel: old.parallel, sends: old.sends, group: oldGroup && { ...oldGroup, automation: undefined }, master: before.master, reverbBus: before.reverbBus, delayBus: before.delayBus }) !== stable({ device: next.device, gain: next.gain, pan: next.pan, effects: next.effects, parallel: next.parallel, sends: next.sends, group: newGroup && { ...newGroup, automation: undefined }, master: after.master, reverbBus: after.reverbBus, delayBus: after.delayBus })
+    const dependenciesChanged = stable({ device: old.device, gain: old.gain, pan: old.pan, effects: old.effects, parallel: old.parallel, sends: old.sends, groups: oldGroups.map((group) => ({ ...group, automation: undefined })), master: before.master, reverbBus: old.sends?.some((send) => send.busId === before.reverbBus?.id) ? before.reverbBus : null, delayBus: old.sends?.some((send) => send.busId === before.delayBus?.id) ? before.delayBus : null }) !== stable({ device: next.device, gain: next.gain, pan: next.pan, effects: next.effects, parallel: next.parallel, sends: next.sends, groups: newGroups.map((group) => ({ ...group, automation: undefined })), master: after.master, reverbBus: next.sends?.some((send) => send.busId === after.reverbBus?.id) ? after.reverbBus : null, delayBus: next.sends?.some((send) => send.busId === after.delayBus?.id) ? after.delayBus : null })
     const metadataChanged = old.name !== next.name || stable(before.motifs.filter((motif) => motif.partId === id).map((motif) => ({ id: motif.id, name: motif.name, familyId: motif.familyId }))) !== stable(after.motifs.filter((motif) => motif.partId === id).map((motif) => ({ id: motif.id, name: motif.name, familyId: motif.familyId })))
     const status: ComparisonState = previous.truncated || current.truncated || clipStatus === "unverified" || controlStatus === "unverified" ? "unverified" : addedNotes.length || removedNotes.length || modifiedNotes.length || clipStatus !== "preserved" || controlsChanged || dependenciesChanged ? "changed" : "preserved"
     parts.push({ partId: id, name: next.name, status, addedNotes, removedNotes, modifiedNotes, preservedNotes, clipStatus, controlsChanged, dependenciesChanged, metadataChanged })

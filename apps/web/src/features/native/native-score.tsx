@@ -1,68 +1,115 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { MotionConfig, motion, useReducedMotion } from "motion/react"
-import { ArrowLeft, ArrowRight, Focus, Layers3 } from "lucide-react"
+import { ArrowLeft, ArrowRight, LockKeyhole } from "lucide-react"
 import type { NativeDocument } from "../../lib/api"
 import { Button } from "../../components/ui/button"
-import { compareScoreSection, materializedSectionNotes, motifFamily, projectScoreOverview, sectionClips, ticksPerBar } from "./score"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../components/ui/sheet"
+import { motifFamily, projectScoreOverview, ticksPerBar } from "./score"
+import { advanceConfirmedFrame, barLabel, confirmedChanges, documentEnd, roleNames, type ConfirmedFrame } from "./score-presentation"
+import { ScoreInspector } from "./score-inspector"
+import { ScoreDetailLane } from "./score-detail-lane"
 
-const roleNames: Record<string, string> = { percussion: "Drums", bass: "Bass", melody: "Melody", harmony: "Harmony", texture: "Atmosphere", lead: "Lead", fx: "Accents", source: "Your sounds" }
-const familyTone = (value: string) => Array.from(value).reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4
-const pitchName = (pitch: number) => `${["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"][pitch % 12]}${Math.floor(pitch / 12) - 1}`
-const barLabel = (tick: number, width: number) => `${Math.floor(tick / width) + 1}${tick % width ? ` + ${Number((tick % width / 960).toFixed(2))} beats` : ""}`
+interface Props {
+  document: NativeDocument; identity: string; selectedSectionId: string | null
+  onSelectSection(id: string | null): void; selectedPartId: string | null; onInspectPart(id: string | null): void
+  draft?: boolean; comparisonBefore?: NativeDocument; coordinateReference?: NativeDocument; timelineReference?: NativeDocument
+  animateConfirmed?: boolean; confirmedStepCount?: number; motionScope?: string
+  onChangeSection?(id: string | null): void; onChangePart?(id: string): void; onKeepPart?(id: string): void
+  protectedPartIds?: string[]; visiblePartIds?: string[]; detailOnly?: boolean; replay?: number
+}
 
-interface Props { document: NativeDocument; identity: string; selectedSectionId: string | null; onSelectSection(id: string | null): void; selectedPartId: string | null; onInspectPart(id: string): void; draft?: boolean; comparisonBefore?: NativeDocument; animateConfirmed?: boolean; confirmedStepCount?: number }
+// Snapshot receipt is separate from playback. Same/older receipts and another job never replay.
+function useConfirmedFrame(document: NativeDocument, identity: string, scope: string | undefined, steps = 0) {
+  const [frame, setFrame] = useState<ConfirmedFrame>({ document, identity, scope, steps })
+  useLayoutEffect(() => {
+    setFrame((prior) => advanceConfirmedFrame(prior, { document, identity, scope, steps }))
+  }, [document, identity, scope, steps])
+  return frame
+}
 
-export const NativeScore = memo(function NativeScore({ document, identity, selectedSectionId, onSelectSection, selectedPartId, onInspectPart, draft = false, comparisonBefore, animateConfirmed = false, confirmedStepCount }: Props) {
-  const overview = useMemo(() => projectScoreOverview(document), [document])
-  const beforeOverview = useMemo(() => comparisonBefore ? projectScoreOverview(comparisonBefore) : null, [comparisonBefore])
+export const NativeScore = memo(function NativeScore(props: Props) {
+  const { document: inputDocument, identity, selectedSectionId, onSelectSection, selectedPartId, onInspectPart, draft = false, comparisonBefore, coordinateReference, timelineReference, animateConfirmed = false, confirmedStepCount, motionScope, onChangeSection, onChangePart, onKeepPart, protectedPartIds = [], visiblePartIds, detailOnly, replay = 0 } = props
   const reduced = useReducedMotion()
-  const previous = useRef<{ identity: string; overview: typeof overview; stepCount?: number } | null>(null)
-  const prior = previous.current
-  const changed = animateConfirmed && prior && prior.identity !== identity ? overview.lanes.flatMap((lane) => lane.density.map((count, bar) => ({ partId: lane.partId, name: lane.name, bar, before: prior.overview.lanes.find((item) => item.partId === lane.partId)?.density[bar] ?? 0, after: count }))).filter((item) => item.before !== item.after) : []
-  const animateChanges = Boolean(!reduced && prior && prior.identity !== identity && changed.length <= 120)
-  const activity = changed?.length ? `${confirmedStepCount && prior?.stepCount && confirmedStepCount - prior.stepCount > 1 ? "Several confirmed changes arrived together. " : "Confirmed change: "}${[...new Set(changed.slice(0, 4).map((item) => `${item.name} ${item.after > item.before ? "gained" : "lost"} note starts near bar ${item.bar + 1}`))].join("; ")}${changed.length > 4 ? "; more changes in the score" : ""}.` : null
-  useEffect(() => { previous.current = { identity, overview, stepCount: confirmedStepCount } }, [identity, overview, confirmedStepCount])
-  const section = document.sections.find((item) => item.id === selectedSectionId) ?? null
-  const sectionChanges = useMemo(() => comparisonBefore && section ? compareScoreSection(comparisonBefore, document, section.id) : null, [comparisonBefore, document, section])
-  const [detailStart, setDetailStart] = useState<number | null>(null)
+  const frame = useConfirmedFrame(inputDocument, identity, motionScope, confirmedStepCount)
+  const document = animateConfirmed && frame.scope === motionScope ? frame.document : inputDocument
+  const baseline = animateConfirmed ? frame.before : comparisonBefore
+  const delta = useMemo(() => baseline ? confirmedChanges(baseline, document) : null, [baseline, document])
+  const changedIds = useMemo(() => new Set(delta?.parts.map((part) => part.id)), [delta])
+  const overview = useMemo(() => projectScoreOverview(document), [document])
+  const [detailStart, setDetailStart] = useState<{ section: string; bar: number } | null>(null)
   const [highlightFamily, setHighlightFamily] = useState<string | null>(null)
-  const windowStartBar = section ? Math.min(Math.max(detailStart ?? section.startBar, section.startBar), Math.max(section.startBar, section.endBar - 1)) : 0
-  const windowEndBar = section ? Math.min(section.endBar, windowStartBar + 8) : 0
-  const width = ticksPerBar(document)
-  const windowStart = windowStartBar * width, windowEnd = windowEndBar * width
-  const selectedPart = document.parts.find((part) => part.id === selectedPartId) ?? null
-  const activeFamilies = useMemo(() => [...new Set(document.motifs.map((motif) => motifFamily(document, motif.id)).filter((value): value is string => Boolean(value)))], [document])
+  const [collapsedRoles, setCollapsedRoles] = useState<string[]>([])
+  const [showOverview, setShowOverview] = useState(false)
+  const [detailLimit, setDetailLimit] = useState(8)
+  useEffect(() => { setDetailLimit(8) }, [selectedSectionId])
+  const section = document.sections.find((item) => item.id === selectedSectionId) ?? coordinateReference?.sections.find((item) => item.id === selectedSectionId)
+  const referenceSection = timelineReference?.sections.find((item) => item.id === selectedSectionId) ?? section
+  const startBar = referenceSection ? Math.min(Math.max(detailStart?.section === selectedSectionId ? detailStart.bar : referenceSection.startBar, referenceSection.startBar), referenceSection.endBar - 1) : 0
+  const endBar = referenceSection ? Math.min(referenceSection.endBar, startBar + 8) : 0
+  const width = ticksPerBar(timelineReference ?? document), from = startBar * width, to = endBar * width
+  const selectedPart = document.parts.find((part) => part.id === selectedPartId) ?? coordinateReference?.parts.find((part) => part.id === selectedPartId)
+  const families = useMemo(() => [...new Set(document.motifs.map((motif) => motifFamily(document, motif.id)).filter((value): value is string => Boolean(value)))], [document])
   const familyName = (family: string) => document.motifs.find((motif) => motif.id === family)?.name ?? document.motifs.find((motif) => motif.familyId === family)?.name ?? family
-  return <MotionConfig reducedMotion="user">
-    <div className={`living-score ${draft ? "is-draft" : ""}`} data-score-identity={identity}>
-      <div className="score-legend"><span><i className="legend-density" /> Note starts per bar</span><span><i className="legend-motif" /> Repeated phrase</span><span><i className="legend-clip" /> Sound clip</span><span><i className="legend-focus" /> Focused section</span></div>
-      <div className="score-scroll" tabIndex={0} role="region" aria-label={`${draft ? "Confirmed draft" : "Saved"} arrangement overview; scroll horizontally for all bars`}>
-        <div className="score-canvas">
-          <div className="score-heading-row"><span className="score-part-label">Parts</span><div className="score-section-track" role="group" aria-label="Choose a section">{document.sections.map((item, index) => <button key={item.id} type="button" className="score-section-choice" style={{ flexGrow: item.endBar - item.startBar }} aria-pressed={selectedSectionId === item.id} onClick={() => { setDetailStart(null); onSelectSection(selectedSectionId === item.id ? null : item.id) }}><small>{String(index + 1).padStart(2, "0")} · bars {item.startBar + 1}–{item.endBar}</small><strong>{item.name}</strong></button>)}</div></div>
-          {overview.lanes.map((lane) => <div className="score-lane" key={lane.partId}>
-            <button type="button" className="score-part-label" onClick={() => onInspectPart(lane.partId)} aria-label={`Inspect ${lane.name}, ${roleNames[lane.role] ?? lane.role}, ${lane.totalNoteOnsets} note starts and ${lane.totalClips} clips`}><small>{roleNames[lane.role] ?? lane.role}</small><strong>{lane.name}</strong></button>
+  const parts = useMemo(() => {
+    const ordered = [...(timelineReference?.parts ?? document.parts)]
+    for (const part of coordinateReference?.parts ?? []) if (!ordered.some((item) => item.id === part.id)) ordered.push(part)
+    for (const part of document.parts) if (!ordered.some((item) => item.id === part.id)) ordered.push(part)
+    return ordered.map((part) => document.parts.find((item) => item.id === part.id) ?? part).filter((part) => !visiblePartIds || visiblePartIds.includes(part.id))
+  }, [document, coordinateReference, timelineReference, visiblePartIds])
+  const inspectorReturn = useRef<HTMLElement | null>(null)
+  const inspectorTitle = useRef<HTMLHeadingElement | null>(null)
+  const inspect = (id: string) => { inspectorReturn.current = window.document.activeElement as HTMLElement; onInspectPart(id) }
+  const [activeMotion, setActiveMotion] = useState(false)
+  useEffect(() => {
+    if (!animateConfirmed && !replay || reduced || !baseline) { setActiveMotion(false); return }
+    setActiveMotion(true)
+    const timer = window.setTimeout(() => setActiveMotion(false), 650)
+    return () => window.clearTimeout(timer)
+  }, [frame.identity, replay, animateConfirmed, reduced, baseline])
+  const animate = !reduced && activeMotion
+  const changeKey = `${frame.identity}:${replay}`
+
+  return <MotionConfig reducedMotion="user"><div className={`living-score ${draft ? "is-draft" : ""}`} data-score-identity={identity}>
+    {!detailOnly ? <>
+      <div className="score-section-nav" role="group" aria-label="Choose a section">
+        <Button variant={!section ? "default" : "outline"} size="sm" onClick={() => onSelectSection(null)} aria-pressed={!section}>Whole piece</Button>
+        {document.sections.map((item, index) => <button key={item.id} type="button" className="score-section-choice" aria-pressed={selectedSectionId === item.id} onClick={() => onSelectSection(item.id)}><small>{String(index + 1).padStart(2, "0")} · bars {item.startBar + 1}–{item.endBar}</small><strong>{item.name}</strong></button>)}
+      </div>
+      {section ? <Button className="score-overview-toggle" variant="ghost" size="sm" aria-expanded={showOverview} onClick={() => setShowOverview(!showOverview)}>{showOverview ? "Hide whole-piece overview" : "Show whole-piece overview"}</Button> : null}
+      {!section || showOverview ? <>
+      {document.parts.length > 12 ? <div className="score-role-toggles" role="group" aria-label="Visible role lanes">{[...new Set(document.parts.map((part) => part.role))].map((role) => <Button size="sm" variant="ghost" aria-pressed={!collapsedRoles.includes(role)} key={role} onClick={() => setCollapsedRoles((prior) => prior.includes(role) ? prior.filter((item) => item !== role) : [...prior, role])}>{roleNames[role] ?? role} {collapsedRoles.includes(role) ? "+" : "−"}</Button>)}</div> : null}
+      <div className="score-scroll" tabIndex={0} role="region" aria-label={`${draft ? "Confirmed draft" : "Saved"} arrangement overview`}><div className="score-canvas">
+        <div className="score-heading-row"><span className="score-part-label">Parts · {document.bars} bars</span><div className="score-form-ruler">{document.sections.map((item, index) => <span key={item.id} style={{ left: `${item.startBar / document.bars * 100}%`, width: `${(item.endBar - item.startBar) / document.bars * 100}%` }}>{String(index + 1).padStart(2, "0")}</span>)}</div></div>
+        {overview.lanes.filter((lane) => !collapsedRoles.includes(lane.role)).map((lane) => <div className="score-lane" key={lane.partId} data-selected={selectedPartId === lane.partId}>
+          <button type="button" className="score-part-label" onClick={() => inspect(lane.partId)} aria-label={`Inspect ${lane.name}, ${roleNames[lane.role] ?? lane.role}, ${lane.totalNoteOnsets} note starts and ${lane.totalClips} clips`} aria-pressed={selectedPartId === lane.partId}><small>{roleNames[lane.role] ?? lane.role}</small><strong>{lane.name}</strong></button>
+          <motion.div className="score-lane-picture" key={`${lane.partId}:${changeKey}`} data-confirmed-change={changedIds.has(lane.partId) || undefined} initial={animate && changedIds.has(lane.partId) ? { backgroundColor: "#e8cfa2" } : false} animate={{ backgroundColor: animate && changedIds.has(lane.partId) ? "#e8cfa2" : "#fffdf7" }} transition={{ duration: 0.55 }}>
             <svg className="score-lane-svg" viewBox="0 0 1000 48" preserveAspectRatio="none" role="img" aria-label={`${lane.name}: ${lane.totalNoteOnsets} note starts across ${document.bars} bars; ${lane.blocks.length} phrase or clip placements`}>
               {document.sections.map((item) => <rect key={item.id} x={item.startBar / document.bars * 1000} y="0" width={(item.endBar - item.startBar) / document.bars * 1000} height="48" className={selectedSectionId === item.id ? "score-section-active" : "score-section-area"} />)}
-              {lane.density.map((count, bar) => { const previousCount = beforeOverview?.lanes.find((item) => item.partId === lane.partId)?.density[bar] ?? 0; const height = Math.min(26, 5 + Math.log2(count + 1) * 5); return <g key={bar}>{previousCount > count ? <rect x={(bar + 0.12) / document.bars * 1000} y={40 - Math.min(26, 5 + Math.log2(previousCount + 1) * 5)} width={Math.max(2, 0.76 / document.bars * 1000)} height={Math.min(26, 5 + Math.log2(previousCount + 1) * 5)} className="score-density-removed"><title>Bar {bar + 1}: {previousCount - count} fewer note starts than Before</title></rect> : null}{count ? <motion.rect key={`${bar}:${count}`} x={(bar + 0.12) / document.bars * 1000} y={40 - height} width={Math.max(2, 0.76 / document.bars * 1000)} height={height} className={`score-density role-${lane.role} ${beforeOverview && previousCount < count ? "score-density-added" : ""}`} initial={animateChanges && changed.some((item) => item.partId === lane.partId && item.bar === bar) ? { opacity: 0.3 } : false} animate={{ opacity: 1 }} transition={{ duration: 0.32 }}><title>Bar {bar + 1}: {count} note {count === 1 ? "start" : "starts"}{beforeOverview ? `, ${count - previousCount >= 0 ? "+" : ""}${count - previousCount} from Before` : ""}</title></motion.rect> : null}</g> })}
-              {lane.blocks.slice(0, 120).map((block, index) => <rect key={block.key} x={block.startTick / (document.bars * width) * 1000} y={block.kind === "motif" ? 4 + index % 2 * 5 : 3} width={Math.max(2, (block.endTick - block.startTick) / (document.bars * width) * 1000)} height={block.kind === "motif" ? 7 : 12} rx="3" className={`score-block ${block.kind} ${block.familyId ? `family-${familyTone(block.familyId)}` : ""} ${highlightFamily && block.familyId !== highlightFamily ? "is-muted" : ""}`}><title>{block.label}, bars {barLabel(block.startTick, width)}–{barLabel(block.endTick, width)}{block.derivedFromMotifId ? "; related variation" : ""}</title></rect>)}
+              {lane.density.map((count, bar) => count ? <rect key={bar} x={(bar + 0.12) / document.bars * 1000} y={40 - Math.min(26, 5 + Math.log2(count + 1) * 5)} width={Math.max(1, 0.76 / document.bars * 1000)} height={Math.min(26, 5 + Math.log2(count + 1) * 5)} className={`score-density role-${lane.role}`}><title>Bar {bar + 1}: {count} note starts</title></rect> : null)}
+              {lane.blocks.slice(0, 120).map((block, index) => <rect key={block.key} x={block.startTick / documentEnd(document) * 1000} y={block.kind === "motif" ? 4 + index % 2 * 5 : 3} width={Math.max(2, (block.endTick - block.startTick) / documentEnd(document) * 1000)} height={block.kind === "motif" ? 7 : 12} rx="3" className={`score-block ${block.kind} family-${Math.max(0, families.indexOf(block.familyId ?? "")) % 4} ${highlightFamily && block.familyId !== highlightFamily ? "is-muted" : ""}`}><title>{block.label} · {block.familyId ? `F${families.indexOf(block.familyId) + 1}` : "clip"} · bars {barLabel(block.startTick, width)}–{barLabel(block.endTick, width)}{block.derivedFromMotifId ? " · variation" : ""}</title></rect>)}
             </svg>
-          </div>)}
-        </div>
+          </motion.div>
+        </div>)}
+      </div></div>
+      <p className="score-caption">{overview.noteOnsets.toLocaleString()}{overview.truncated ? "+" : ""} note starts · height shows note density, not loudness. Upper ribbons are phrases and sound clips.{overview.lanes.some((lane) => lane.blocks.length > 120) ? " First 120 placements shown per part." : ""}</p>
+      </> : null}
+      {families.length ? <details className="score-theme-disclosure"><summary>Follow a recurring phrase · {families.length} families</summary><div className="score-themes" role="group" aria-label="Highlight recurring phrases">{families.map((family, index) => <Button key={family} variant={highlightFamily === family ? "default" : "outline"} size="sm" aria-pressed={highlightFamily === family} onClick={() => setHighlightFamily(highlightFamily === family ? null : family)}>F{index + 1} · {familyName(family)}</Button>)}</div>{highlightFamily ? <p>{document.motifs.filter((motif) => motifFamily(document, motif.id) === highlightFamily).map((motif) => `${motif.name}${motif.derivedFromMotifId ? " (variation)" : " (original)"}`).join(" · ")}</p> : null}</details> : null}
+    </> : null}
+    {animateConfirmed && delta && (delta.parts.length || delta.formChanged) ? <div className="score-activity" role="status"><strong>Confirmed update</strong>{delta.formChanged ? " · form or tempo changed" : ""}<span>{delta.parts.length} {delta.parts.length === 1 ? "part" : "parts"} updated together: {delta.parts.slice(0, 4).map((part) => `${part.name} (${part.kinds.join(", ")})`).join("; ")}{delta.parts.length > 4 ? `; ${delta.parts.length - 4} more` : ""}.</span></div> : null}
+    {section && referenceSection ? <div className="score-detail" aria-label={`${section.name} details`}>
+      <div className="score-detail-heading"><div><small>INSPECTING · BARS {referenceSection.startBar + 1}–{referenceSection.endBar}</small><h3>{section.name}</h3><p>{section.intent}</p></div>{onChangeSection ? <Button variant="outline" size="sm" onClick={() => onChangeSection(section.id)}>Change this section</Button> : null}</div>
+      <div className="score-window-controls"><span>Bars {startBar + 1}–{endBar} · pitch labels on each part</span><div><Button variant="outline" size="sm" aria-label="Previous bars" disabled={startBar <= referenceSection.startBar} onClick={() => setDetailStart({ section: section.id, bar: Math.max(referenceSection.startBar, startBar - 8) })}><ArrowLeft className="size-4" /></Button><Button variant="outline" size="sm" aria-label="Next bars" disabled={endBar >= referenceSection.endBar} onClick={() => setDetailStart({ section: section.id, bar: endBar })}><ArrowRight className="size-4" /></Button></div></div>
+      <div className="score-detail-lanes"><div className="score-detail-ruler"><span>Part / pitch</span><div>{Array.from({ length: endBar - startBar }, (_, index) => <span key={index}>{startBar + index + 1}</span>)}</div><span>Events</span></div>
+        {parts.slice(0, detailLimit).map((part, index) => <ScoreDetailLane key={part.id} document={document} reference={coordinateReference ?? baseline} before={baseline} part={part} from={from} to={to} width={width} family={highlightFamily} inspect={() => inspect(part.id)} animate={animate && index < 4} changeKey={changeKey} />)}
+        {!parts.length ? <p className="score-empty">No changed parts in this section. Include unchanged parts to inspect it.</p> : null}
       </div>
-      <p className="score-caption">{overview.noteOnsets.toLocaleString()}{overview.truncated ? "+" : ""} note starts mapped from saved notes and phrase placements · {document.parts.length} parts. Height counts onsets, not loudness. {overview.lanes.some((lane) => lane.blocks.length > 120) ? "Some repeated placements are summarized at this scale." : ""}</p>
-      {activity ? <p className="score-activity" role="status">{activity}</p> : null}
-      {activeFamilies.length ? <div className="score-themes" role="group" aria-label="Highlight recurring phrases"><span>Follow a phrase</span>{activeFamilies.slice(0, 8).map((family) => <Button key={family} variant={highlightFamily === family ? "default" : "outline"} size="sm" aria-pressed={highlightFamily === family} onClick={() => setHighlightFamily(highlightFamily === family ? null : family)}>{familyName(family)}</Button>)}{activeFamilies.length > 8 ? <span>+{activeFamilies.length - 8} more in part details</span> : null}</div> : null}
-      {section ? <div className="score-detail" aria-label={`${section.name} details`}>
-        <div className="score-detail-heading"><div><small>FOCUS · BARS {section.startBar + 1}–{section.endBar}</small><h3>{section.name}</h3><p>{section.intent || "Inspect this section's notes, phrases, clips and changing controls."}</p></div><Button variant="outline" size="sm" onClick={() => { setDetailStart(null); onSelectSection(null) }}><Focus className="size-4" /> Whole piece</Button></div>
-        <div className="score-window-controls"><span>Inspecting bars {windowStartBar + 1}–{windowEndBar} of {section.endBar}</span><div><Button variant="outline" size="sm" aria-label="Previous bars" disabled={windowStartBar <= section.startBar} onClick={() => setDetailStart(Math.max(section.startBar, windowStartBar - 8))}><ArrowLeft className="size-4" /></Button><Button variant="outline" size="sm" aria-label="Next bars" disabled={windowEndBar >= section.endBar} onClick={() => setDetailStart(windowEndBar)}><ArrowRight className="size-4" /></Button></div></div>
-        <div className="score-detail-lanes">{document.parts.map((part) => { const material = materializedSectionNotes(document, part.id, windowStart, windowEnd, 120); const clips = sectionClips(document, part.id, windowStart, windowEnd); if (!material.total && !clips.length && !part.automation.some((curve) => curve.points.some((point) => point.tick >= windowStart && point.tick < windowEnd))) return null; const difference = sectionChanges?.parts.find((item) => item.partId === part.id); const addedKeys = new Set(difference?.addedNotes.map((note) => note.key)); const modifiedKeys = new Set(difference?.modifiedNotes.map((pair) => pair.after.key)); const ghosts = [...(difference?.removedNotes ?? []), ...(difference?.modifiedNotes.map((pair) => pair.before) ?? [])].filter((note) => note.startTick < windowEnd && note.startTick + note.durationTicks > windowStart).slice(0, 120); const pitches = [...material.notes, ...ghosts].map((note) => note.pitch); const low = Math.min(...pitches), high = Math.max(...pitches); return <div className="score-detail-lane" key={part.id}><button type="button" onClick={() => onInspectPart(part.id)}><small>{roleNames[part.role] ?? part.role}</small><strong>{part.name}</strong></button><svg viewBox="0 0 1000 56" preserveAspectRatio="none" role="img" aria-label={`${part.name}: ${material.total} notes, ${clips.length} clips in bars ${windowStartBar + 1}–${windowEndBar}${difference ? `; ${difference.addedNotes.length} added, ${difference.removedNotes.length} removed, ${difference.modifiedNotes.length} modified notes` : ""}`}>
-          {Array.from({ length: windowEndBar - windowStartBar + 1 }, (_, index) => <line key={index} x1={index / (windowEndBar - windowStartBar) * 1000} x2={index / (windowEndBar - windowStartBar) * 1000} y1="0" y2="56" className="score-bar-line" />)}
-          {clips.map((clip) => <rect key={clip.key} x={Math.max(0, (clip.startTick - windowStart) / (windowEnd - windowStart) * 1000)} y="36" width={Math.max(2, Math.min(1000, (clip.startTick + clip.durationTicks - windowStart) / (windowEnd - windowStart) * 1000) - Math.max(0, (clip.startTick - windowStart) / (windowEnd - windowStart) * 1000))} height="15" rx="3" className="score-detail-clip"><title>{clip.label} · source {clip.sourceStartSeconds.toFixed(2)}–{(clip.sourceStartSeconds + clip.sourceDurationSeconds).toFixed(2)} seconds · timeline bars {barLabel(clip.startTick, width)}–{barLabel(clip.startTick + clip.durationTicks, width)} · {clip.playbackMode ?? "once"}</title></rect>)}
-          {ghosts.map((note) => <rect key={`ghost:${note.key}`} x={Math.max(0, (note.startTick - windowStart) / (windowEnd - windowStart) * 1000)} y={29 - (note.pitch - low) / Math.max(1, high - low) * 24} width={Math.max(2, Math.min(1000, (note.startTick + note.durationTicks - windowStart) / (windowEnd - windowStart) * 1000) - Math.max(0, (note.startTick - windowStart) / (windowEnd - windowStart) * 1000))} height="5" rx="2" className="score-note-removed"><title>{modifiedKeys.has(note.key) ? "Previous shape of modified note" : "Removed note"}: {pitchName(note.pitch)} at bar {barLabel(note.startTick, width)}</title></rect>)}
-          {material.notes.map((note) => <rect key={note.key} x={Math.max(0, (note.startTick - windowStart) / (windowEnd - windowStart) * 1000)} y={pitches.length ? 29 - (note.pitch - low) / Math.max(1, high - low) * 24 : 20} width={Math.max(2, Math.min(1000, (note.startTick + note.durationTicks - windowStart) / (windowEnd - windowStart) * 1000) - Math.max(0, (note.startTick - windowStart) / (windowEnd - windowStart) * 1000))} height="5" rx="2" className={`score-detail-note role-${part.role} ${addedKeys.has(note.key) ? "score-note-added" : ""} ${modifiedKeys.has(note.key) ? "score-note-modified" : ""} ${highlightFamily && note.familyId !== highlightFamily ? "is-muted" : ""}`}><title>{addedKeys.has(note.key) ? "Added" : modifiedKeys.has(note.key) ? "Modified" : "Retained"} {pitchName(note.pitch)} · bar {barLabel(note.startTick, width)} · {note.durationTicks / 960} beats · velocity {Math.round(note.velocity * 100)}%{note.motifId ? ` · ${document.motifs.find((item) => item.id === note.motifId)?.name}` : ""}</title></rect>)}
-        </svg><span className="score-detail-count">{material.total}{material.truncated ? "+" : ""} notes{clips.length ? ` · ${clips.length} clips` : ""}</span></div> })}</div>
-        {selectedPart ? <div className="score-inspector" aria-label={`${selectedPart.name} musical facts`}><div className="score-inspector-heading"><Layers3 className="size-4" /><strong>{selectedPart.name}</strong><span>{roleNames[selectedPart.role] ?? selectedPart.role} · {selectedPart.device.type}</span></div><p>Level {Math.round(selectedPart.gain * 100)}% · balance {selectedPart.pan} · {selectedPart.groupId ? `routed through ${document.groups?.find((group) => group.id === selectedPart.groupId)?.name ?? selectedPart.groupId}` : "main output"}{selectedPart.sends?.length ? ` · ${selectedPart.sends.length} shared send(s)` : ""}</p><div className="score-inspector-grid"><div><b>Notes & phrases</b><ul>{materializedSectionNotes(document, selectedPart.id, section.startBar * width, section.endBar * width, 12).notes.map((note) => <li key={note.key}>{pitchName(note.pitch)} · bar {barLabel(note.startTick, width)} · {Number((note.durationTicks / 960).toFixed(2))} beats · velocity {Math.round(note.velocity * 100)}%{note.motifId ? ` · ${document.motifs.find((item) => item.id === note.motifId)?.name ?? "phrase"}` : ""}</li>)}</ul></div><div><b>Clips & controls</b><ul>{sectionClips(document, selectedPart.id, section.startBar * width, section.endBar * width).slice(0, 12).map((clip) => <li key={clip.key}>{clip.label} · bar {barLabel(clip.startTick, width)} · source {clip.sourceStartSeconds.toFixed(2)}–{(clip.sourceStartSeconds + clip.sourceDurationSeconds).toFixed(2)} s · {clip.playbackMode ?? "once"}{clip.playbackRate ? ` · ${clip.playbackRate}×` : ""}{clip.stretchMode ? ` · ${clip.stretchMode}` : ""}</li>)}{selectedPart.automation.map((curve) => <li key={curve.id}>{curve.target} · {curve.points.length} points · {curve.points.map((point) => `${barLabel(point.tick, width)}: ${point.value} (${point.interpolation ?? "step"})`).join("; ")}</li>)}{selectedPart.effects.map((effect) => <li key={effect.id}>{effect.type} · {Object.entries(effect.parameters).map(([key, value]) => `${key} ${value}`).join(", ")}</li>)}</ul></div></div><p className="score-inspector-note">Values are stored control values, not measured sound. The first 12 note and clip facts are shown here; use the timeline to inspect the selected bars.</p></div> : <p className="score-inspector-hint">Choose a part label to inspect exact note timing, phrase lineage, clip source intervals, controls and routing.</p>}
-      </div> : null}
-    </div>
-  </MotionConfig>
-}, (before, after) => before.identity === after.identity && before.selectedSectionId === after.selectedSectionId && before.selectedPartId === after.selectedPartId && before.comparisonBefore === after.comparisonBefore && before.draft === after.draft && before.animateConfirmed === after.animateConfirmed)
+      {parts.length > detailLimit ? <Button className="mt-2" variant="outline" size="sm" onClick={() => setDetailLimit((limit) => limit + 8)}>Show more score parts ({parts.length - detailLimit} remaining)</Button> : null}
+      <p className="score-caption">Up to 120 notes per part in this window. Select a part for exact values. Dashed outlines show previous notes; gold outlines show additions.</p>
+    </div> : <p className="score-inspector-hint">Choose a section for note detail, or a part name for its sounds and musical facts.</p>}
+    <Sheet open={Boolean(selectedPart)} onOpenChange={(open) => { if (!open) onInspectPart(null) }}><SheetContent className="score-inspector-sheet" initialFocus={inspectorTitle} finalFocus={inspectorReturn}>
+      <SheetHeader><SheetTitle ref={inspectorTitle} tabIndex={-1}>{selectedPart?.name ?? "Part"}</SheetTitle><SheetDescription>{section?.name ?? "Whole piece"} · inspecting only; your change scope stays separate.</SheetDescription></SheetHeader>
+      {selectedPart ? <><ScoreInspector document={document} part={selectedPart} from={section ? from : 0} to={section ? to : documentEnd(document)} />
+        {onChangePart || onKeepPart ? <div className="score-inspector-actions">{onKeepPart ? <Button variant="outline" aria-pressed={protectedPartIds.includes(selectedPart.id)} onClick={() => onKeepPart(selectedPart.id)}><LockKeyhole className="size-4" />{protectedPartIds.includes(selectedPart.id) ? "Allow changes" : "Keep unchanged"}</Button> : null}{onChangePart ? <Button disabled={protectedPartIds.includes(selectedPart.id)} onClick={() => { inspectorReturn.current = window.document.getElementById("native-direction"); onInspectPart(null); onChangePart(selectedPart.id) }}>Change this part</Button> : null}</div> : null}</> : null}
+    </SheetContent></Sheet>
+  </div></MotionConfig>
+})

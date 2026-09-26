@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { NativeDocument, NativePart } from "../../lib/api"
 import { automationAt, compareScoreSection, materializedSectionNotes, projectScoreOverview } from "./score"
+import { advanceConfirmedFrame, confirmedChanges, controlPath, noteGeometry, scoreWindow } from "./score-presentation"
 
 const instrument = (id: string, role = "melody"): NativePart => ({ id, name: id, role, device: { type: "heisenberg", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] })
 const fixture = (): NativeDocument => ({ schemaVersion: 2, ppq: 960, title: "Independent score", direction: "A returning theme", currentObjective: "Inspect", assumptions: [], tempoBpm: 120, meter: { numerator: 4, denominator: 4 }, bars: 8,
@@ -8,6 +9,62 @@ const fixture = (): NativeDocument => ({ schemaVersion: 2, ppq: 960, title: "Ind
   parts: [{ ...instrument("lead"), notes: [{ id: "free", startTick: 0, durationTicks: 480, pitch: 72, velocity: 0.8 }], placements: [{ id: "theme-first", motifId: "theme", startTick: 3840, repeats: 2, transpose: 2 }, { id: "theme-return", motifId: "theme", startTick: 15360, repeats: 1, transpose: 0 }] },
     { ...instrument("wash", "source"), device: { type: "audio", parameters: {} }, sourceRegions: [{ id: "loop", assetId: "00000000-0000-4000-8000-000000000001", assetHash: "a".repeat(64), rights: "Owned", startTick: 11520, durationTicks: 7680, sourceStartSeconds: 0, sourceDurationSeconds: 2, playbackMode: "loop", gain: 0.6 }] }],
   motifs: [{ id: "theme", partId: "lead", name: "Theme", lengthTicks: 1920, notes: [{ id: "one", startTick: 0, durationTicks: 480, pitch: 60, velocity: 0.7 }, { id: "two", startTick: 960, durationTicks: 480, pitch: 64, velocity: 0.6 }] }], protectedPartIds: [], protectedMotifIds: [], sourceAssetIds: ["00000000-0000-4000-8000-000000000001"], audio: { state: "deferred", revisionId: null, assetHash: null } })
+
+describe("score presentation never substitutes counts for musical changes", () => {
+  it("detects same-density pitch, timing, duration, phrase, clip and control edits", () => {
+    const before = fixture()
+    for (const field of ["pitch", "startTick", "durationTicks"] as const) {
+      const after = structuredClone(before); after.parts[0].notes[0][field] += 1
+      expect(projectScoreOverview(before).lanes[0].density).toEqual(projectScoreOverview(after).lanes[0].density)
+      expect(confirmedChanges(before, after).parts[0]).toMatchObject({ id: "lead", kinds: ["notes / phrases"] })
+    }
+    const after = structuredClone(before)
+    after.motifs[0].notes[0].pitch += 12
+    after.parts[1].sourceRegions[0].sourceStartSeconds += 0.5
+    after.parts[1].automation.push({ id: "fade", target: "gain", points: [{ tick: 0, value: 0.2 }, { tick: 7680, value: 0.8 }] })
+    expect(confirmedChanges(before, after).parts).toEqual([{ id: "lead", name: "lead", kinds: ["notes / phrases"] }, { id: "wash", name: "wash", kinds: ["clips", "sound / controls"] }])
+  })
+  it("keeps coordinates identical across before/after and shows real pitch and duration movement", () => {
+    const before = fixture(), after = structuredClone(before)
+    after.parts[0].notes[0].pitch = 84; after.parts[0].notes[0].startTick = 960; after.parts[0].notes[0].durationTicks = 1920
+    const a = scoreWindow(before, after, "lead", 0, 15360), b = scoreWindow(after, before, "lead", 0, 15360)
+    expect([a.low, a.high]).toEqual([b.low, b.high])
+    const old = noteGeometry(a.current.notes[0], 0, 15360, a.low, a.high), next = noteGeometry(b.current.notes[0], 0, 15360, b.low, b.high)
+    expect(next.x).toBeGreaterThan(old.x); expect(next.y).toBeLessThan(old.y); expect(next.width).toBe(old.width * 4)
+  })
+  it("retains confirmed snapshots for duplicate/late receipts but resets on job changes and reload", () => {
+    const document = fixture(), nextDocument = structuredClone(document); nextDocument.parts[0].notes[0].pitch++
+    const first = { identity: "one", scope: "job-a", steps: 2, document }
+    const next = advanceConfirmedFrame(first, { ...first, identity: "two", steps: 5, document: nextDocument })
+    expect(next.before).toBe(document)
+    expect(advanceConfirmedFrame(next, { ...next })).toBe(next)
+    expect(advanceConfirmedFrame(next, first)).toBe(next)
+    expect(advanceConfirmedFrame(next, { ...first, scope: "job-b" }).before).toBeUndefined()
+    expect(advanceConfirmedFrame(first, first).before).toBeUndefined()
+  })
+  it("does not draw invented linear ramps for stepped or unsupported curves", () => {
+    const points = [{ tick: 0, value: 0.2, interpolation: "step" as const }, { tick: 3840, value: 0.8 }]
+    expect(controlPath({ id: "level", target: "gain", points }, 7680).path).toContain("H50 V5")
+    expect(controlPath({ id: "level", target: "gain", points: [{ ...points[0], interpolation: "sloped" }, points[1]] }, 7680).path).not.toContain("L")
+  })
+  it("reports removed parts and form changes without fabricating a sequence", () => {
+    const before = fixture(), after = structuredClone(before); after.parts.pop(); after.tempoBpm++
+    expect(confirmedChanges(before, after)).toMatchObject({ formChanged: true, parts: [{ id: "wash", kinds: ["removed part"] }] })
+  })
+  it("highlights shared controls only for connected parts, including parent groups", () => {
+    const before = fixture()
+    before.groups = [{ id: "bus", name: "Shared space", gain: 0.7, pan: 0 }, { id: "child", name: "Lead bus", gain: 1, pan: 0, parentId: "bus" }]
+    before.parts[0].groupId = "child"
+    const after = structuredClone(before); after.groups![0].gain = 0.4
+    expect(confirmedChanges(before, after).parts.map((part) => part.id)).toEqual(["lead"])
+    expect(compareScoreSection(before, after, "opening").parts[0]).toMatchObject({ status: "changed", dependenciesChanged: true })
+    expect(compareScoreSection(before, after, "opening").parts[1]?.status).toBe("preserved")
+    after.groups![0].gain = 0.7
+    after.groups![0].automation = [{ id: "parent-fade", target: "gain", points: [{ tick: 0, value: .2, interpolation: "step" }, { tick: 15360, value: .7 }] }]
+    expect(compareScoreSection(before, after, "opening").parts[0]).toMatchObject({ status: "changed", controlsChanged: true })
+    expect(compareScoreSection(before, after, "return").parts[0]?.status).toBe("preserved")
+  })
+})
 
 describe("canonical score projection", () => {
   it("places free and repeated transposed motif notes at actual ticks and pitches", () => {

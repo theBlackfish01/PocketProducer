@@ -6,10 +6,11 @@ interface RoomHeroProps {
   description: string
   meta?: string
   actions?: ReactNode
+  compact?: boolean
 }
 
-export function RoomHero({ status, title, description, meta, actions }: RoomHeroProps) {
-  return <header className={`room-hero session-header ${title.length > 34 ? "room-hero-long" : ""}`}>
+export function RoomHero({ status, title, description, meta, actions, compact = false }: RoomHeroProps) {
+  return <header className={`room-hero session-header ${compact ? "room-hero-compact" : ""} ${title.length > 34 ? "room-hero-long" : ""}`}>
     <div className="room-hero-art" aria-hidden="true"><span className="hero-orbit" /><span className="hero-sun" /><span className="hero-hill" /></div>
     <div className="room-hero-content">
       <div className="eyebrow"><span className="status-dot" /> {status}</div>
