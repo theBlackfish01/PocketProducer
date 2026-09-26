@@ -9,6 +9,7 @@ import { NATIVE_MAPPING_VERSION } from "./adapter.js";
 import type { NativeSampleResources } from "./adapter.js";
 import { jobNativeRunLimits, minimumNextNativeReservationUsd, nativeProfileSchema, nativeRunLimits, nativeRunLimitsSchema, originalNativeRequest } from "./profile.js";
 import { nativePlanSchema, nativeStageSchema, type NativePlan, type NativeStage } from "./plan.js";
+import { appendPublicActivity } from "./activity.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
@@ -45,6 +46,20 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     }
     const project = await client.query("SELECT id FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [input.projectId, input.ownerId]);
     if (project.rowCount !== 1) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
+    // Recheck receipts after waiting for the room lock: concurrent identical keys
+    // must return the accepted command rather than fail the active-request guard.
+    const raced = await client.query<{ id: string; request: Record<string, unknown> }>("SELECT id,request FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND idempotency_key=$4", [input.ownerId, input.projectId, input.kind, input.idempotencyKey]);
+    if (raced.rows[0]) {
+      const prior = { ...raced.rows[0].request }; delete prior._nativeRun; delete prior._nativeRunCurrent;
+      if (canonicalHash({ ...prior, profile: prior.profile ?? "standard" }) !== canonicalHash({ ...input.request, profile: input.request.profile ?? "standard" })) throw Object.assign(new Error("Idempotency key reused with a different request"), { statusCode: 409 });
+      await client.query("COMMIT"); return { id: raced.rows[0].id, duplicate: true };
+    }
+    if (input.kind !== "native-sync") {
+      const competing = await client.query("SELECT 1 FROM job WHERE owner_id=$1 AND project_id=$2 AND kind IN ('native-generation','native-revision') AND state IN ('queued','running','cancel_requested','needs_attention') LIMIT 1", [input.ownerId, input.projectId]);
+      if (competing.rowCount) throw Object.assign(new Error("A request is already active or waiting for your decision. Open Producer to continue it."), { statusCode: 409 });
+      const uncertain = await client.query("SELECT 1 FROM effect e JOIN job j ON j.id=e.job_id WHERE j.project_id=$1 AND j.owner_id=$2 AND j.kind IN ('native-generation','native-revision') AND (e.cost_status='unknown' OR e.state IN ('dispatched','uncertain')) AND e.step<>'native-producer-result' LIMIT 1", [input.projectId, input.ownerId]);
+      if (uncertain.rowCount) throw Object.assign(new Error("An earlier request has an uncertain outcome. Review it before starting another."), { statusCode: 409 });
+    }
     const current = await head(client, input.ownerId, input.projectId, true);
     if (current !== input.expectedHeadId) throw Object.assign(new Error("Native head changed; refresh before continuing"), { statusCode: 409 });
     if (input.kind === "native-generation" && current) throw Object.assign(new Error("This room already has a native construction; revise it instead"), { statusCode: 409 });
@@ -75,6 +90,17 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     const id = inserted.rows[0]!.id;
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,1,'accepted',$2)", [id, { message: "Native construction request accepted", expectedNativeHeadId: current }]);
     await client.query("INSERT INTO outbox(job_id,topic) VALUES($1,$2)", [id, `job.${input.kind}`]);
+    const baseDocument = current ? (await client.query<{ document: unknown }>("SELECT document FROM native_revision WHERE id=$1 AND owner_id=$2 AND project_id=$3", [current, input.ownerId, input.projectId])).rows[0]?.document : null;
+    const base = baseDocument ? nativeDocumentSchema.parse(baseDocument) : null;
+    const desired = input.request.protectionChange && typeof input.request.protectionChange === "object" && "desiredPartIds" in input.request.protectionChange && Array.isArray(input.request.protectionChange.desiredPartIds) ? input.request.protectionChange.desiredPartIds : base?.protectedPartIds ?? [];
+    const kept = base?.parts.filter((part) => desired.includes(part.id)) ?? [];
+    const scope = [base?.sections.find((section) => section.id === input.request.targetSectionId)?.name ?? "Whole piece", base?.parts.find((part) => part.id === input.request.targetPartId)?.name, kept.length ? `Asked to keep ${kept.map((part) => part.name).join(", ")}` : null].filter(Boolean).join(" · ").slice(0, 1_200);
+    if (input.kind !== "native-sync") await appendPublicActivity(client, { ...input, jobId: id }, `request:${id}`, {
+      version: 1, kind: "request", text: typeof input.request.direction === "string" ? input.request.direction.slice(0, 32_768) : "", baseRevisionId: current,
+      profile: nativeProfileSchema.parse(input.request.profile ?? "standard"), sourceIds: assetIds as string[], keptPartIds: kept.map((part) => part.id), scope,
+      ...(typeof input.request.targetSectionId === "string" ? { sectionId: input.request.targetSectionId } : {}),
+      ...(typeof input.request.targetPartId === "string" ? { partId: input.request.targetPartId } : {}),
+    });
     await client.query("COMMIT");
     return { id, duplicate: false };
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -87,6 +113,8 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     await client.query("BEGIN");
     const project = await client.query("SELECT 1 FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [projectId, ownerId]);
     if (!project.rowCount) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
+    const activeConstruction = await client.query("SELECT 1 FROM job WHERE project_id=$1 AND owner_id=$2 AND id<>$3 AND kind IN ('native-generation','native-revision') AND state IN ('queued','running','cancel_requested') LIMIT 1", [projectId, ownerId, jobId]);
+    if (activeConstruction.rowCount) throw Object.assign(new Error("Another construction request is active in this session"), { statusCode: 409 });
     const result = await client.query<{ kind: string; state: string; error_code: string | null; error_message: string | null; request: Record<string, unknown> }>("SELECT kind,state,error_code,error_message,request FROM job WHERE id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [jobId, ownerId, projectId]);
     const job = result.rows[0];
     if (!job) throw Object.assign(new Error("Request not found"), { statusCode: 404 });
@@ -111,6 +139,7 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     await client.query("UPDATE job SET state='queued',stage=NULL,error_code=NULL,error_message=NULL,deadline_at=now()+make_interval(secs=>$2),updated_at=now() WHERE id=$1", [jobId, limits?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'continued',$2 FROM job WHERE id=$1", [jobId, { message: "Continuing confirmed native work under the original request and budget" }]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
+    await appendPublicActivity(client, { ownerId, projectId, jobId }, `continued:${jobId}:${randomUUID()}`, { version: 1, kind: "continued", text: "Continuing your saved work with the same request and spending record." });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
@@ -146,6 +175,7 @@ export async function extendNativePartialJob(ownerId: string, projectId: string,
     await client.query("UPDATE job SET request=$2::jsonb,updated_at=now() WHERE id=$1", [jobId, JSON.stringify(updatedRequest)]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'allowance_extended',$2 FROM job WHERE id=$1", [jobId, { before: { profile: old.profile, maxCalls: old.maxCalls, maxJobCostUsd: old.maxJobCostUsd }, after: { profile: next.profile, maxCalls: next.maxCalls, maxJobCostUsd: next.maxJobCostUsd }, message: "Explicitly extended this saved construction request; prior effects and steps remain attached" }]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
+    await appendPublicActivity(client, { ownerId, projectId, jobId }, `allowance:${jobId}:${canonicalHash(next)}`, { version: 1, kind: "allowance", text: "You increased this request’s limits. Past spending stays attached; work resumes only when you choose Continue." });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
@@ -253,6 +283,7 @@ export async function saveNativePlan(job: JobRecord, raw: NativePlan): Promise<v
     await client.query("BEGIN");
     await assertSyncLease(client, job);
     await client.query("INSERT INTO native_job_plan(job_id,plan,stage) VALUES($1,$2,'planned') ON CONFLICT(job_id) DO UPDATE SET plan=EXCLUDED.plan,stage='planned',inspected_document_hash=NULL,updated_at=now()", [job.id, JSON.stringify(plan)]);
+    await appendPublicActivity(client, { ...job, jobId: job.id }, `plan:${job.id}:${canonicalHash(plan)}`, { version: 1, kind: "approach", text: plan.intent.slice(0, 1_200) });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
@@ -268,6 +299,7 @@ export async function advanceNativePlan(job: JobRecord, stage: Exclude<NativeSta
     if (!current.rows[0]) throw new Error("Record a producer plan before advancing its stage");
     if (rank[stage] < rank[current.rows[0].stage]) throw new Error("Producer stage cannot move backwards");
     await client.query("UPDATE native_job_plan SET stage=$2,inspected_document_hash=$3,updated_at=now() WHERE job_id=$1", [job.id, stage, documentHash]);
+    await appendPublicActivity(client, { ...job, jobId: job.id }, `approach-stage:${job.id}:${stage}:${documentHash}`, { version: 1, kind: stage === "reviewed" ? "checking" : "working", text: stage === "building" ? "Building the sections around the musical approach." : stage === "refining" ? "Developing the musical detail." : "The musical structure has been reviewed. Final checks come before saving a version." });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
@@ -364,6 +396,8 @@ export async function saveNativeStep(job: JobRecord, key: string, operations: Na
       const latest = await client.query<{ ordinal: number; result_hash: string }>("SELECT ordinal,result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal DESC LIMIT 1", [job.id]);
       if (latest.rows[0] && latest.rows[0].result_hash !== predecessorHash) throw new Error("NATIVE_STEP_PREDECESSOR_CONFLICT");
       await client.query("INSERT INTO native_job_step(job_id,step_key,ordinal,predecessor_hash,operation_hash,operations,result_hash,result) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [job.id, key, (latest.rows[0]?.ordinal ?? 0) + 1, predecessorHash, operationHash, JSON.stringify(operations), resultHash, JSON.stringify({ documentHash: resultHash, applied: operations.length })]);
+      const names = [...new Set(operations.flatMap((op) => "partId" in op && typeof op.partId === "string" ? document.parts.filter((part) => part.id === op.partId).map((part) => part.name) : []))];
+      await appendPublicActivity(client, { ...job, jobId: job.id }, `step:${job.id}:${key}`, { version: 1, kind: "music", text: names.length ? `Updated ${names.slice(0, 4).join(", ")}${names.length > 4 ? ` and ${names.length - 4} more parts` : ""}.` : `Saved a musical change: ${document.sections.length} sections and ${document.parts.length} parts now in progress.`, step: (latest.rows[0]?.ordinal ?? 0) + 1, documentHash: resultHash });
     }
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -412,6 +446,8 @@ export async function commitNativeRevision(job: JobRecord, document: NativeDocum
     await client.query("UPDATE job SET state='succeeded',stage=NULL,result_native_revision_id=$2,lease_owner=NULL,attempt_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id, revisionId]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [job.id]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence-1,'succeeded',$2 FROM job WHERE id=$1", [job.id, { nativeRevisionId: revisionId, selected, audio: "deferred" }]);
+    const version = (await client.query<{ ordinal: number }>("SELECT ordinal FROM native_revision WHERE id=$1", [revisionId])).rows[0]!.ordinal;
+    await appendPublicActivity(client, { ...job, jobId: job.id }, `saved:${job.id}`, { version: 1, kind: "saved", text: `Saved Version ${version}.${selected ? " It is now your current arrangement." : " Your selected version has not changed."}`, revisionId, baseRevisionId: expected, ordinal: version, selected });
     await client.query("COMMIT");
     return { revisionId, selected };
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -422,6 +458,8 @@ export async function selectNativeRevision(ownerId: string, projectId: string, r
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    const project = await client.query("SELECT 1 FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [projectId, ownerId]);
+    if (!project.rowCount) throw Object.assign(new Error("Session not found"), { statusCode: 404 });
     const updated = await client.query("UPDATE native_project_head SET revision_id=$4,version=version+1,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND EXISTS(SELECT 1 FROM native_revision WHERE id=$4 AND owner_id=$1 AND project_id=$2) RETURNING project_id", [ownerId, projectId, expectedHeadId, revisionId]);
     if (updated.rowCount !== 1) throw Object.assign(new Error("Native head changed; refresh before restoring"), { statusCode: 409 });
     await client.query(`UPDATE native_sync SET revision_id=$3,
@@ -433,6 +471,8 @@ export async function selectNativeRevision(ownerId: string, projectId: string, r
       verified_at=(SELECT verified_at FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),
       error_message=(SELECT error_message FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),updated_at=now()
       WHERE owner_id=$1 AND project_id=$2`, [ownerId, projectId, revisionId]);
+    const selectedVersion = (await client.query<{ ordinal: number; version: number }>("SELECT r.ordinal,h.version FROM native_revision r JOIN native_project_head h ON h.revision_id=r.id WHERE r.id=$1 AND h.project_id=$2", [revisionId, projectId])).rows[0]!;
+    await appendPublicActivity(client, { ownerId, projectId }, `selection:${selectedVersion.version}`, { version: 1, kind: "selected", text: `You chose Version ${selectedVersion.ordinal} as your current arrangement.`, revisionId, ordinal: selectedVersion.ordinal, selected: true });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }

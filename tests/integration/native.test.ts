@@ -4,6 +4,7 @@ import { AIMessage, createOfflineDocument, fakeModel } from "@pocket/core/test-s
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { advanceNativeSync, applyNativeOperations, AudiotoolSessionExpiredError, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, extendNativePartialJob, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, materializedNotes, nativeDraftView, nativePresetFingerprint, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type JobRecord, type NativeLibraryClient, type NativePreset } from "@pocket/core";
 import { nativeSynchronization, optionalNativeLibraryConnection, processJob } from "@pocket/worker";
+import { readProjectActivity } from "@pocket/core";
 
 const subject = `native-test-${randomUUID()}`;
 let ownerId = "";
@@ -221,6 +222,13 @@ describe("audio-independent native job lifecycle", () => {
     expect(JSON.stringify(resumedModel.calls[0]!.messages)).toContain(plan.developmentTasks[0]);
     expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("succeeded");
     expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts[0]?.notes.map((note) => note.id)).toContain("pickup");
+    const feed = await readProjectActivity(ownerId, scratchId);
+    expect(feed.events.filter((event) => event.payload.kind === "request")).toHaveLength(1);
+    expect(feed.events.filter((event) => event.payload.kind === "approach").map((event) => event.payload.text)).toEqual([plan.intent]);
+    expect(feed.events.filter((event) => event.payload.kind === "music")).toHaveLength(2);
+    expect(feed.events.some((event) => event.payload.kind === "paused")).toBe(true);
+    expect(feed.events.some((event) => event.payload.kind === "continued")).toBe(true);
+    expect(feed.events.filter((event) => event.payload.kind === "saved")).toHaveLength(1);
   }, 120_000);
   it("preserves a near-limit text-only brief through more than four model turns and three construction batches", async () => {
     const scratchId = (await createProject(ownerId, "Long text-only construction")).id;
@@ -921,9 +929,13 @@ describe("audio-independent native job lifecycle", () => {
   });
 
   it("records late usage once after uncertainty without accepting stale output", async () => {
-    const base = await nativeSnapshot(ownerId, projectId);
+    const isolatedProjectId = (await createProject(ownerId, "Isolated uncertain outcome")).id;
+    extraProjects.push(isolatedProjectId);
+    const first = await createNativeJob({ ownerId, projectId: isolatedProjectId, kind: "native-generation", idempotencyKey: "seed-uncertain", request: { direction: "Warm theme", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    await processJob(await claim(first.id));
+    const base = await nativeSnapshot(ownerId, isolatedProjectId);
     const request = { direction: "Test a late accounting response", baseNativeRevisionId: base.currentRevisionId, expectedNativeHeadId: base.currentRevisionId, sourceAssetIds: [] };
-    const accepted = await createNativeJob({ ownerId, projectId, kind: "native-revision", idempotencyKey: "native-late-usage", request, expectedHeadId: base.currentRevisionId });
+    const accepted = await createNativeJob({ ownerId, projectId: isolatedProjectId, kind: "native-revision", idempotencyKey: "native-late-usage", request, expectedHeadId: base.currentRevisionId });
     const job = await claim(accepted.id);
     const effect = await reserveProviderEffect({ job, provider: "openai", step: "late-test", idempotencyKey: "late-test", inputHash: "late-test", model: "gpt-6-astra", promptVersion: "test", reservationMicrousd: 500 });
     await markEffectDispatched(effect.id, job);

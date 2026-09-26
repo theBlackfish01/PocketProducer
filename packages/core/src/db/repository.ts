@@ -5,6 +5,7 @@ import type { AudioAnalysis } from "../providers/gemini.js";
 import { NEXUS_MAPPING_VERSION, type AudiotoolExportCheckpoint, type ExportStepCheckpoint } from "../nexus/adapter.js";
 import { getConfig } from "../config.js";
 import { getPool } from "./pool.js";
+import { appendPublicJobEvent } from "../native/activity.js";
 
 export const DEV_SUBJECT = "dev-loopback";
 
@@ -15,6 +16,7 @@ export interface OwnedProject {
   version: number;
   createdAt: string;
   updatedAt: string;
+  workspaceStatus?: "working" | "attention" | "ready" | "new";
 }
 
 export interface JobRecord {
@@ -55,6 +57,7 @@ async function insertJobEvent(client: pg.PoolClient, jobId: string, eventType: s
   const sequence = Number(allocated.rows[0]?.sequence);
   if (!Number.isInteger(sequence)) throw new Error("Unable to allocate job event sequence");
   await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,$2,$3,$4)", [jobId, sequence, eventType, payload]);
+  await appendPublicJobEvent(client, jobId, sequence, eventType, payload);
   return sequence;
 }
 
@@ -66,10 +69,14 @@ export async function devOwnerId(): Promise<string> {
 }
 
 export async function listProjects(ownerId: string): Promise<OwnedProject[]> {
-  const result = await getPool().query("SELECT id, title, current_revision_id, version, created_at, updated_at FROM project WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY updated_at DESC", [ownerId]);
+  const result = await getPool().query(`SELECT p.id,p.title,p.current_revision_id,p.version,p.created_at,p.updated_at,
+    CASE WHEN EXISTS(SELECT 1 FROM job j WHERE j.project_id=p.id AND j.kind IN ('native-generation','native-revision') AND j.state IN ('queued','running','cancel_requested')) THEN 'working'
+    WHEN EXISTS(SELECT 1 FROM job j WHERE j.project_id=p.id AND j.kind IN ('native-generation','native-revision') AND j.state='needs_attention') THEN 'attention'
+    WHEN EXISTS(SELECT 1 FROM native_project_head h WHERE h.project_id=p.id) THEN 'ready' ELSE 'new' END AS workspace_status
+    FROM project p WHERE p.owner_id=$1 AND p.deleted_at IS NULL ORDER BY p.updated_at DESC`, [ownerId]);
   return result.rows.map((row) => ({
     id: String(row.id), title: String(row.title), currentRevisionId: row.current_revision_id ? String(row.current_revision_id) : null,
-    version: Number(row.version), createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString()
+    version: Number(row.version), createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(), workspaceStatus: row.workspace_status as NonNullable<OwnedProject["workspaceStatus"]>
   }));
 }
 
@@ -175,9 +182,11 @@ export async function settleExpiredJobs(jobId?: string): Promise<number> {
          AND state IN ('queued','running','cancel_requested')
          AND (state='queued' OR lease_until IS NULL OR lease_until<=now())
          AND ($1::uuid IS NULL OR id=$1)
-       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 50`,
+       ORDER BY project_id,created_at FOR UPDATE SKIP LOCKED LIMIT 50`,
       [jobId ?? null]
     );
+    // All job locks are already held. Acquire public activity clocks in the same
+    // project order across sweepers, including disjoint jobs in shared projects.
     for (const row of expired.rows) {
       const cancelled = Boolean(row.cancellation_requested_at) || row.state === "cancel_requested";
       await client.query(

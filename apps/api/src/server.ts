@@ -4,6 +4,7 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
+import { registerActivityRoutes } from "./activity-stream.js";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createJob, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
   createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resolveNativePreservation, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
@@ -17,6 +18,7 @@ await app.register(multipart, { limits: { fileSize: config.MAX_UPLOAD_BYTES, fil
 
 const idSchema = z.uuid();
 const ownerId = await devOwnerId();
+registerActivityRoutes(app, ownerId, config.APP_ORIGIN);
 
 app.setErrorHandler((error: unknown, request, reply) => {
   const statusFromError = typeof error === "object" && error !== null && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : undefined;
