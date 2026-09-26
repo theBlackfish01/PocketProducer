@@ -153,7 +153,7 @@ test("partial work uses the same canvas, explicit usage review and no automatic 
   await expect(page.locator(".living-score")).toHaveCount(1);
   await producer(page);
   await page.getByRole("button", { name: "Review usage & next steps" }).click();
-  await expect(page.getByText(/\$0.51 used.*\$4.49/)).toBeVisible();
+  await expect(page.getByText(/\$0.51 observed.*\$4.49/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue saved draft" })).toHaveCount(0);
   await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/extend`, async (route) => { expect(route.request().postDataJSON()).toMatchObject({ maxCalls: 60 }); extensions++; await route.fulfill({ json: { jobId, extended: true } }); });
   await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/continue`, async (route) => { continuations++; await route.fulfill({ status: 202, json: { jobId } }); });
@@ -165,6 +165,69 @@ test("partial work uses the same canvas, explicit usage review and no automatic 
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: `${evidence}/workspace-usage-mobile.png`, fullPage: true });
   expect((await native(page, id)).currentRevisionId).toBe(selected.currentRevisionId);
+});
+
+test("zero-step pause labels the retained approach without inventing a musical draft", async ({ page }) => {
+  const id = await create(page, "A spare melody with a slow answer");
+  const selected = await native(page, id), jobId = crypto.randomUUID();
+  const job = { id: jobId, project_id: id, kind: "native-revision", state: "needs_attention", stage: null, error_code: "NATIVE_PARTIAL", error_message: "MODEL_BUDGET_EXCEEDED:SITE", result_revision_id: null };
+  await page.route(`**/api/v1/projects/${id}/activity/stream*`, (route) => route.abort());
+  await page.route(`**/api/v1/projects/${id}/activity*`, async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/stream")) { await route.abort(); return; }
+    await route.fulfill({ json: { events: [], cursor: 0, nextCursor: 0, job, headId: selected.currentRevisionId, draft: { step: 0, hash: null }, actions: { canSubmit: false, canStop: false, issue: "paused" }, allowance: { remainingUsd: 0.1, standardUsd: 0.1, extendedUsd: 0.1 } } });
+  });
+  await page.route(`**/api/v1/jobs/${jobId}`, (route) => route.fulfill({ json: job }));
+  await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, (route) => route.fulfill({ json: { jobId, state: job.state, selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 0, document: null, documentHash: null, plan: { plan: { intent: "A quiet question and answer", sections: [{ name: "Whole", purpose: "Leave room for a reply" }], soundGoals: ["Soft lead"], hardConstraints: [], developmentTasks: ["Write the reply"], creativeState: { identity: "Intimate and restrained", densityIntent: "Spacious", palette: [], unfinishedTasks: ["Write the reply"], definiteFailures: [] } }, stage: "planned", inspectedDocumentHash: null, review: null }, canContinue: false, canExtend: false, continuationReason: "The overall allowance cannot reserve another call.", budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 0.1, minimumNextCallUsd: 0.42, modelCalls: 2 } } }));
+  await page.reload(); await producer(page);
+  await expect(page.getByText("Your musical approach is saved")).toBeVisible();
+  await expect(page.getByText(/No musical changes were confirmed yet/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "View work in progress" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Continue saved draft" })).toHaveCount(0);
+  await page.getByText("Musical approach", { exact: true }).click();
+  await expect(page.getByText("Intimate and restrained")).toBeVisible();
+  expect((await native(page, id)).currentRevisionId).toBe(selected.currentRevisionId);
+});
+
+test("sample search exposes measured slice candidates only on request", async ({ page }) => {
+  const id = await create(page, "A four-bar texture study");
+  await page.route("**/api/v1/status", async (route) => {
+    const response = await route.fetch();
+    const status = await response.json() as { nexus: { session: { connected: boolean; userName: string | null; expiresAt: string | null } } };
+    status.nexus.session = { connected: true, userName: "Fixture user", expiresAt: null };
+    await route.fulfill({ response, json: status });
+  });
+  let searches = 0, inspections = 0;
+  await page.route("**/api/v1/native/library/samples?*", async (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    expect(query.get("kind")).toBe("one-shot");
+    expect(query.get("minBpm")).toBe("78");
+    expect(query.get("maxBpm")).toBe("102");
+    searches++;
+    await route.fulfill({ json: { samples: [{ name: "samples/fixture-hit", displayName: "Short texture", ownerName: "users/fixture", durationSeconds: 1, bpm: 90, sampleKind: "one-shot", tags: ["texture"] }], nextPageToken: "", provenance: "Fixture metadata; no license inferred" } });
+  });
+  await page.route("**/api/v1/native/library/sample-analysis?*", async (route) => {
+    inspections++;
+    await route.fulfill({ json: { sample: { name: "samples/fixture-hit", displayName: "Short texture" }, contentHash: "a".repeat(64), measured: { durationSeconds: 1, leadingSilenceSeconds: 0.125, suggestedSlices: [{ startSeconds: 0.125, endSeconds: 0.5, reason: "Measured activity" }], limitations: "Energy only; no instrument identity or rights inference." }, provenance: "Decoded fixture WAV" } });
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "Sounds & tools" }).click();
+  const sheet = page.getByRole("dialog", { name: "Sounds & tools" });
+  await sheet.getByLabel("Sound or mood").fill("texture");
+  await sheet.getByLabel("Sample type").selectOption("one-shot");
+  await sheet.getByLabel("Near this tempo (optional)").fill("90");
+  expect(searches).toBe(0); expect(inspections).toBe(0);
+  await sheet.getByRole("button", { name: "Search library" }).click();
+  await expect(sheet.getByText("Short texture")).toBeVisible();
+  expect(searches).toBe(1); expect(inspections).toBe(0);
+  await sheet.getByRole("button", { name: "Inspect slices" }).click();
+  await expect(sheet.getByText(/0.125–0.5s/)).toBeVisible();
+  expect(inspections).toBe(1);
+  await sheet.getByRole("region", { name: "Measured sample intervals" }).scrollIntoViewIfNeeded();
+  await sheet.screenshot({ path: `${evidence}/workspace-sample-inspection.png` });
+  await sheet.getByRole("button", { name: "Ask to use" }).click();
+  await expect(direction(page)).toContainText("samples/fixture-hit");
+  await expect(direction(page)).toContainText("0.125–0.5 seconds");
+  expect((await native(page, id)).versions).toHaveLength(1);
 });
 
 test("sync is separate and never reads a construction draft or erases an unsent brief", async ({ page }) => {

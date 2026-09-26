@@ -7,7 +7,7 @@ import { z } from "zod";
 import { registerActivityRoutes } from "./activity-stream.js";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createJob, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resolveNativePreservation, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
+  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resolveNativePreservation, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
 } from "@pocket/core";
 
 const config = getConfig();
@@ -95,11 +95,20 @@ app.get("/api/v1/native/capability", async (request) => {
 });
 
 app.get("/api/v1/native/library/samples", async (request) => {
-  const { query, pageToken } = z.object({ query: z.string().trim().min(1).max(80), pageToken: z.string().max(500).optional() }).parse(request.query);
+  const { query, pageToken, kind, minBpm, maxBpm } = z.object({ query: z.string().trim().min(1).max(80), pageToken: z.string().max(500).optional(), kind: z.enum(["one-shot", "loop"]).optional(), minBpm: z.coerce.number().min(0).max(400).optional(), maxBpm: z.coerce.number().min(0).max(400).optional() }).parse(request.query);
   if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
   const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
   if (!connection) throw Object.assign(new Error("Connect Audiotool before searching its sound library"), { statusCode: 409 });
-  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).searchSamples(query, pageToken); }
+  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).searchSamples(query, pageToken, { kind, minBpm, maxBpm }); }
+  finally { await connection.awaitTokenPersistence(); }
+});
+
+app.get("/api/v1/native/library/sample-analysis", async (request) => {
+  const { name } = z.object({ name: z.string().regex(/^samples\/[a-zA-Z0-9-]{1,120}$/) }).parse(request.query);
+  if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
+  const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
+  if (!connection) throw Object.assign(new Error("Connect Audiotool before inspecting sample audio"), { statusCode: 409 });
+  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).inspectSampleAudio(name); }
   finally { await connection.awaitTokenPersistence(); }
 });
 
@@ -147,6 +156,12 @@ app.post("/api/v1/projects/:projectId/native/revisions", async (request, reply) 
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId, projectId, kind: "native-revision", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
+});
+
+app.post("/api/v1/projects/:projectId/native/requests/:jobId/abandon", async (request) => {
+  const { projectId, jobId } = z.object({ projectId: idSchema, jobId: idSchema }).parse(request.params);
+  await abandonNativePartialJob(ownerId, projectId, jobId);
+  return { jobId, abandoned: true };
 });
 
 app.post("/api/v1/projects/:projectId/native/requests/:jobId/continue", async (request, reply) => {

@@ -12,3 +12,5 @@ Use sections to give the piece a beginning, development and ending. Prefer disti
 For a precise answer or changed ending in only one placement, inspect its original motif and use `varyMotifInstance.noteEdits` with source-note IDs. Omit, move, repitch, resize or reshape the specific notes in a cloned motif; other placements keep their original notes. An unchanged edit is rejected.
 
 Owned sources are optional. A placed interval is only “placed/referenced,” never “audibly used” until its selected bytes and a future render are checked. Do not invent sample IDs, presets or rights metadata. Make assumptions explicit in the structural explanation. No native audio is available in this milestone; do not claim to have listened or judged mix quality.
+
+Read `references/creative-development.md` when deciding density, palette, a defining event or development. Use `search_native_examples` and `read_native_example` selectively; their original canonical forms are unheard references, not templates. Save selected reference IDs and exact chosen resource identities through `record_native_creative_state` before large mutations so they survive context compaction and restart.

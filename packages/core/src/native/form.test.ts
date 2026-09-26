@@ -12,6 +12,23 @@ const phrase = (pitch: number) => ({ id: "phrase", name: "Quiet call", lengthBea
 ] });
 
 describe("model-directed native form", () => {
+  it("normalizes floating-point noise without quantizing genuinely off-grid beats", () => {
+    const base = nativeFormSchema.parse({ title: "Tick fidelity", tempoBpm: 120, meter: { numerator: 4, denominator: 4 },
+      sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "hook", name: "Hook", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0,
+        motifs: [{ id: "theme", name: "Theme", lengthBeats: 4, notes: [{ beat: 1.025, durationBeats: 0.375, pitch: 64, velocity: 0.7 }] }], placements: [{ id: "first", motifId: "theme", startBar: 0, repeats: 1 }] }] });
+    const operations = nativeFormOperations(base, []);
+    const document = applyNativeOperations(seedNativeDocument("Tick fidelity"), operations);
+    expect(document.motifs[0]!.notes[0]).toMatchObject({ startTick: 984, durationTicks: 360 });
+    expect(nativeFormOperations(base, [])).toEqual(operations);
+    const offGrid = structuredClone(base); offGrid.parts[0]!.motifs[0]!.notes[0]!.beat = 1.02;
+    expect(() => nativeFormOperations(offGrid, [])).toThrow(/parts\[0\]\.motifs\[0\]\.notes\[0\]\.beat=1\.02.*1\/960 beat/);
+    const triplet = structuredClone(base); triplet.parts[0]!.motifs[0]!.notes[0]!.beat = 1 / 3;
+    expect(applyNativeOperations(seedNativeDocument("Triplet"), nativeFormOperations(triplet, [])).motifs[0]!.notes[0]!.startTick).toBe(320);
+    const zeroDuration = structuredClone(base); zeroDuration.parts[0]!.motifs[0]!.notes[0]!.durationBeats = 0;
+    expect(() => nativeFormOperations(zeroDuration, [])).toThrow();
+    const crosses = structuredClone(base); crosses.parts[0]!.motifs[0]!.notes[0]!.beat = 3.5; crosses.parts[0]!.motifs[0]!.notes[0]!.durationBeats = 1;
+    expect(() => applyNativeOperations(seedNativeDocument("Cross"), nativeFormOperations(crosses, []))).toThrow();
+  });
   it("builds a non-template 3/4 form with intentional instrument settings and readback", async () => {
     const form = nativeFormSchema.parse({ title: "Three rooms", tempoBpm: 74, meter: { numerator: 3, denominator: 4 },
       sections: [{ id: "arrival", name: "Arrival", bars: 8, intent: "Unaccompanied call" }, { id: "answer", name: "Answer", bars: 8, intent: "Piano counterline" }, { id: "leave", name: "Leave", bars: 8, intent: "Thin to one voice" }],

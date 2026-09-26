@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { AIMessage, createOfflineDocument, fakeModel } from "@pocket/core/test-support";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { advanceNativeSync, applyNativeOperations, AudiotoolSessionExpiredError, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, extendNativePartialJob, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, materializedNotes, nativeDraftView, nativePresetFingerprint, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type JobRecord, type NativeLibraryClient, type NativePreset } from "@pocket/core";
+import { advanceNativeSync, applyNativeOperations, AudiotoolSessionExpiredError, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, extendNativePartialJob, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, materializedNotes, nativeDraftView, nativePresetFingerprint, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type GeminiGenerateClient, type JobRecord, type NativeLibraryClient, type NativePreset } from "@pocket/core";
 import { nativeSynchronization, optionalNativeLibraryConnection, processJob } from "@pocket/worker";
-import { readProjectActivity } from "@pocket/core";
+import { abandonNativePartialJob, readProjectActivity } from "@pocket/core";
 
 const subject = `native-test-${randomUUID()}`;
 let ownerId = "";
@@ -144,7 +144,7 @@ describe("audio-independent native job lifecycle", () => {
     expect(protectedPartHash(saved.document, "bass")).toBe(protectedPartHash(base.document, "bass"));
     expect(saved.document.motifs).toEqual(base.document.motifs);
     expect(saved.document.parts.find((part) => part.id === "air")!.automation[0]?.points).toEqual([{ tick: 0, value: 0.8, interpolation: "step" }, { tick: 15360, value: 0.35, interpolation: "step" }, { tick: 30720, value: 0.8, interpolation: "step" }]);
-    expect(JSON.stringify(model.calls.map((call) => call.messages))).toMatch(/Requested preservation of Warm bass was not met/);
+    expect(JSON.stringify(model.calls.map((call) => call.messages))).toMatch(/Requested preservation of Warm bass in Second Main was not met/);
     expect(JSON.stringify(model.calls.map((call) => call.messages))).toMatch(/Requested reduction of drums was not constructed/);
     await selectNativeRevision(ownerId, scratchId, base.id, saved.id);
     expect((await nativeSnapshot(ownerId, scratchId)).currentRevisionId).toBe(base.id);
@@ -201,6 +201,84 @@ describe("audio-independent native job lifecycle", () => {
     expect(Number(effects.rows[1]!.reservation_microusd)).toBeLessThan(Number(effects.rows[0]!.reservation_microusd));
     expect(effects.rows.reduce((sum, row) => sum + Number(row.actual_cost_microusd), 0)).toBeGreaterThan(500_000);
     expect((await nativeDraftView(ownerId, scratchId, accepted.id)).stepCount).toBe(2);
+  }, 120_000);
+  it("continues a known zero-step financial pause without inventing a musical draft or replaying the first call", async () => {
+    const scratchId = (await createProject(ownerId, "Zero-step budget recovery")).id;
+    extraProjects.push(scratchId);
+    const direction = "A sparse four-bar phrase with a deliberate answer";
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "zero-step-financial-pause", request: { direction, profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const original = (await getPool().query<{ request: Record<string, unknown> }>("SELECT request FROM job WHERE id=$1", [accepted.id])).rows[0]!.request;
+    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 } })]);
+    const plan = { intent: "A restrained question and answer", sections: [{ name: "Whole", purpose: "Introduce and answer one motif" }], soundGoals: ["Dry, close lead"], hardConstraints: ["Four bars"], developmentTasks: ["Write the answer"] };
+    const costlyPlan = new AIMessage({ content: "", tool_calls: [{ id: "first-plan", name: "record_native_plan", args: plan }] });
+    Object.assign(costlyPlan, { usage_metadata: { input_tokens: 1_000, output_tokens: 10_000, total_tokens: 11_000 } });
+    await processJob(await claim(accepted.id, "zero-step-before"), { scriptedModel: fakeModel().respond(costlyPlan), library: createNativeLibrary(null) });
+    const paused = await jobSnapshot(ownerId, accepted.id);
+    expect(paused.state).toBe("needs_attention");
+    expect(paused.error_code).toBe("NATIVE_PARTIAL");
+    const draft = await nativeDraftView(ownerId, scratchId, accepted.id);
+    expect(draft.stepCount).toBe(0);
+    expect(draft.document).toBeNull();
+    expect(draft.plan?.plan.intent).toBe(plan.intent);
+    expect(draft.canExtend).toBe(true);
+    expect(draft.canContinue).toBe(false);
+    const before = await getPool().query<{ step: string; state: string; actual_cost_microusd: string }>("SELECT step,state,actual_cost_microusd::text FROM effect WHERE job_id=$1 ORDER BY created_at", [accepted.id]);
+    expect(before.rows.find((effect) => effect.step === "native-producer-result")?.state).toBe("dispatched");
+    // Recreate the exact older defect on isolated data: a known zero-cost
+    // aggregate was incorrectly marked failed after the paid plan call.
+    await getPool().query("UPDATE effect SET state='failed',cost_status='observed',reservation_microusd=0 WHERE job_id=$1 AND step='native-producer-result'", [accepted.id]);
+    expect((await nativeDraftView(ownerId, scratchId, accepted.id)).canExtend).toBe(true);
+    await extendNativePartialJob(ownerId, scratchId, accepted.id, { maxJobCostUsd: 2 });
+    expect((await nativeDraftView(ownerId, scratchId, accepted.id)).canContinue).toBe(true);
+    await resumeNativePartialJob(ownerId, scratchId, accepted.id);
+    const repairEvents = await getPool().query("SELECT event_type FROM job_event WHERE job_id=$1 AND event_type='aggregate_repaired'", [accepted.id]);
+    expect(repairEvents.rowCount).toBe(1);
+    const form = { title: "Quiet answer", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Dry lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 62, velocity: 0.65 }, { beat: 8, durationBeats: 1, pitch: 65, velocity: 0.58 }] }] };
+    const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respond(new AIMessage("The question and answer are now editable; no audio was heard."));
+    await processJob(await claim(accepted.id, "zero-step-after"), { scriptedModel: model, library: createNativeLibrary(null) });
+    expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("succeeded");
+    expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts[0]?.notes).toHaveLength(2);
+    const after = await getPool().query<{ step: string; state: string; actual_cost_microusd: string }>("SELECT step,state,actual_cost_microusd::text FROM effect WHERE job_id=$1 ORDER BY created_at", [accepted.id]);
+    expect(after.rows.filter((effect) => effect.step === "producer-model-call")).toHaveLength(3);
+    expect(after.rows.find((effect) => effect.step === "native-producer-result")?.state).toBe("succeeded");
+    expect(after.rows[1]?.actual_cost_microusd).toBe(before.rows[1]?.actual_cost_microusd);
+  }, 120_000);
+  it("retains a chosen palette through construction and runs a bounded ID-grounded symbolic review", async () => {
+    const scratchId = (await createProject(ownerId, "Creative context and review")).id;
+    extraProjects.push(scratchId);
+    const direction = "Make a sparse four-bar motif with a soft answering phrase, not a busy loop.";
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "creative-context-review", request: { direction, sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const plan = { intent: "A close motif followed by a quiet answer", sections: [{ name: "Whole", purpose: "State and answer the motif" }], soundGoals: ["Dry, soft lead"], hardConstraints: ["Four bars", "Sparse"], developmentTasks: ["Leave air between the two statements"] };
+    const creative = { identity: "Close and restrained, with a descending reply", densityIntent: "Two short phrases with silence between", palette: [{ role: "melody", resourceKind: "synthesis", resourceId: "heisenberg", reason: "A quiet editable lead" }], guidanceRefs: ["descending-answer"], decisions: ["Keep the response lower than the opening"], definiteFailures: [], unfinishedTasks: ["Write the response"], evidenceLinks: [{ promise: "Opening phrase", sectionId: "whole", partId: "lead", firstBar: 0, lastBar: 4 }] };
+    const form = { title: "Quiet answer", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 67, velocity: 0.65 }] }] };
+    const producer = fakeModel().respondWithTools([{ name: "record_native_plan", args: plan }])
+      .respondWithTools([{ name: "record_native_creative_state", args: creative }])
+      .respondWithTools([{ name: "search_native_examples", args: { query: "sparse answer" } }])
+      .respondWithTools([{ name: "compose_native_form", args: form }])
+      .respondWithTools([{ name: "review_native_score", args: {} }])
+      .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "answer-after-review", operations: [{ kind: "addNotes", partId: "lead", notes: [{ id: "quiet-answer", startTick: 7680, durationTicks: 960, pitch: 62, velocity: 0.55 }] }] } }])
+      .respondWithTools([{ name: "review_native_score", args: {} }])
+      .respond(new AIMessage("The two phrases are editable; no audio was heard."));
+    const reviewer = fakeModel()
+      .respond(new AIMessage(JSON.stringify({ verdict: "The planned response has not been written yet.", findings: [{ priority: "high", sectionId: "whole", partId: "lead", observation: "Only the opening note is present.", suggestedChange: "Add a quieter, lower reply after a pause." }], noChangeReason: null })))
+      .respond(new AIMessage(JSON.stringify({ verdict: "The lower reply now follows a deliberate pause.", findings: [], noChangeReason: "The contrast fits the sparse brief; no further structural edit is justified." })));
+    await processJob(await claim(accepted.id, "creative-review-worker"), { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+    expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("succeeded");
+    const draft = await nativeDraftView(ownerId, scratchId, accepted.id);
+    expect(draft.plan?.plan.creativeState?.identity).toBe(creative.identity);
+    expect(draft.plan?.review?.modelUsed).toBe(true);
+    expect(draft.plan?.review?.verdict).toMatch(/lower reply/);
+    expect(reviewer.callCount).toBe(2);
+    expect(JSON.stringify(reviewer.calls[0]?.messages)).toContain(direction);
+    expect(JSON.stringify(producer.calls.at(-1)?.messages)).toContain(creative.identity);
+    expect(JSON.stringify(producer.calls[5]?.messages)).toContain("planned response has not been written");
+    expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts[0]?.notes).toHaveLength(2);
+    const effects = await getPool().query<{ step: string; state: string; idempotency_key: string }>("SELECT step,state,idempotency_key FROM effect WHERE job_id=$1", [accepted.id]);
+    const modelEffects = effects.rows.filter((row) => row.step === "producer-model-call");
+    expect(modelEffects.every((row) => row.state === "succeeded")).toBe(true);
+    expect(modelEffects.filter((row) => row.idempotency_key.startsWith("native-review:"))).toHaveLength(2);
+    expect(modelEffects.filter((row) => row.idempotency_key.startsWith("producer:"))).toHaveLength(producer.callCount);
+    expect(new Set(modelEffects.map((row) => row.idempotency_key)).size).toBe(modelEffects.length);
   }, 120_000);
   it("restores the durable future plan to actual model input after compaction and worker restart", async () => {
     const scratchId = (await createProject(ownerId, "Durable producer memory")).id;
@@ -546,6 +624,75 @@ describe("audio-independent native job lifecycle", () => {
     } finally { clearInterval(timer); }
   }, 90_000);
 
+  it("sequences measured, hash-pinned sample slices through the real worker path", async () => {
+    const scratchId = (await createProject(ownerId, "Measured sample sequence")).id;
+    extraProjects.push(scratchId);
+    const sample = { name: "samples/two-hits", displayName: "Short texture", ownerName: "users/fixture", durationSeconds: 1, bpm: 90, kind: "one-shot", visibility: "public", tags: ["texture"] };
+    const pcm = new Float32Array(48_000); pcm.fill(0.2, 4_000, 20_000);
+    const bytes = encodeWav(pcm, pcm, 48_000);
+    let downloads = 0;
+    const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [sample], nextPageToken: "" }), get: () => Promise.resolve(sample), download: () => { downloads++; return Promise.resolve(new Blob([Uint8Array.from(bytes)])); } }, presets: { search: () => Promise.resolve([]), get: () => Promise.resolve(new Error("missing")) } } as unknown as NativeLibraryClient);
+    const direction = "A four-bar melody with two quiet sample accents";
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "measured-sample-sequence", request: { direction, sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const form = { title: "Two accents", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [
+      { id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] },
+      { id: "texture", name: "Texture", role: "source", device: { type: "audio", parameters: {} }, gain: 0.5, pan: 0, motifs: [], placements: [], freeNotes: [] }
+    ] };
+    const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }])
+      .respondWithTools([{ name: "inspect_audiotool_sample_audio", args: { name: sample.name } }])
+      .respondWithTools([{ name: "analyze_audiotool_sample", args: { name: sample.name } }])
+      .respondWithTools([{ name: "analyze_audiotool_sample", args: { name: sample.name } }])
+      .respondWithTools([{ name: "sequence_audiotool_sample", args: { stepKey: "two-texture-hits", partId: "texture", sectionId: "whole", sampleName: sample.name, hits: [{ sectionTick: 0, sourceStartSeconds: 0.08, sourceDurationSeconds: 0.18, gain: 0.3, playbackRate: 1 }, { sectionTick: 7680, sourceStartSeconds: 0.2, sourceDurationSeconds: 0.18, gain: 0.2, playbackRate: 1 }] } }])
+      .respond(new AIMessage("Two exact slices were placed; the full arrangement was not heard."));
+    let semanticCalls = 0;
+    const semantic: GeminiGenerateClient = { generateContent: () => { semanticCalls++; return Promise.resolve({ text: JSON.stringify({ observations: ["Short airy accent"], musicalCharacter: ["Soft"], suggestedRole: "texture", confidence: "medium" }), usageMetadata: { promptTokenCount: 320, candidatesTokenCount: 24, thoughtsTokenCount: 8, totalTokenCount: 352 } }) as ReturnType<GeminiGenerateClient["generateContent"]>; } };
+    await processJob(await claim(accepted.id, "sample-sequence-worker"), { scriptedModel: model, scriptedGeminiClient: semantic, library });
+    expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("succeeded");
+    const regions = (await nativeSnapshot(ownerId, scratchId)).current!.document.parts.find((part) => part.id === "texture")!.libraryRegions;
+    expect(regions).toHaveLength(2);
+    expect(regions?.map((region) => [region.startTick, region.sourceStartSeconds, region.playbackMode])).toEqual([[0, 0.08, "once"], [7680, 0.2, "once"]]);
+    expect(regions?.[0]?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(regions?.[1]?.contentHash).toBe(regions?.[0]?.contentHash);
+    expect(downloads).toBeGreaterThanOrEqual(2); // inspection, construction and final validation remain authoritative.
+    expect(JSON.stringify(model.calls[2]?.messages)).toContain("suggestedSlices");
+    expect(JSON.stringify(model.calls[3]?.messages)).toContain("Short airy accent");
+    expect(semanticCalls).toBe(1);
+    const semanticEffects = await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='library-sample-analysis'", [accepted.id]);
+    expect(semanticEffects.rows).toEqual([expect.objectContaining({ state: "succeeded", cost_status: "observed" })]);
+  }, 120_000);
+
+  it("does not accept a score after an uncertain shortlisted-sample analysis", async () => {
+    const scratchId = (await createProject(ownerId, "Uncertain sample analysis")).id;
+    extraProjects.push(scratchId);
+    const sample = { name: "samples/uncertain-accent", displayName: "Accent", ownerName: "users/fixture", durationSeconds: 1, bpm: 90, kind: "one-shot", visibility: "public", tags: ["texture"] };
+    const pcm = new Float32Array(48_000); pcm.fill(0.15, 1_000, 8_000);
+    const bytes = encodeWav(pcm, pcm, 48_000);
+    const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [sample], nextPageToken: "" }), get: () => Promise.resolve(sample), download: () => Promise.resolve(new Blob([Uint8Array.from(bytes)])) }, presets: { search: () => Promise.resolve([]), get: () => Promise.resolve(new Error("missing")) } } as unknown as NativeLibraryClient);
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "uncertain-sample-analysis", request: { direction: "A soft lead with a single sampled accent", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const form = { title: "Soft lead", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
+    const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respondWithTools([{ name: "analyze_audiotool_sample", args: { name: sample.name } }]).respond(new AIMessage("Finished"));
+    const semantic: GeminiGenerateClient = { generateContent: () => Promise.reject(new TypeError("network interrupted")) };
+    await processJob(await claim(accepted.id, "uncertain-sample-worker"), { scriptedModel: model, scriptedGeminiClient: semantic, library });
+    expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("needs_attention");
+    expect((await nativeSnapshot(ownerId, scratchId)).currentRevisionId).toBeNull();
+    const semanticEffects = await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='library-sample-analysis'", [accepted.id]);
+    expect(semanticEffects.rows).toEqual([expect.objectContaining({ state: "uncertain", cost_status: "unknown" })]);
+  }, 120_000);
+
+  it("atomically limits distinct shortlisted analyses under contending reservations", async () => {
+    const scratchId = (await createProject(ownerId, "Sample analysis contention")).id;
+    extraProjects.push(scratchId);
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "sample-analysis-contention", request: { direction: "A quiet texture study", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const job = await claim(accepted.id, "sample-analysis-contender");
+    const reserve = (index: number) => reserveProviderEffect({ job, provider: "gemini", step: "library-sample-analysis", idempotencyKey: `sample-${index}`, inputHash: `hash-${index}`, model: "fixture-gemini", promptVersion: "library-sample-analysis-v1", reservationMicrousd: 100, maxDistinctEffectsForStep: 2 });
+    const raced = await Promise.allSettled([reserve(1), reserve(2), reserve(3)]);
+    expect(raced.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    expect(raced.filter((result) => result.status === "rejected")).toEqual([expect.objectContaining({ reason: expect.objectContaining({ message: "MODEL_STEP_EFFECT_LIMIT_EXCEEDED" }) })]);
+    expect((await getPool().query("SELECT id FROM effect WHERE job_id=$1 AND step='library-sample-analysis'", [accepted.id])).rowCount).toBe(2);
+    const firstAccepted = raced.findIndex((result) => result.status === "fulfilled") + 1;
+    expect((await reserve(firstAccepted)).id).toBe((raced[firstAccepted - 1] as PromiseFulfilledResult<Awaited<ReturnType<typeof reserve>>>).value.id);
+  }, 120_000);
+
   it("commits a library-loop-only worker job and preserves its head when a later resource disappears", async () => {
     const scratchId = (await createProject(ownerId, "Library-only worker room")).id;
     extraProjects.push(scratchId);
@@ -657,6 +804,61 @@ describe("audio-independent native job lifecycle", () => {
       expect((await nativeSnapshot(ownerId, scratchId)).current?.document.bars).toBe(48);
     } finally { clearInterval(timer); }
   }, 90_000);
+
+  async function pausedForAbandon(uncertain = false) {
+    const room = (await createProject(ownerId, "Abandonment regression")).id; extraProjects.push(room);
+    const request = { direction: "An unfinished melody", sourceAssetIds: [], expectedNativeHeadId: null };
+    const accepted = await createNativeJob({ ownerId, projectId: room, kind: "native-generation", idempotencyKey: randomUUID(), request, expectedHeadId: null });
+    const job = await claim(accepted.id, "abandon-test");
+    const session = new NativeToolSession(job, seedNativeDocument(request.direction));
+    await session.apply("confirmed-note", [{ kind: "addNotes", partId: "starting-voice", notes: [{ id: "one", startTick: 0, durationTicks: 960, pitch: 60, velocity: 0.7 }] }]);
+    const aggregate = await reserveProviderEffect({ job, provider: "openai", step: "native-producer-result", idempotencyKey: randomUUID(), inputHash: canonicalHash(request), model: "fixture", promptVersion: "test", reservationMicrousd: 0 });
+    await markEffectDispatched(aggregate.id, job);
+    const call = await reserveProviderEffect({ job, provider: "openai", step: "producer-model-call", idempotencyKey: randomUUID(), inputHash: canonicalHash(request), model: "fixture", promptVersion: "test", reservationMicrousd: 100 });
+    await markEffectDispatched(call.id, job);
+    if (!uncertain) await completeProviderEffect({ effectId: call.id, job, actualCostMicrousd: 17, output: {} });
+    await needsAttentionJob(job, "NATIVE_PARTIAL", "Confirmed draft retained");
+    return { room, job, request };
+  }
+
+  it("abandons safe work idempotently, retains draft/accounting and permits a new direction", async () => {
+    const { room, job, request } = await pausedForAbandon();
+    const effects = (await getPool().query("SELECT * FROM effect WHERE job_id=$1 ORDER BY id", [job.id])).rows;
+    await expect(abandonNativePartialJob(randomUUID(), room, job.id)).rejects.toThrow(/not found/);
+    await abandonNativePartialJob(ownerId, room, job.id);
+    await abandonNativePartialJob(ownerId, room, job.id);
+    expect((await jobSnapshot(ownerId, job.id)).state).toBe("cancelled");
+    expect((await nativeDraftView(ownerId, room, job.id)).stepCount).toBe(1);
+    expect((await nativeSnapshot(ownerId, room)).current).toBeNull();
+    expect((await getPool().query("SELECT * FROM effect WHERE job_id=$1 ORDER BY id", [job.id])).rows).toEqual(effects);
+    await expect(resumeNativePartialJob(ownerId, room, job.id)).rejects.toThrow(/unfinished/);
+    // A fresh receipt for the same text must not be fenced by the internal aggregate.
+    const same = await createNativeJob({ ownerId, projectId: room, kind: "native-generation", idempotencyKey: randomUUID(), request, expectedHeadId: null });
+    await cancelJob(ownerId, same.id);
+    const next = await createNativeJob({ ownerId, projectId: room, kind: "native-generation", idempotencyKey: randomUUID(), request: { ...request, direction: "A different melody" }, expectedHeadId: null });
+    await processJob(await claim(next.id));
+    expect((await jobSnapshot(ownerId, next.id)).state).toBe("succeeded");
+    expect((await nativeDraftView(ownerId, room, job.id)).stepCount).toBe(1);
+  });
+
+  it("never abandons uncertain provider outcomes or turns them into observed spending", async () => {
+    const { room, job, request } = await pausedForAbandon(true);
+    await expect(abandonNativePartialJob(ownerId, room, job.id)).rejects.toThrow(/uncertain/);
+    expect((await jobSnapshot(ownerId, job.id)).state).toBe("needs_attention");
+    await expect(createNativeJob({ ownerId, projectId: room, kind: "native-generation", idempotencyKey: randomUUID(), request: { ...request, direction: "Different" }, expectedHeadId: null })).rejects.toThrow(/active|decision/);
+  });
+
+  it("serializes abandonment against continuation and ordinary cancellation", async () => {
+    const { room, job } = await pausedForAbandon();
+    const results = await Promise.allSettled([abandonNativePartialJob(ownerId, room, job.id), resumeNativePartialJob(ownerId, room, job.id)]);
+    expect(results.filter((value) => value.status === "fulfilled")).toHaveLength(1);
+    expect(["cancelled", "queued"]).toContain((await jobSnapshot(ownerId, job.id)).state);
+    await cancelJob(ownerId, job.id);
+    const second = await pausedForAbandon();
+    await Promise.all([abandonNativePartialJob(ownerId, second.room, second.job.id), cancelJob(ownerId, second.job.id)]);
+    expect((await jobSnapshot(ownerId, second.job.id)).state).toBe("cancelled");
+    expect((await nativeDraftView(ownerId, second.room, second.job.id)).stepCount).toBe(1);
+  });
 
   it("resumes a saved partial request under the same job ID without selecting the sketch", async () => {
     const scratchId = (await createProject(ownerId, "Resumable native draft")).id;
@@ -882,6 +1084,18 @@ describe("audio-independent native job lifecycle", () => {
     expect(restored.currentRevisionId).toBe(first.id);
     expect(restored.context?.documentHash).toBe(first.documentHash);
     expect(restored.synchronization.state).toBe("local");
+    // A paused request may become stale after explicit history selection. It
+    // cannot continue, but abandoning it must not select or delete either version.
+    const paused = await createNativeJob({ ownerId, projectId, kind: "native-revision", idempotencyKey: "stale-abandon", request: { ...request, direction: "A paused variation" }, expectedHeadId: first.id });
+    const pausedJob = await claim(paused.id);
+    await needsAttentionJob(pausedJob, "NATIVE_PARTIAL", "Paused before further work");
+    await selectNativeRevision(ownerId, projectId, second.currentRevisionId!, first.id);
+    await expect(resumeNativePartialJob(ownerId, projectId, paused.id)).rejects.toThrow(/selected version changed/);
+    await abandonNativePartialJob(ownerId, projectId, paused.id);
+    const retained = await nativeSnapshot(ownerId, projectId);
+    expect(retained.currentRevisionId).toBe(second.currentRevisionId);
+    expect(retained.versions.map((version) => version.documentHash)).toEqual(second.versions.map((version) => version.documentHash));
+    await selectNativeRevision(ownerId, projectId, first.id, second.currentRevisionId!);
   }, 60_000);
 
   it("keeps accepted history after a cancelled or invalid protected revision", async () => {

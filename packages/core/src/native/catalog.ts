@@ -10,7 +10,7 @@ export class NativeSchemaPathError extends Error {
 }
 const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "audioSplitter", "audioMerger", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
 const musicalMeaning: Record<string, { family: string; purpose: string; caveat?: string }> = {
-  heisenberg: { family: "instrument", purpose: "Subtractive synth for basses, pads and leads." },
+  heisenberg: { family: "instrument", purpose: "FM/operator synth with filter, envelopes and modulation for basses, pads and leads." },
   pulverisateur: { family: "instrument", purpose: "Alternate pitched synth voice for contrasting timbres." },
   kobolt: { family: "routing", purpose: "Multichannel audio mixer, not a pitched instrument.", caveat: "Not yet writable through Pocket Producer." },
   gakki: { family: "instrument", purpose: "Pitched sampler/instrument voice; preset behavior must be checked before use." },
@@ -65,9 +65,9 @@ async function schemaRoots(): Promise<string[]> {
 }
 
 export async function discoverNativeCapabilities(query = "", limit = 24) {
-  const normalized = query.trim().toLowerCase();
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const roots = await schemaRoots();
-  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length, pathExample: "/beatbox8Pattern/length", pathFormat: "/entity/field; use a root returned in matches and slash-separated schema fields", matches: roots.filter((type) => !normalized || `${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""}`.toLowerCase().includes(normalized)).slice(0, Math.max(1, Math.min(64, limit))).map((type) => ({ type, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), operationContract: nativeOperationContract(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
+  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length, pathExample: "/beatbox8Pattern/length", pathFormat: "/entity/field; use a root returned in matches and slash-separated schema fields", matches: roots.filter((type) => terms.every((term) => `${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""}`.toLowerCase().includes(term))).slice(0, Math.max(1, Math.min(64, limit))).map((type) => ({ type, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), operationContract: nativeOperationContract(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
 }
 
 export async function inspectNativeCapability(path: string) {

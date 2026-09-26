@@ -36,18 +36,69 @@ export interface NativeBriefIntent {
 }
 
 export interface ResolvedNativePreservation {
-  namedParts: Array<{ id: string; name: string; evidence: string }>;
-  theme: { familyId: string; motifIds: string[]; label: string; evidence: string } | null;
+  namedParts: Array<{ id: string; name: string; evidence: string; sectionId?: string }>;
+  theme: { familyId: string; motifIds: string[]; label: string; evidence: string; sectionId?: string } | null;
   unresolved: string[];
 }
 
 export function resolveNativePreservation(direction: string, document: NativeDocument, sectionId?: string | null): ResolvedNativePreservation {
-  const brief = interpretNativeBrief(direction);
-  const namedParts = document.parts.filter((part) => brief.preservedRoles.some((rule) => rule.matches.includes(part.role)))
-    .map((part) => ({ id: part.id, name: part.name, evidence: brief.requirements.find((rule) => rule.kind === "preserve" && rule.matches.includes(part.role))?.evidence.text ?? "Named in the request" }));
+  const namedParts: ResolvedNativePreservation["namedParts"] = [];
+  const addPart = (part: ResolvedNativePreservation["namedParts"][number]) => { if (!namedParts.some((value) => value.id === part.id && value.sectionId === part.sectionId)) namedParts.push(part); };
+  const unresolved: string[] = [];
+  let explicitTheme: ResolvedNativePreservation["theme"] = null;
+  let themeSectionId = sectionId ?? undefined;
+  let roleDirection = direction;
+  for (const chunk of direction.matchAll(/[^;.!?\n]+/g)) {
+    const cues = [...chunk[0].matchAll(directivePattern)];
+    for (let index = 0; index < cues.length; index++) {
+      const cue = cues[index]!;
+      if (directiveKind(cue[0]) !== "preserve") continue;
+      const phrase = chunk[0].slice(cue.index, cues[index + 1]?.index);
+      const sectionName = scope(phrase) ?? scope(chunk[0].slice(0, cue.index));
+      const sections = sectionName ? document.sections.filter((value) => [value.name.toLowerCase(), value.id.toLowerCase()].includes(sectionName)) : [];
+      if (sectionName && sections.length !== 1) { unresolved.push(`Preserved section ${sectionName} is not uniquely identifiable`); continue; }
+      const selectedId = sections[0]?.id ?? sectionId ?? undefined;
+      if (/\b(theme|motif|hook)\b/i.test(phrase)) themeSectionId = selectedId;
+      const candidates = [
+        ...document.parts.map((value) => ({ kind: "part" as const, value })),
+        ...document.motifs.map((value) => ({ kind: "phrase" as const, value }))
+      ].flatMap((item) => [...new Set([item.value.name, item.value.id])].flatMap((name) => {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const match = new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`, "i").exec(phrase);
+        return match ? [{ ...item, name, start: match.index, end: match.index + match[0].length }] : [];
+      })).filter((item, _, all) => !all.some((other) => other.start <= item.start && other.end >= item.end && other.end - other.start > item.end - item.start));
+      for (const item of candidates) {
+        const matches = candidates.filter((other) => other.start === item.start && other.end === item.end);
+        const qualifier = /\b(part|phrase|motif)\s+["“']?$/i.exec(phrase.slice(0, item.start))?.[1]?.toLowerCase();
+        // "the theme" is a family request, not an implicit ID lookup that can
+        // pick a conveniently named motif among several unrelated families.
+        if (item.kind === "phrase" && /^(theme|motif|hook)$/i.test(item.name) && !qualifier) continue;
+        const qualified = matches.filter((other) => !qualifier || other.kind === (qualifier === "part" ? "part" : "phrase"));
+        if (!qualified.includes(item)) continue;
+        if (new Set(qualified.map((other) => `${other.kind}:${other.value.id}`)).size > 1) { unresolved.push(`${item.name} names more than one part or phrase; use its unique identity`); continue; }
+        if (item.kind === "part") addPart({ id: item.value.id, name: item.value.name, evidence: phrase, ...(selectedId ? { sectionId: selectedId } : {}) });
+        else {
+          const motif = document.motifs.find((value) => value.id === item.value.id)!;
+          const familyId = motif.familyId ?? motif.id;
+          if (explicitTheme && explicitTheme.familyId !== familyId) unresolved.push("Name one phrase family to preserve per direction, or protect its parts");
+          else explicitTheme = { familyId, motifIds: document.motifs.filter((value) => (value.familyId ?? value.id) === familyId).map((value) => value.id), label: motif.name, evidence: phrase, ...(selectedId ? { sectionId: selectedId } : {}) };
+        }
+        // A real name containing a role word must not lock every part of that role.
+        roleDirection = roleDirection.replace(new RegExp(item.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "material");
+      }
+    }
+  }
+  const brief = interpretNativeBrief(roleDirection);
+  for (const rule of brief.requirements.filter((value) => value.kind === "preserve")) {
+    const selected = rule.section ? document.sections.filter((value) => [value.name.toLowerCase(), value.id.toLowerCase()].includes(rule.section!)) : [];
+    if (rule.section && selected.length !== 1) { unresolved.push(`Preserved section ${rule.section} is not uniquely identifiable`); continue; }
+    const selectedId = selected[0]?.id ?? sectionId ?? undefined;
+    for (const part of document.parts.filter((value) => rule.matches.includes(value.role))) addPart({ id: part.id, name: part.name, evidence: rule.evidence.text, ...(selectedId ? { sectionId: selectedId } : {}) });
+  }
+  if (unresolved.length || explicitTheme) return { namedParts, theme: explicitTheme, unresolved: [...new Set(unresolved)] };
   const themePhrase = /\b(?:keep|preserve|leave|do not change|don't change|without changing)\b[^.!?;]{0,100}\b(?:the\s+)?(?:theme|motif|hook)\b/i.exec(direction)?.[0] ?? null;
   if (!themePhrase) return { namedParts, theme: null, unresolved: [] };
-  const section = document.sections.find((value) => value.id === sectionId);
+  const section = document.sections.find((value) => value.id === themeSectionId);
   const start = section ? section.startBar * document.meter.numerator * 960 * 4 / document.meter.denominator : 0;
   const end = section ? section.endBar * document.meter.numerator * 960 * 4 / document.meter.denominator : Infinity;
   const families = new Map<string, typeof document.motifs>();
@@ -60,7 +111,7 @@ export function resolveNativePreservation(direction: string, document: NativeDoc
   }
   if (families.size === 1) {
     const [familyId, motifs] = [...families][0]!;
-    return { namedParts, theme: { familyId, motifIds: motifs.map((motif) => motif.id), label: motifs.find((motif) => motif.id === familyId)?.name ?? motifs[0]!.name, evidence: themePhrase }, unresolved: [] };
+    return { namedParts, theme: { familyId, motifIds: motifs.map((motif) => motif.id), label: motifs.find((motif) => motif.id === familyId)?.name ?? motifs[0]!.name, evidence: themePhrase, ...(themeSectionId ? { sectionId: themeSectionId } : {}) }, unresolved: [] };
   }
   if (families.size === 0) {
     const melodyParts = document.parts.filter((part) => ["lead", "melody"].includes(part.role));

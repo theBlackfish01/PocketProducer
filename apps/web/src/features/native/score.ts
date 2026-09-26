@@ -154,6 +154,25 @@ export function partGroupChain(document: NativeDocument, partId: string): NonNul
 export interface PartComparison { partId: string; name: string; status: ComparisonState; addedNotes: ScoreNote[]; removedNotes: ScoreNote[]; modifiedNotes: Array<{ before: ScoreNote; after: ScoreNote }>; preservedNotes: number; clipStatus: ComparisonState; controlsChanged: boolean; dependenciesChanged: boolean; metadataChanged: boolean }
 export interface SectionComparison { sectionId: string; status: ComparisonState; parts: PartComparison[]; addedNotes: number; removedNotes: number; modifiedNotes: number; verifiedUnchangedParts: string[]; caveats: string[] }
 
+function sidechainStatus(before: NativeDocument, after: NativeDocument, partId: string, start: number, end: number): ComparisonState {
+  const sources = (document: NativeDocument) => partGroupChain(document, partId).flatMap((group) => group.sidechainFromPartId ? [group.sidechainFromPartId] : []).sort()
+  const ids = sources(before)
+  if (stable(ids) !== stable(sources(after))) return "changed"
+  let changed = false
+  for (const id of new Set(ids)) {
+    const old = before.parts.find((part) => part.id === id), next = after.parts.find((part) => part.id === id)
+    if (!old || !next) return "unverified"
+    const a = materializedSectionNotes(before, id, start, end, 100_000), b = materializedSectionNotes(after, id, start, end, 100_000)
+    const clipsA = clipSegments(before, old, start, end), clipsB = clipSegments(after, next, start, end)
+    const controls = sectionAutomationStatus(old.automation, next.automation, (target) => automationBaseline(old, target), (target) => automationBaseline(next, target), start, end)
+    if (a.truncated || b.truncated || clipsA === null || clipsB === null || controls === "unverified") return "unverified"
+    const notes = (values: ScoreNote[]) => values.map((note) => ({ startTick: Math.max(start, note.startTick), endTick: Math.min(end, note.startTick + note.durationTicks), pitch: note.pitch, velocity: note.velocity })).sort((x, y) => x.startTick - y.startTick || x.pitch - y.pitch || x.endTick - y.endTick || x.velocity - y.velocity)
+    const sound = (part: NativePart) => ({ device: part.device, gain: part.gain, pan: part.pan, effects: part.effects, parallel: part.parallel, sends: part.sends, groupId: part.groupId })
+    changed ||= controls === "changed" || stable(notes(a.notes)) !== stable(notes(b.notes)) || stable(clipsA) !== stable(clipsB) || stable(sound(old)) !== stable(sound(next))
+  }
+  return changed ? "changed" : "preserved"
+}
+
 export function compareScoreSection(before: NativeDocument, after: NativeDocument, sectionId: string): SectionComparison {
   const section = before.sections.find((value) => value.id === sectionId)
   const paired = after.sections.find((value) => value.id === sectionId)
@@ -179,10 +198,12 @@ export function compareScoreSection(before: NativeDocument, after: NativeDocumen
     const groupStates = oldGroups.map((oldGroup) => { const newGroup = newGroups.find((group) => group.id === oldGroup.id); return newGroup ? sectionAutomationStatus(oldGroup.automation ?? [], newGroup.automation ?? [], (target) => groupBaseline(oldGroup, target), (target) => groupBaseline(newGroup, target), start, end) : "changed" })
     const groupControls = groupStates.includes("unverified") ? "unverified" : groupStates.includes("changed") ? "changed" : "preserved"
     const controlStatus = partControls === "unverified" || groupControls === "unverified" ? "unverified" : partControls === "changed" || groupControls === "changed" ? "changed" : "preserved"
+    const sidechain = sidechainStatus(before, after, id, start, end)
+    if (sidechain === "unverified") caveats.push(`${old.name}: sidechain material could not be fully compared.`)
     const controlsChanged = controlStatus === "changed"
-    const dependenciesChanged = stable({ device: old.device, gain: old.gain, pan: old.pan, effects: old.effects, parallel: old.parallel, sends: old.sends, groups: oldGroups.map((group) => ({ ...group, automation: undefined })), master: before.master, reverbBus: old.sends?.some((send) => send.busId === before.reverbBus?.id) ? before.reverbBus : null, delayBus: old.sends?.some((send) => send.busId === before.delayBus?.id) ? before.delayBus : null }) !== stable({ device: next.device, gain: next.gain, pan: next.pan, effects: next.effects, parallel: next.parallel, sends: next.sends, groups: newGroups.map((group) => ({ ...group, automation: undefined })), master: after.master, reverbBus: next.sends?.some((send) => send.busId === after.reverbBus?.id) ? after.reverbBus : null, delayBus: next.sends?.some((send) => send.busId === after.delayBus?.id) ? after.delayBus : null })
+    const dependenciesChanged = sidechain === "changed" || stable({ device: old.device, gain: old.gain, pan: old.pan, effects: old.effects, parallel: old.parallel, sends: old.sends, groups: oldGroups.map((group) => ({ ...group, automation: undefined })), master: before.master, reverbBus: old.sends?.some((send) => send.busId === before.reverbBus?.id) ? before.reverbBus : null, delayBus: old.sends?.some((send) => send.busId === before.delayBus?.id) ? before.delayBus : null }) !== stable({ device: next.device, gain: next.gain, pan: next.pan, effects: next.effects, parallel: next.parallel, sends: next.sends, groups: newGroups.map((group) => ({ ...group, automation: undefined })), master: after.master, reverbBus: next.sends?.some((send) => send.busId === after.reverbBus?.id) ? after.reverbBus : null, delayBus: next.sends?.some((send) => send.busId === after.delayBus?.id) ? after.delayBus : null })
     const metadataChanged = old.name !== next.name || stable(before.motifs.filter((motif) => motif.partId === id).map((motif) => ({ id: motif.id, name: motif.name, familyId: motif.familyId }))) !== stable(after.motifs.filter((motif) => motif.partId === id).map((motif) => ({ id: motif.id, name: motif.name, familyId: motif.familyId })))
-    const status: ComparisonState = previous.truncated || current.truncated || clipStatus === "unverified" || controlStatus === "unverified" ? "unverified" : addedNotes.length || removedNotes.length || modifiedNotes.length || clipStatus !== "preserved" || controlsChanged || dependenciesChanged ? "changed" : "preserved"
+    const status: ComparisonState = sidechain === "unverified" || previous.truncated || current.truncated || clipStatus === "unverified" || controlStatus === "unverified" ? "unverified" : addedNotes.length || removedNotes.length || modifiedNotes.length || clipStatus !== "preserved" || controlsChanged || dependenciesChanged ? "changed" : "preserved"
     parts.push({ partId: id, name: next.name, status, addedNotes, removedNotes, modifiedNotes, preservedNotes, clipStatus, controlsChanged, dependenciesChanged, metadataChanged })
   }
   return { sectionId, status: parts.some((part) => part.status === "unverified") ? "unverified" : parts.some((part) => part.status !== "preserved") ? "changed" : "preserved", parts, addedNotes: parts.reduce((sum, part) => sum + part.addedNotes.length, 0), removedNotes: parts.reduce((sum, part) => sum + part.removedNotes.length, 0), modifiedNotes: parts.reduce((sum, part) => sum + part.modifiedNotes.length, 0), verifiedUnchangedParts: parts.filter((part) => part.status === "preserved").map((part) => part.name), caveats }

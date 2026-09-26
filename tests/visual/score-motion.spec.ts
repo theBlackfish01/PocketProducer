@@ -32,7 +32,7 @@ function documentFixture(): NativeDocument {
   }
 }
 
-async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean } = {}) {
+async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean; paused?: boolean } = {}) {
   const before = documentFixture(), after = structuredClone(before)
   after.parts[0]!.notes[0]!.pitch += 12; after.parts[0]!.notes[0]!.startTick += 480; after.parts[0]!.notes[0]!.durationTicks += 240
   after.parts[0]!.notes.splice(1, 1)
@@ -41,7 +41,8 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean 
     before.parts = [...before.parts, ...before.parts.map((part) => ({ ...part, id: `${part.id}-b`, name: `${part.name} II` })), ...before.parts.map((part) => ({ ...part, id: `${part.id}-c`, name: `${part.name} III` }))]
     after.parts = [...after.parts, ...before.parts.slice(8)]
   }
-  let draft = before, step = 1, writes = 0, completed = false
+  let draft = before, step = 1, writes = 0, completed = false, abandoned = false
+  const job = () => ({ id: "visual-job", project_id: projectId, kind: "native-revision", state: abandoned ? "cancelled" : completed ? "succeeded" : options.paused ? "needs_attention" : "running", stage: "constructing", error_code: abandoned ? "NATIVE_ABANDONED" : options.paused ? "NATIVE_PARTIAL" : null })
   const version = (document: NativeDocument, ordinal: number) => ({ id: `version-${ordinal}`, parentRevisionId: ordinal === 2 ? "version-1" : null, ordinal, document, documentHash: `hash-${ordinal}`, changeSummary: "Shape the opening pulse", producer: {}, structuralDiff: { addedParts: [], changedParts: ["part-0"], changedSections: [], protectionChange: { added: [], removed: [] } }, createdAt: "2026-09-26T00:00:00Z" })
   const versions = [version(after, 2), version(before, 1)]
   await page.route("**/api/v1/**", async (route) => {
@@ -51,11 +52,12 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean 
     else if (path.endsWith("/projects")) json = { projects: [{ id: projectId, title: "Night Drive", currentRevisionId: null, version: 1, createdAt: "2026-09-26" }] }
     else if (path.endsWith(`/projects/${projectId}`)) json = { project: { id: projectId, title: "Night Drive", currentRevisionId: null }, assets: [], revisions: [], analyses: [], latestJob: null, currentRevision: null }
     else if (path.endsWith("/activity/stream")) { await route.abort(); return }
-    else if (path.endsWith("/activity")) json = { events: [], cursor: 0, nextCursor: 0, hasOlder: false, job: options.draft ? { id: "visual-job", project_id: projectId, kind: "native-revision", state: completed ? "succeeded" : "running", stage: "constructing", error_code: null } : null, headId: completed ? "version-3" : "version-2", draft: options.draft ? { step, hash: `draft-${step}` } : null, actions: { canSubmit: completed || !options.draft, canStop: Boolean(options.draft), issue: null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } }
+    else if (path.endsWith("/activity")) json = { events: [], cursor: 0, nextCursor: 0, hasOlder: false, job: options.draft ? job() : null, headId: completed ? "version-3" : "version-2", draft: options.draft ? { step, hash: `draft-${step}` } : null, actions: { canSubmit: abandoned || completed || !options.draft, canStop: Boolean(options.draft && !options.paused), canAbandon: options.paused && !abandoned, issue: options.paused && !abandoned ? "paused" : null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } }
     else if (path.endsWith("/native")) json = { currentRevisionId: completed ? "version-3" : "version-2", headVersion: completed ? 3 : 2, current: completed ? version(after, 3) : versions[0], versions: completed ? [version(after, 3), ...versions] : versions, context: null, comparisons: {}, synchronization: { state: "local_only", projectId: null, revisionId: null, url: null }, legacyAudio: "none" }
     else if (path.endsWith("/preservation-preview")) json = { revisionId: "version-2", sectionId: null, namedParts: [], theme: null, unresolved: [] }
     else if (path.endsWith("/capabilities")) json = { matches: [], totalEntities: 0, version: "test" }
-    else if (path.endsWith("/jobs/visual-job")) json = { id: "visual-job", project_id: projectId, kind: "native-revision", state: "running", stage: "constructing", error_code: null, events: [] }
+    else if (path.endsWith("/jobs/visual-job")) json = { ...job(), events: [] }
+    else if (path.endsWith("/abandon")) { abandoned = true; writes++; json = { jobId: "visual-job", abandoned: true } }
     else if (path.endsWith("/draft")) json = { jobId: "visual-job", state: "running", document: draft, documentHash: `draft-${step}`, selected: false, stepCount: step, baseRevisionId: "version-2", headMatches: true, canContinue: false, canExtend: false, continuationReason: null }
     else { writes++; await route.fulfill({ status: 400, json: { message: `Unexpected fixture request: ${path}` } }); return }
     await route.fulfill({ json })
@@ -68,6 +70,72 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean 
 }
 
 test.beforeAll(async () => { await mkdir(evidence, { recursive: true }) })
+test("recovers a saved head after all five HTTP attempts fail, without erasing a pending direction", async ({ page }) => {
+  const room = await mockRoom(page, { draft: true })
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("Keep my unsent idea")
+  let failures = 0
+  await page.route(`**/projects/${projectId}/native`, async (route) => {
+    if (++failures <= 5) await route.fulfill({ status: 503, json: { message: "Transient snapshot read failure" } })
+    else await route.fallback()
+  })
+  room.complete()
+  await expect(page.locator(".producer-workspace-header")).toContainText("Version 3", { timeout: 25_000 })
+  await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toHaveValue("Keep my unsent idea")
+  expect(failures).toBeGreaterThan(5); expect(room.writes()).toBe(0)
+  await page.screenshot({ path: `${evidence}/correctness-recovered-head.png`, fullPage: true })
+})
+
+test("bounds failed draft reconciliation and provides explicit read-only refresh", async ({ page }) => {
+  const room = await mockRoom(page, { draft: true })
+  let reads = 0, fail = true
+  await page.route("**/native/requests/visual-job/draft", async (route) => { reads++; if (fail) await route.fulfill({ status: 503, json: { message: "Unavailable draft" } }); else await route.fallback() })
+  room.setDraft(room.after, 2)
+  await expect(page.getByRole("button", { name: "Refresh arrangement", exact: true })).toBeVisible({ timeout: 30_000 })
+  expect(reads).toBe(15)
+  fail = false
+  await page.getByRole("button", { name: "Refresh arrangement", exact: true }).click()
+  await page.getByRole("button", { name: "View work in progress" }).click()
+  await expect(page.getByRole("region", { name: "Unfinished arrangement preview" })).toContainText("2 confirmed changes")
+  expect(room.writes()).toBe(0)
+})
+
+test("leaving the room cancels exhausted-read recovery and ignores a late snapshot", async ({ page }) => {
+  const room = await mockRoom(page, { draft: true })
+  let reads = 0, release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  await page.route(`**/projects/${projectId}/native`, async (route) => {
+    if (++reads <= 5) await route.fulfill({ status: 503, json: { message: "Temporary failure" } })
+    else { await held; await route.fallback().catch(() => undefined) }
+  })
+  room.complete()
+  await expect.poll(() => reads, { timeout: 20_000 }).toBe(6)
+  // Switching to the separate audio room unmounts NativeRoom in the same app.
+  await page.getByRole("button", { name: "Playable audio", exact: true }).click()
+  release()
+  await expect(page.locator(".producer-workspace-header")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Playable audio", exact: true })).toHaveAttribute("aria-pressed", "true")
+  expect(room.writes()).toBe(0)
+})
+
+test("leaving a safe draft requires confirmation and unlocks a fresh direction", async ({ page }) => {
+  const room = await mockRoom(page, { draft: true, paused: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole("button", { name: "Producer", exact: true }).click()
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("A different idea")
+  const leave = page.getByRole("button", { name: "Leave this draft", exact: true })
+  await leave.click()
+  await expect(page.getByRole("dialog", { name: "Leave this unfinished draft?" })).toBeVisible()
+  await page.keyboard.press("Escape"); await expect(leave).toBeFocused(); expect(room.writes()).toBe(0)
+  await leave.click()
+  await expect(page.getByRole("dialog", { name: "Leave this unfinished draft?" })).toHaveCSS("opacity", "1")
+  await page.screenshot({ path: `${evidence}/correctness-abandon-phone.png` })
+  await page.getByRole("button", { name: "Leave draft and start fresh" }).click()
+  await expect(page.getByRole("button", { name: "Make this change", exact: true })).toBeEnabled({ timeout: 20_000 })
+  await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toHaveValue("A different idea")
+  await expect(page.locator(".producer-workspace-header")).toContainText("Version 2")
+  expect(room.writes()).toBe(1)
+})
+
 test("desktop and phone keep inspection, scope and comparison distinct", async ({ page }) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message))
   const room = await mockRoom(page)

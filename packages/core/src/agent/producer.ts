@@ -128,21 +128,24 @@ export function openAiCost(usage: { inputTokens: number; outputTokens: number })
   return tokenCostUsd("openai", "gpt-6-astra", usage);
 }
 
-export function usageFromLlmResult(result: LLMResult): { inputTokens: number; outputTokens: number; cachedInputTokens: number } {
-  const totals = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+export function usageFromLlmResult(result: LLMResult): { inputTokens: number; outputTokens: number; cachedInputTokens: number; cacheWriteTokens: number } {
+  const totals = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteTokens: 0 };
   for (const generations of result.generations) {
     for (const generation of generations) {
-      const message = "message" in generation ? generation.message as BaseMessage & { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } }; response_metadata?: { tokenUsage?: { promptTokensDetails?: { cachedTokens?: number } }; token_usage?: { prompt_tokens_details?: { cached_tokens?: number } } } } : undefined;
+      const message = "message" in generation ? generation.message as BaseMessage & { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number; cache_creation?: number; cache_write?: number } }; response_metadata?: { tokenUsage?: { promptTokensDetails?: { cachedTokens?: number; cacheWriteTokens?: number } }; token_usage?: { prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number } } } } : undefined;
       totals.inputTokens += message?.usage_metadata?.input_tokens ?? 0;
       totals.outputTokens += message?.usage_metadata?.output_tokens ?? 0;
       totals.cachedInputTokens += message?.usage_metadata?.input_token_details?.cache_read ?? message?.response_metadata?.token_usage?.prompt_tokens_details?.cached_tokens ?? message?.response_metadata?.tokenUsage?.promptTokensDetails?.cachedTokens ?? 0;
+      totals.cacheWriteTokens += message?.usage_metadata?.input_token_details?.cache_creation ?? message?.usage_metadata?.input_token_details?.cache_write ?? message?.response_metadata?.token_usage?.prompt_tokens_details?.cache_write_tokens ?? message?.response_metadata?.tokenUsage?.promptTokensDetails?.cacheWriteTokens ?? 0;
     }
   }
-  const tokenUsage = result.llmOutput?.tokenUsage as { promptTokens?: number; completionTokens?: number; promptTokensDetails?: { cachedTokens?: number } } | undefined;
+  const tokenUsage = result.llmOutput?.tokenUsage as { promptTokens?: number; completionTokens?: number; promptTokensDetails?: { cachedTokens?: number; cacheWriteTokens?: number } } | undefined;
   if (totals.inputTokens === 0) totals.inputTokens = tokenUsage?.promptTokens ?? 0;
   if (totals.outputTokens === 0) totals.outputTokens = tokenUsage?.completionTokens ?? 0;
   if (totals.cachedInputTokens === 0) totals.cachedInputTokens = tokenUsage?.promptTokensDetails?.cachedTokens ?? 0;
+  if (totals.cacheWriteTokens === 0) totals.cacheWriteTokens = tokenUsage?.promptTokensDetails?.cacheWriteTokens ?? 0;
   totals.cachedInputTokens = Math.max(0, Math.min(totals.inputTokens, totals.cachedInputTokens));
+  totals.cacheWriteTokens = Math.max(0, Math.min(totals.inputTokens, totals.cacheWriteTokens));
   return totals;
 }
 
@@ -160,9 +163,11 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
 
   setOutputTokenBound(bound: number): void { this.currentOutputTokenBound = Math.min(this.outputTokenBound, bound); }
 
-  private cost(usage: { inputTokens: number; outputTokens: number }): number {
+  private cost(usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheWriteTokens?: number }): number {
     const capturedPrice = jobNativeRunLimits(this.job.request)?.pricing;
-    return capturedPrice ? tokenCostMicrousdAtPrice(capturedPrice, usage) : tokenCostMicrousd("openai", this.model, usage);
+    // Older captured Astra profiles predate the cache-write field. Preserve
+    // their captured input rate and apply the documented 1.25x write factor.
+    return capturedPrice ? tokenCostMicrousdAtPrice({ ...capturedPrice, cacheWriteUsdPerMillion: capturedPrice.cacheWriteUsdPerMillion ?? (this.model === "gpt-6-astra" ? capturedPrice.inputUsdPerMillion * 1.25 : capturedPrice.inputUsdPerMillion) }, usage) : tokenCostMicrousd("openai", this.model, usage);
   }
 
   override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
@@ -176,7 +181,9 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
       inputHash: canonicalHash({ operationHash: this.operationHash, messageHash, inputTokenBound: request.inputTokenBound, outputTokenBound: request.outputTokenBound }),
       model: this.model,
       promptVersion: "deep-producer-v2",
-      reservationMicrousd: this.cost({ inputTokens: request.inputTokenBound, outputTokens: request.outputTokenBound })
+      // No cache hit is assumed. For a write-priced model, all input may be a
+      // cache creation on this dispatch, so reserve at that upper rate.
+      reservationMicrousd: this.cost({ inputTokens: request.inputTokenBound, cacheWriteTokens: request.inputTokenBound, outputTokens: request.outputTokenBound })
     });
     if (!reservation.created) throw new Error(`OPENAI_EFFECT_${reservation.state.toUpperCase()}`);
     await markEffectDispatched(reservation.id, this.job);

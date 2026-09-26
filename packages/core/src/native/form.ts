@@ -30,10 +30,16 @@ export interface OwnedNativeSource { assetId: string; assetHash: string; duratio
 export function nativeFormOperations(raw: NativeForm, ownedSources: OwnedNativeSource[]): NativeOperation[] {
   const form = nativeFormSchema.parse(raw);
   const beatsPerBar = form.meter.numerator * 4 / form.meter.denominator;
-  const ticks = (beats: number) => {
+  const ticks = (beats: number, path: string) => {
     const value = beats * 960;
-    if (!Number.isSafeInteger(value)) throw new Error("Native form beat positions must map exactly to 960 PPQ ticks");
-    return value;
+    const nearest = Math.round(value);
+    // Decimal beat literals can land a few ulps either side of an integer
+    // tick (1.025 * 960 is 983.9999999999999). This tolerance is far below
+    // one tick; it does not quantize expressive off-grid timing.
+    if (!Number.isSafeInteger(nearest) || Math.abs(value - nearest) > 1e-7 || (beats > 0 && nearest <= 0)) {
+      throw new Error(`${path}=${beats} cannot be represented at 960 ticks per quarter-note beat; use a multiple of 1/960 beat (for example ${nearest}/960) or an exact tick-based batch operation`);
+    }
+    return nearest;
   };
   const sections: NativeDocument["sections"] = [];
   let cursor = 0;
@@ -48,30 +54,30 @@ export function nativeFormOperations(raw: NativeForm, ownedSources: OwnedNativeS
   if (form.reverbBus) operations.push({ kind: "setReverbBus", bus: form.reverbBus });
   if (form.delayBus) operations.push({ kind: "setDelayBus", bus: form.delayBus });
   if (form.master) operations.push({ kind: "setMaster", master: form.master });
-  for (const item of form.parts) {
-    const sourceRegions = item.sources.map((region) => {
+  for (const [partIndex, item] of form.parts.entries()) {
+    const sourceRegions = item.sources.map((region, regionIndex) => {
       const source = sourceById.get(region.assetId);
       if (!source) throw new Error(`Source ${region.assetId} is not an owned source selected for this job`);
       if (region.sourceStartSeconds + region.sourceDurationSeconds > source.durationSeconds + 0.001) throw new Error(`Selected source interval exceeds owned source ${region.assetId}`);
-      const durationTicks = ticks(region.durationBars * beatsPerBar);
+      const durationTicks = ticks(region.durationBars * beatsPerBar, `parts[${partIndex}].sources[${regionIndex}].durationBars`);
       const selectedTicks = Math.round(region.sourceDurationSeconds / (region.playbackRate ?? 1) * form.tempoBpm / 60 * 960);
       if (region.playbackMode === "once" && durationTicks > selectedTicks) throw new Error("A one-shot source region cannot exceed the selected source interval; choose loop explicitly or shorten the timeline placement");
-      return { id: region.id, assetId: source.assetId, assetHash: source.assetHash, startTick: ticks(region.startBar * beatsPerBar), durationTicks, sourceStartSeconds: region.sourceStartSeconds, sourceDurationSeconds: region.sourceDurationSeconds, playbackMode: region.playbackMode, gain: region.gain, rights: source.rights, ...(region.playbackRate !== undefined ? { playbackRate: region.playbackRate } : {}), ...(region.stretchMode ? { stretchMode: region.stretchMode } : {}), ...(region.pitchShiftSemitones !== undefined ? { pitchShiftSemitones: region.pitchShiftSemitones } : {}) };
+      return { id: region.id, assetId: source.assetId, assetHash: source.assetHash, startTick: ticks(region.startBar * beatsPerBar, `parts[${partIndex}].sources[${regionIndex}].startBar`), durationTicks, sourceStartSeconds: region.sourceStartSeconds, sourceDurationSeconds: region.sourceDurationSeconds, playbackMode: region.playbackMode, gain: region.gain, rights: source.rights, ...(region.playbackRate !== undefined ? { playbackRate: region.playbackRate } : {}), ...(region.stretchMode ? { stretchMode: region.stretchMode } : {}), ...(region.pitchShiftSemitones !== undefined ? { pitchShiftSemitones: region.pitchShiftSemitones } : {}) };
     });
-    const libraryRegions = item.librarySamples.map((region) => {
+    const libraryRegions = item.librarySamples.map((region, regionIndex) => {
       if (region.sourceStartSeconds + region.sourceDurationSeconds > region.durationSeconds + 0.001) throw new Error(`Selected library interval exceeds ${region.sampleName}`);
-      const durationTicks = ticks(region.durationBars * beatsPerBar);
+      const durationTicks = ticks(region.durationBars * beatsPerBar, `parts[${partIndex}].librarySamples[${regionIndex}].durationBars`);
       const selectedTicks = Math.round(region.sourceDurationSeconds / (region.playbackRate ?? 1) * form.tempoBpm / 60 * 960);
       if (region.playbackMode === "once" && durationTicks > selectedTicks) throw new Error(`Library one-shot ${region.id} exceeds the selected interval`);
-      return { id: region.id, sampleName: region.sampleName, displayName: region.displayName, ownerName: region.ownerName, durationSeconds: region.durationSeconds, bpm: region.bpm, startTick: ticks(region.startBar * beatsPerBar), durationTicks, sourceStartSeconds: region.sourceStartSeconds, sourceDurationSeconds: region.sourceDurationSeconds, playbackMode: region.playbackMode, gain: region.gain, provenance: "audiotool-library" as const, ...(region.playbackRate !== undefined ? { playbackRate: region.playbackRate } : {}), ...(region.stretchMode ? { stretchMode: region.stretchMode } : {}), ...(region.pitchShiftSemitones !== undefined ? { pitchShiftSemitones: region.pitchShiftSemitones } : {}) };
+      return { id: region.id, sampleName: region.sampleName, displayName: region.displayName, ownerName: region.ownerName, durationSeconds: region.durationSeconds, bpm: region.bpm, startTick: ticks(region.startBar * beatsPerBar, `parts[${partIndex}].librarySamples[${regionIndex}].startBar`), durationTicks, sourceStartSeconds: region.sourceStartSeconds, sourceDurationSeconds: region.sourceDurationSeconds, playbackMode: region.playbackMode, gain: region.gain, provenance: "audiotool-library" as const, ...(region.playbackRate !== undefined ? { playbackRate: region.playbackRate } : {}), ...(region.stretchMode ? { stretchMode: region.stretchMode } : {}), ...(region.pitchShiftSemitones !== undefined ? { pitchShiftSemitones: region.pitchShiftSemitones } : {}) };
     });
     operations.push({ kind: "addPart", part: {
       id: item.id, name: item.name, role: item.role, device: item.device, gain: item.gain, pan: item.pan, ...(item.groupId ? { groupId: item.groupId } : {}), sends: item.sends,
-      notes: item.freeNotes.map((event, index) => ({ id: `free-${index}`, startTick: ticks(event.beat), durationTicks: ticks(event.durationBeats), pitch: event.pitch, velocity: event.velocity })),
-      placements: item.placements.map((place) => ({ id: place.id, motifId: place.motifId, startTick: ticks(place.startBar * beatsPerBar), repeats: place.repeats, transpose: place.transpose })),
+      notes: item.freeNotes.map((event, index) => ({ id: `free-${index}`, startTick: ticks(event.beat, `parts[${partIndex}].freeNotes[${index}].beat`), durationTicks: ticks(event.durationBeats, `parts[${partIndex}].freeNotes[${index}].durationBeats`), pitch: event.pitch, velocity: event.velocity })),
+      placements: item.placements.map((place, index) => ({ id: place.id, motifId: place.motifId, startTick: ticks(place.startBar * beatsPerBar, `parts[${partIndex}].placements[${index}].startBar`), repeats: place.repeats, transpose: place.transpose })),
       sourceRegions, libraryRegions, effects: item.effects, ...(item.parallel ? { parallel: item.parallel } : {}), automation: item.automation
     } });
-    for (const motif of item.motifs) operations.push({ kind: "defineMotif", motif: { id: motif.id, partId: item.id, name: motif.name, lengthTicks: ticks(motif.lengthBeats), notes: motif.notes.map((event, index) => ({ id: `note-${index}`, startTick: ticks(event.beat), durationTicks: ticks(event.durationBeats), pitch: event.pitch, velocity: event.velocity })) } });
+    for (const [motifIndex, motif] of item.motifs.entries()) operations.push({ kind: "defineMotif", motif: { id: motif.id, partId: item.id, name: motif.name, lengthTicks: ticks(motif.lengthBeats, `parts[${partIndex}].motifs[${motifIndex}].lengthBeats`), notes: motif.notes.map((event, index) => ({ id: `note-${index}`, startTick: ticks(event.beat, `parts[${partIndex}].motifs[${motifIndex}].notes[${index}].beat`), durationTicks: ticks(event.durationBeats, `parts[${partIndex}].motifs[${motifIndex}].notes[${index}].durationBeats`), pitch: event.pitch, velocity: event.velocity })) } });
   }
   if (operations.length > 128) throw new Error("Native form exceeds the validated operation limit");
   return operations.map((operation) => nativeOperationSchema.parse(operation));

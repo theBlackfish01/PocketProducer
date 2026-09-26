@@ -4,6 +4,18 @@ import { automationAt, compareScoreSection, materializedSectionNotes, projectSco
 import { advanceConfirmedFrame, confirmedChanges, controlPath, noteGeometry, scoreWindow } from "./score-presentation"
 
 const instrument = (id: string, role = "melody"): NativePart => ({ id, name: id, role, device: { type: "heisenberg", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] })
+
+it("compares connected sidechain content within the selected section", () => {
+  const before = fixture()
+  before.parts.push({ ...instrument("bass", "bass"), groupId: "duck" })
+  before.groups = [{ id: "duck", name: "Ducked bass", gain: 1, pan: 0, sidechainFromPartId: "lead", compressor: { thresholdDb: -12, ratio: 4, attackMs: 5, releaseMs: 200, makeupGainDb: 0, isActive: true } }]
+  const after = structuredClone(before); after.parts[0].notes[0].startTick = 960
+  expect(compareScoreSection(before, after, "opening").parts.find((part) => part.partId === "bass")).toMatchObject({ status: "changed", dependenciesChanged: true })
+  expect(compareScoreSection(before, after, "return").parts.find((part) => part.partId === "bass")).toMatchObject({ status: "preserved" })
+  after.parts[0].automation = [{ id: "curve", target: "unrecognized", points: [{ tick: 0, value: 0 }, { tick: 1000, value: 1 }] }]
+  expect(compareScoreSection(before, after, "opening").parts.find((part) => part.partId === "bass")?.status).toBe("unverified")
+  expect(compareScoreSection(before, after, "opening").verifiedUnchangedParts).not.toContain("bass")
+})
 const fixture = (): NativeDocument => ({ schemaVersion: 2, ppq: 960, title: "Independent score", direction: "A returning theme", currentObjective: "Inspect", assumptions: [], tempoBpm: 120, meter: { numerator: 4, denominator: 4 }, bars: 8,
   sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "" }, { id: "return", name: "Return", startBar: 4, endBar: 8, intent: "" }],
   parts: [{ ...instrument("lead"), notes: [{ id: "free", startTick: 0, durationTicks: 480, pitch: 72, velocity: 0.8 }], placements: [{ id: "theme-first", motifId: "theme", startTick: 3840, repeats: 2, transpose: 2 }, { id: "theme-return", motifId: "theme", startTick: 15360, repeats: 1, transpose: 0 }] },

@@ -79,7 +79,7 @@ export async function readProjectActivity(ownerId: string, projectId: string, op
     const remaining = Math.max(0, getConfig().INITIAL_BUILD_API_BUDGET_USD - Number(site.rows[0]!.committed) / 1_000_000);
     await client.query("COMMIT");
     return { events, cursor, reset, nextCursor: forward ? events.at(-1)?.cursor ?? options.after! : cursor, hasOlder: (events[0]?.cursor ?? 1) > 1, job, headId: head, draft: step ? { step: step.ordinal, hash: step.result_hash } : null,
-      actions: { canSubmit: !active && !unsafe && !paused, canStop: Boolean(active && job?.state !== "cancel_requested"), issue: unsafe ? "uncertain" : paused ? "paused" : null },
+      actions: { canSubmit: !active && !unsafe && !paused, canStop: Boolean(active && job?.state !== "cancel_requested"), canAbandon: !unsafe && job?.state === "needs_attention" && job?.error_code === "NATIVE_PARTIAL", issue: unsafe ? "uncertain" : paused ? "paused" : null },
       allowance: { remainingUsd: remaining, standardUsd: Math.min(remaining, nativeRunLimits("standard").maxJobCostUsd), extendedUsd: Math.min(remaining, nativeRunLimits("extended").maxJobCostUsd) } };
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }

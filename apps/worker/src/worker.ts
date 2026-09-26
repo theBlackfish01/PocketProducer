@@ -246,7 +246,7 @@ async function revision(job: JobRecord, signal: AbortSignal): Promise<void> {
   });
 }
 
-interface OfflineNativeConstruction { library: NativeLibrary; scriptedModel: NonNullable<Parameters<typeof produceNative>[0]["scriptedModel"]>; testGraphStepLimit?: number }
+interface OfflineNativeConstruction { library: NativeLibrary; scriptedModel: NonNullable<Parameters<typeof produceNative>[0]["scriptedModel"]>; scriptedReviewer?: NonNullable<Parameters<typeof produceNative>[0]["scriptedReviewer"]>; scriptedGeminiClient?: NonNullable<Parameters<typeof produceNative>[0]["scriptedGeminiClient"]>; testGraphStepLimit?: number }
 async function nativeConstruction(job: JobRecord, signal: AbortSignal, offlineInput?: OfflineNativeConstruction): Promise<void> {
   const direction = typeof job.request.direction === "string" ? job.request.direction : "Construct an editable piece";
   const baseId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : null;
@@ -271,7 +271,7 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal, offlineIn
   throwIfAborted(signal, "Native construction interrupted");
   await stage(job, "constructing", "Building sections, instrument parts, motifs and automation");
   try {
-    const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), ...(offlineInput ? { scriptedModel: offlineInput.scriptedModel, testGraphStepLimit: offlineInput.testGraphStepLimit } : {}), signal });
+    const produced = await produceNative({ session, direction, mode: job.kind === "native-generation" ? "generation" : "revision", sources, ...(typeof job.request.targetPartId === "string" ? { targetPartId: job.request.targetPartId } : {}), ...(typeof job.request.targetSectionId === "string" ? { targetSectionId: job.request.targetSectionId } : {}), ...(offlineInput ? { scriptedModel: offlineInput.scriptedModel, ...(offlineInput.scriptedReviewer ? { scriptedReviewer: offlineInput.scriptedReviewer } : {}), ...(offlineInput.scriptedGeminiClient ? { scriptedGeminiClient: offlineInput.scriptedGeminiClient } : {}), testGraphStepLimit: offlineInput.testGraphStepLimit } : {}), signal });
     await checkpoint(job);
     const document = nativeDocumentSchema.parse(session.document);
     if (job.kind === "native-generation" && !nativeHasMaterial(document)) throw new Error("Native producer returned no musical material");

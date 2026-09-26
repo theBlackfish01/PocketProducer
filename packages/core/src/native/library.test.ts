@@ -4,6 +4,7 @@ import { applyNativeSnapshot } from "./adapter.js";
 import { createNativeLibrary, nativePresetFingerprint, NativeLibraryError, resolveNativePresets, resolveNativeSamples, type NativeLibraryClient, type NativePreset } from "./library.js";
 import { applyNativeOperations, protectedPartHash, setNativeProtections } from "./model.js";
 import { seedNativeDocument } from "./producer.js";
+import { encodeWav } from "../audio/wav.js";
 
 const sample = { name: "samples/example", displayName: "Soft texture", ownerName: "users/example", durationSeconds: 12, bpm: 96, kind: "loop", visibility: "public", tags: ["texture"] };
 const preset = { entityType: "heisenberg", meta: { name: "presets/example", displayName: "Soft glass", ownerName: "users/artist", tags: ["glass"] }, data: {} };
@@ -15,6 +16,50 @@ function fixture(overrides: { samples?: Partial<{ list: () => Promise<unknown>; 
 }
 
 describe("Audiotool resource boundary", () => {
+  it("deduplicates bounded metadata searches by authenticated client and never caches an auth failure", async () => {
+    let calls = 0;
+    const client = { samples: { list: () => { calls++; return Promise.resolve({ samples: [sample], nextPageToken: "" }); }, get: () => Promise.resolve(sample) }, presets: { search: () => Promise.resolve([]), get: () => Promise.resolve(preset) } } as unknown as NativeLibraryClient;
+    const first = createNativeLibrary(client), second = createNativeLibrary(client);
+    const results = await Promise.all([first.searchSamples("  Soft  "), second.searchSamples("soft", "", { kind: "loop" })]);
+    expect(results[0].samples).toHaveLength(1);
+    expect(results[1].samples).toHaveLength(1);
+    expect(calls).toBe(2); // Distinct filters are distinct cache entries.
+    await Promise.all([first.searchSamples(" soft "), second.searchSamples("soft")]);
+    expect(calls).toBe(2);
+    await createNativeLibrary({ ...client, samples: { ...client.samples, list: () => { calls++; return Promise.resolve({ samples: [], nextPageToken: "" }); } } }).searchSamples("soft");
+    expect(calls).toBe(3); // New connection cannot read another account's cache.
+    const failing = createNativeLibrary({ ...client, samples: { ...client.samples, list: () => { calls++; return Promise.reject(new Error("expired authorization")); } } });
+    await expect(failing.searchSamples("soft")).rejects.toMatchObject({ code: "provider-failed" });
+    await expect(failing.searchSamples("soft")).rejects.toMatchObject({ code: "provider-failed" });
+    expect(calls).toBe(5);
+  });
+  it("measures shortlisted WAV bytes separately from metadata and detects changed content", async () => {
+    const pcm = new Float32Array(48_000); pcm.fill(0.2, 12_000);
+    const firstBytes = encodeWav(pcm, pcm, 48_000);
+    const later = new Float32Array(48_000); later.fill(0.4, 20_000);
+    let bytes = firstBytes;
+    const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [sample], nextPageToken: "" }), get: () => Promise.resolve({ ...sample, durationSeconds: 1 }), download: () => Promise.resolve(new Blob([Uint8Array.from(bytes)])) }, presets: { search: () => Promise.resolve([]), get: () => Promise.resolve(preset) } } as unknown as NativeLibraryClient);
+    const initial = await library.inspectSampleAudio(sample.name);
+    expect(initial.measured.leadingSilenceSeconds).toBeGreaterThan(0);
+    expect(initial.measured.suggestedSlices.length).toBeGreaterThan(0);
+    bytes = encodeWav(later, later, 48_000);
+    expect((await library.inspectSampleAudio(sample.name)).contentHash).not.toBe(initial.contentHash);
+  });
+  it("pins repeated slices to one verified WAV identity per validation pass", async () => {
+    const pcm = new Float32Array(48_000); pcm.fill(0.2, 8_000);
+    const bytes = encodeWav(pcm, pcm, 48_000);
+    let downloads = 0;
+    const currentSample = { ...sample, durationSeconds: 1 };
+    const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [currentSample], nextPageToken: "" }), get: () => Promise.resolve(currentSample), download: () => { downloads++; return Promise.resolve(new Blob([Uint8Array.from(bytes)])); } }, presets: { search: () => Promise.resolve([]), get: () => Promise.resolve(preset) } } as unknown as NativeLibraryClient);
+    const hash = (await library.inspectSampleAudio(currentSample.name)).contentHash;
+    downloads = 0;
+    const region = { id: "slice-one", sampleName: currentSample.name, displayName: currentSample.displayName, ownerName: currentSample.ownerName, durationSeconds: 1, bpm: 96, contentHash: hash, startTick: 0, durationTicks: 480, sourceStartSeconds: 0.1, sourceDurationSeconds: 0.25, playbackMode: "once" as const, gain: 0.6, provenance: "audiotool-library" as const };
+    const document = applyNativeOperations(seedNativeDocument("Two sample hits"), [{ kind: "addPart", part: { id: "audio", name: "Texture", role: "source", device: { type: "audio", parameters: {} }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], libraryRegions: [region, { ...region, id: "slice-two", startTick: 960 }], effects: [], automation: [] } }]);
+    await resolveNativeSamples(document, library);
+    expect(downloads).toBe(1);
+    const stale = applyNativeOperations(document, [{ kind: "placeLibrarySample", partId: "audio", region: { ...region, id: "slice-stale", startTick: 1920, contentHash: "f".repeat(64) } }]);
+    await expect(resolveNativeSamples(stale, library)).rejects.toThrow(/bytes changed/);
+  });
   it("returns real-adapter metadata with separate identity, owner and usage uncertainty", async () => {
     const library = fixture();
     expect(await library.searchSamples("texture")).toMatchObject({ samples: [{ name: sample.name, ownerName: sample.ownerName, durationSeconds: 12 }], provenance: expect.stringContaining("rights are not inferred") });

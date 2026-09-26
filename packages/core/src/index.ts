@@ -18,6 +18,8 @@ export * from "./native/library.js";
 export * from "./native/producer.js";
 export * from "./native/repository.js";
 export * from "./native/activity.js";
+export * from "./native/plan.js";
+export * from "./native/quality.js";
 export * from "./nexus/adapter.js";
 export * from "./nexus/session.js";
 export * from "./providers/gemini.js";

@@ -2,12 +2,14 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 export interface ModelPrice {
   inputUsdPerMillion: number;
   outputUsdPerMillion: number;
   cachedInputUsdPerMillion?: number | undefined;
+  cacheWriteUsdPerMillion?: number | undefined;
   modality: "text" | "audio";
   source: string;
   verifiedOn: string;
@@ -17,10 +19,11 @@ const prices: Record<string, ModelPrice> = {
   "openai:gpt-6-astra": {
     inputUsdPerMillion: 10,
     cachedInputUsdPerMillion: 1,
+    cacheWriteUsdPerMillion: 12.5,
     outputUsdPerMillion: 50,
     modality: "text",
     source: "https://developers.openai.com/api/docs/models/gpt-6-astra",
-    verifiedOn: "2026-09-20"
+    verifiedOn: "2026-09-27"
   },
   "gemini:gemini-3-flash-preview": {
     inputUsdPerMillion: 1,
@@ -42,8 +45,14 @@ export function tokenCostMicrousd(provider: "openai" | "gemini", model: string, 
 }
 
 export function tokenCostMicrousdAtPrice(price: ModelPrice, usage: TokenUsage): number {
-  const cached = Math.max(0, Math.min(usage.inputTokens, usage.cachedInputTokens ?? 0));
-  return Math.ceil((usage.inputTokens - cached) * price.inputUsdPerMillion + cached * (price.cachedInputUsdPerMillion ?? price.inputUsdPerMillion) + usage.outputTokens * price.outputUsdPerMillion);
+  const input = Math.max(0, usage.inputTokens);
+  const writes = Math.max(0, Math.min(input, usage.cacheWriteTokens ?? 0));
+  // Invalid overlapping telemetry must never grant a larger discount.
+  const reads = Math.max(0, Math.min(input - writes, (usage.cachedInputTokens ?? 0) + writes <= input ? usage.cachedInputTokens ?? 0 : 0));
+  return Math.ceil((input - reads - writes) * price.inputUsdPerMillion
+    + reads * (price.cachedInputUsdPerMillion ?? price.inputUsdPerMillion)
+    + writes * (price.cacheWriteUsdPerMillion ?? price.inputUsdPerMillion)
+    + Math.max(0, usage.outputTokens) * price.outputUsdPerMillion);
 }
 
 export function tokenCostUsd(provider: "openai" | "gemini", model: string, usage: TokenUsage): number {

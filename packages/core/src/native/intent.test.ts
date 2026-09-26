@@ -102,7 +102,7 @@ describe("traceable native brief constraints", () => {
       { kind: "addPart", part: { ...part("drums", "percussion"), notes: [{ id: "hit-a", startTick: 15360, durationTicks: 240, pitch: 36, velocity: 0.8 }, { id: "hit-b", startTick: 16320, durationTicks: 240, pitch: 36, velocity: 0.8 }] } },
       { kind: "addPart", part: part("bass", "bass") },
       { kind: "addPart", part: { ...part("theme-lead", "melody"), notes: [], placements: [{ id: "theme-placement", motifId: "theme", startTick: 15360, repeats: 1, transpose: 0 }] } },
-      { kind: "addPart", part: { ...part("pad", "harmony"), effects: [{ id: "wash", type: "stompboxReverb" as const, parameters: { feedbackFactor: 0.8, mix: 0.4 } }] } },
+      { kind: "addPart", part: { ...part("pad", "harmony"), notes: [{ id: "pad-note", startTick: 15360, durationTicks: 960, pitch: 60, velocity: 0.7 }], effects: [{ id: "wash", type: "stompboxReverb" as const, parameters: { feedbackFactor: 0.8, mix: 0.4 } }] } },
       { kind: "defineMotif", motif: { id: "theme", partId: "theme-lead", name: "Main theme", lengthTicks: 3840, notes: [{ id: "phrase-note", startTick: 0, durationTicks: 960, pitch: 67, velocity: 0.75 }] } }
     ]);
     const direction = "Give this more space. Thin the drums, shorten the ambience, but keep the theme and bass.";
@@ -111,7 +111,7 @@ describe("traceable native brief constraints", () => {
     const wrongTheme = applyNativeOperations(thinner, [{ kind: "replaceMotif", motif: { ...thinner.motifs[0]!, notes: [{ ...thinner.motifs[0]!.notes[0]!, pitch: 68 }] } }]);
     expect(nativeCompletionIssues(wrongTheme, direction, "revision", [], base, "second-main")).toContain("Requested preservation of theme Main theme was not met");
     const noAmbience = applyNativeOperations(base, [{ kind: "replaceNotes", partId: "drums", notes: base.parts.find((item) => item.id === "drums")!.notes.slice(0, 1) }]);
-    expect(nativeCompletionIssues(noAmbience, direction, "revision", [], base, "second-main")).toContain("Requested shorter ambience has no evidenced local reverb/delay feedback reduction");
+    expect(nativeCompletionIssues(noAmbience, direction, "revision", [], base, "second-main")).toContain("Requested shorter ambience has no evidenced connected reverb/delay control reduction");
   });
   it("preserves only the requested section of a role while allowing a later change", () => {
     const base = applyNativeOperations(melody, [{ kind: "setStructure", bars: 8, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "" }, { id: "chorus", name: "Chorus", startBar: 4, endBar: 8, intent: "" }] }, { kind: "addNotes", partId: "lead", notes: [{ id: "late", startTick: 15360, durationTicks: 960, pitch: 67, velocity: 0.7 }] }]);

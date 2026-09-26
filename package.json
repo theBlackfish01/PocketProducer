@@ -31,6 +31,7 @@
     "verify:demo": "tsx scripts/verify-demo.ts",
     "verify:native-live": "tsx scripts/verify-native-live.ts",
     "budget:status": "tsx scripts/check-provider-budget.ts",
+    "eval:native": "tsx scripts/evaluate-native-quality.ts",
     "spike:nexus-native": "tsx packages/core/src/nexus/native-spike.ts",
     "spike:nexus-render": "tsx packages/core/src/nexus/render-probe.ts",
     "build": "pnpm --filter @pocket/web build && tsc -b",

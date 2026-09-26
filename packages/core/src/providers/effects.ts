@@ -40,6 +40,7 @@ export async function reserveProviderEffect(input: {
   model: string;
   promptVersion: string;
   reservationMicrousd: number;
+  maxDistinctEffectsForStep?: number;
 }): Promise<EffectReservation> {
   const config = getConfig();
   const client = await getPool().connect();
@@ -64,6 +65,11 @@ export async function reserveProviderEffect(input: {
       }
       await client.query("COMMIT");
       return { id: existing.id, state: existing.state, created: false, cachedOutput: existing.state === "succeeded" ? existing.output : undefined };
+    }
+    if (input.maxDistinctEffectsForStep !== undefined) {
+      if (!Number.isSafeInteger(input.maxDistinctEffectsForStep) || input.maxDistinctEffectsForStep < 1) throw new Error("Invalid provider step-effect limit");
+      const count = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND step=$2", [input.job.id, input.step]);
+      if (Number(count.rows[0]?.count ?? 0) >= input.maxDistinctEffectsForStep) throw new Error("MODEL_STEP_EFFECT_LIMIT_EXCEEDED");
     }
     const callCount = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND reservation_microusd>0",

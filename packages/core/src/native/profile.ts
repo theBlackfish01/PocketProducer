@@ -8,7 +8,7 @@ export type NativeProfile = z.infer<typeof nativeProfileSchema>;
 export const nativeRunLimitsSchema = z.object({
   profile: nativeProfileSchema,
   model: z.string().min(1),
-  pricing: z.object({ inputUsdPerMillion: z.number().min(0), cachedInputUsdPerMillion: z.number().min(0).optional(), outputUsdPerMillion: z.number().min(0), modality: z.enum(["text", "audio"]), source: z.string(), verifiedOn: z.string() }).optional(),
+  pricing: z.object({ inputUsdPerMillion: z.number().min(0), cachedInputUsdPerMillion: z.number().min(0).optional(), cacheWriteUsdPerMillion: z.number().min(0).optional(), outputUsdPerMillion: z.number().min(0), modality: z.enum(["text", "audio"]), source: z.string(), verifiedOn: z.string() }).optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]),
   maxCalls: z.number().int().min(0).max(300),
   maxInputTokens: z.number().int().min(1_000).max(256_000),
@@ -20,8 +20,12 @@ export type NativeRunLimits = z.infer<typeof nativeRunLimitsSchema>;
 export function minimumNextNativeReservationUsd(limits: NativeRunLimits, hasConfirmedMusic = false): number {
   // The callback reserves the configured response ceiling before dispatch.
   // A small input floor is only a UI/recovery lower bound, not a quote.
-  const responseCeiling = hasConfirmedMusic ? Math.min(limits.maxOutputTokens, limits.profile === "extended" ? 12_288 : 8_192) : limits.maxOutputTokens;
-  return Math.ceil(responseCeiling * (limits.pricing?.outputUsdPerMillion ?? 50) + 1_000 * (limits.pricing?.inputUsdPerMillion ?? 10)) / 1_000_000;
+  const responseCeiling = nativePhaseOutputTokens(limits, hasConfirmedMusic);
+  return Math.ceil(responseCeiling * (limits.pricing?.outputUsdPerMillion ?? 50) + 1_000 * (limits.pricing?.cacheWriteUsdPerMillion ?? (limits.pricing?.inputUsdPerMillion ?? 10) * 1.25)) / 1_000_000;
+}
+
+export function nativePhaseOutputTokens(limits: NativeRunLimits, hasConfirmedMusic: boolean): number {
+  return Math.min(limits.maxOutputTokens, hasConfirmedMusic ? (limits.profile === "extended" ? 12_288 : 8_192) : (limits.profile === "extended" ? 20_480 : 12_288));
 }
 
 // Captured when the job is accepted, not re-created from mutable configuration
