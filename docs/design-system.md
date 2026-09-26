@@ -12,6 +12,8 @@ Upgrade checks: preserve dependency pins and owned control source; run check/int
 
 ## Historical: focused score and confirmed-change polish — 2026-09-26
 
+Focused correctness addition: **Leave this draft** uses the existing owned Base UI Dialog, with explicit confirmation that versions, unfinished work and spending remain. It is offered only for safe paused work, not unknown outcomes. **Refresh arrangement** retries failed reads without sending the direction. Existing score geometry, Motion behavior, branding and dependencies are unchanged; comparison includes sidechain dependencies and never calls an unsupported check “verified unchanged.”
+
 The working score takes the full panel width unless **Sounds & tools** is opened. A compact established-session hero retains the logo and editorial palette. Section inspection is separate from revision scope; focused detail replaces the overview until explicitly reopened. The direction form follows the score on every viewport, while phone users have a safe-area shortcut hidden during form focus. **Manage parts** discloses the secondary ensemble controls instead of repeating them by default.
 
 The responsive part inspector reuses the owned Base UI Sheet, with initial heading focus, Escape return and an explicit transfer to the direction field for **Change this part**. Comparison has a scrollable evidence body, visible header/footer, relevant-parts default and read-only Before/After/Changes. Family markers use names and original/variation relationships alongside a four-color sequence; color is supplementary and collisions are possible. Paired pitch/time coordinates, guides and exact musical facts carry the meaning.

@@ -1,5 +1,23 @@
 # Verification record
 
+## Reliable creative-production pass (2026-09-27)
+
+`pnpm check` passed lint, strict types, **26 unit files / 139 tests**, and production Vite/TypeScript build (the existing large lazy-chunk warning remains). `pnpm test:integration` passed **4 files / 71 tests** after the review fixes. New worker-path regressions cover a budget pause with a saved plan but zero musical steps, simulated old failed-aggregate repair and same-job continuation without duplicate first-call accounting, retained creative context in actual model input, separate focused review → score edit → second review, a measured, hash-pinned Audiotool sample sequence through offline Nexus validation, idempotent shortlisted Gemini analysis, an unknown Gemini outcome that cannot accept a score, and an atomic two-distinct-analysis cap under contention. Unit tests cover beat-tick residue versus genuinely off-grid values, cache-read/write pricing, per-authenticated-client metadata cache isolation, changed sample bytes, example validity, fixed-case evaluator objectivity, and rejected invented score evidence.
+
+The initial full Chromium E2E run found a stale assertion that still expected “used” after the UI changed to “observed”; its targeted rerun passed. The latest complete run passed **13/13**, including sample search/inspection with network fixtures. Desktop arrangement, phone usage sheet and sample inspection screenshots under ignored `.local/evidence/workspace-*.png` were inspected. They show fixture/scaffold state, not live Audiotool resources. UI checks retain keyboard/focus, reduced-motion, comparison and phone viewport coverage; physical hardware and non-Chromium remain untested. No ordinary test dispatched a provider request. `pnpm db:migrate` applied additive migration 017 to development data without reset.
+
+`pnpm eval:native --case synth-disco --job d6921ce1-7e49-463a-bad5-1210eb4a6ed9` made only database reads. It reported the exact fixed brief, saved plan, zero confirmed steps, ten observed model effects, 209,421 input tokens (180,596 reported cache-read tokens), 8,818 output tokens, US$0.909746 observed job cost, and no accepted score or human rating. The seven-case harness preserves a separate null human rubric. Real-model quality, live library rights/fidelity and hearing still require separately authorized work.
+
+The focused reviewer initially inherited the enclosing graph callback and created an extra model effect. The production-path test detected this; passing an explicit empty callback list to the reviewer removed the duplicate. The maintained assertion now requires exactly one producer effect per producer turn and one review effect per focused review. This was tested with scripted models, not real provider telemetry. No new known provider spending occurred.
+
+## Focused correctness pass (2026-09-26)
+
+Portable regressions replace the external review probes: `packages/core/src/native/correctness.test.ts`, `apps/web/src/features/native/score.test.ts`, `reconcile-read.test.ts`, `tests/integration/native.test.ts` and `tests/visual/score-motion.spec.ts`. They cover safe/uncertain abandonment, lock races, stale heads, retained costs/drafts, actual names and ambiguity, full theme events, scoped sidechain dependencies, connected ambience and exhausted snapshot/draft reads. Existing production scripted-worker candidate repair and real process restart/contending-worker tests remain in the full integration suite.
+
+Browser additions are explicit **network-fixture UI evidence**, not a live provider: phone abandonment confirmation/Escape/focus; five failed saved-head HTTP reads then recovery with unchanged activity; all 15 draft attempts exhausted then explicit refresh; held old response after unmount; zero creative writes during read recovery. Database abandonment evidence separately exercises the real repository/worker on isolated `_test` PostgreSQL. The existing API/worker create → protect → revise → compare → restore journey is retained. Final counts are in `STATUS.md`.
+
+Representative inspected screenshots: ignored `.local/evidence/correctness-recovered-head.png` (desktop version 3 plus unsent direction) and `correctness-abandon-phone.png` (390px confirmation). Capture waits for dialog opacity 1 to avoid presenting an in-flight fade as final appearance. No provider, tracing or Audiotool request occurred. The separate course refresh remains outside these product commits.
+
 ## Producer workspace and durable public activity (2026-09-26)
 
 Implemented on `8ee9fcf`, preserving the concurrent course edits and LangSmith privacy defaults. Ordinary verification forces fixture/scripted providers and disables tracing; no OpenAI, Gemini, Audiotool or LangSmith request was made.

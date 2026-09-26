@@ -18,6 +18,14 @@ Migration **015_public_activity.sql** adds owner/project-scoped presentation his
 
 The browser has one activity consumer: snapshot then SSE; on interruption it closes SSE and polls the same cursor endpoint with bounded backoff (2–15 seconds), without simultaneously running both. Reload reattempts SSE. Delivery is deduplicated and ignored after room/unmount changes; mounted conversation rows are bounded to 30 with explicit older pages. Canonical draft retrieval follows changed step/hash or lifecycle identity, not every text update. Public narration cannot apply music, select a version, authorize spending or feed an unbounded conversation into the model. LangSmith remains a private diagnostic boundary with unchanged defaults.
 
+## Focused correctness additions (2026-09-26)
+
+`POST /projects/:projectId/native/requests/:jobId/abandon` locks project then job, accepts only known-safe `NATIVE_PARTIAL` work, and idempotently marks it `cancelled / NATIVE_ABANDONED`. It retains steps, versions and effect rows unchanged. Unlike continuation, abandonment can release an obsolete draft after explicit head selection; it cannot commit that draft. Dispatched/uncertain external effects or unknown costs remain fenced. Public activity advertises `canAbandon` and records the explicit choice transactionally.
+
+Preservation preview and completion share actual part/phrase-name resolution, unique-identity disambiguation and section scope. Theme checks compare complete event multisets (including added events and placements), separate from instrument settings. Section comparison includes scoped sidechain-source notes/clips/controls or marks them unverified. Shorter ambience is a connected-control heuristic across local, parallel, ancestor-group and shared-return paths; it is not an acoustic measurement.
+
+The browser reconciles observed head/draft against canonical reads with up to three read rounds (five HTTP attempts per round), abortable backoff and manual **Refresh arrangement** after exhaustion. Read recovery never resends commands, keeps unsent text, and ignores old-room responses. The monotonic head-selection counter also prevents a delayed read from rolling back a newer explicit history selection.
+
 ## Preserved legacy audio implementation
 
 ## Runtime shape
