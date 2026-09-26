@@ -1,5 +1,25 @@
 # Verification record
 
+## Producer workspace and durable public activity (2026-09-26)
+
+Implemented on `8ee9fcf`, preserving the concurrent course edits and LangSmith privacy defaults. Ordinary verification forces fixture/scripted providers and disables tracing; no OpenAI, Gemini, Audiotool or LangSmith request was made.
+
+| Command | Result | Evidence |
+| --- | --- | --- |
+| `pnpm check` | Passed lint, strict types, **20 unit files / 119 tests**, production build | Includes bounded/deduplicated history, session routes and rejection of diagnostic-only public payloads. Existing large-chunk warning remains. |
+| `pnpm test:integration` | **3 files / 60 tests passed**, final run 89.33 s | PostgreSQL commit ordering and rollback, concurrent same/different request keys, owner/deleted access, stale worker lease, restored cursor, real killed child process and two contending replacement workers. Scripted Deep Agent plan → steps → pause/restart → result projects one coherent feed. |
+| `pnpm test:e2e` | **11 Chromium journeys passed**, 1.6 min | Actual isolated API/worker create/revise/compare/select/reload; phone/tablet, source audition and legacy playback; partial recovery, room switch/Back, synchronization separation, real SSE snapshot race/Last-Event-ID and lost acknowledgement without resubmission. |
+| `pnpm test:visual` | **4 journeys passed**, final run 37.8 s | Preserved score motion and focus/reduced-motion/contrast checks; 128-bar/24-part view; pending direction survives completion and requires scope review; 201-event history mounts 30 rows, pages older history and never forces scroll. A near-limit HTML-shaped brief renders as text. |
+| `pnpm db:migrate` | Applied **015_public_activity.sql** to development DB | Additive backfill of historical directions; accepted versions, assets, credentials and usage retained. |
+
+A subsequent targeted `node node_modules/@playwright/test/cli.js test --config tests/playwright.config.ts tests/e2e/producer-stream.spec.ts` passed **2/2** (17.4 s), including a future/stale cursor while another client tails the room. That probe exposed and fixed per-client cursor reset at initial stream authorization; resetting only the shared minimum was insufficient. The cached environment's `pnpm exec playwright` wrapper could not resolve its executable, so this targeted check used the installed pinned CLI directly.
+
+The browser CLI was unavailable, so maintained Playwright scripts supplied the browser evidence. Screenshots reviewed: `.local/evidence/workspace-start.png`, `workspace-desktop.png`, `workspace-mobile.png`, `workspace-comparison-mobile.png`, `workspace-long-feed.png`; additional comparison, usage and tablet captures are retained locally. These are ignored fixture evidence, not real-model creative or live Nexus/audio evidence. The final sampled 128-bar score had 394 SVG descendants at initial detail; two-frame section and comparison samples were 47.7 ms and 63.6 ms on Windows / Ryzen 7 7435HS, with tracing. These are individual observations, not latency guarantees. Earlier concurrent runs were slower (90.3 / 112 ms).
+
+Initial verification exposed and fixed the new-session/audio-mode acknowledgement race, lost-ack test setup race, old-receipt initialization race and SSE shutdown cleanup. The activity clock audit also made multi-job expiry sweeps acquire clocks in consistent project order. The existing late-accounting integration fixture now isolates its intentionally uncertain room, since the new single-producer guard correctly prevents unrelated work there.
+
+Limits: physical phones/real soft keyboards, screen readers, Firefox/WebKit and 64-stream slow-client load testing were not performed. SSE limits/backpressure are defensive code, not a capacity certification. Polling fallback reattempts SSE on remount/reload. No paid narrator or simulated thought stream was introduced; native rendering/playback and Gemini listening remain deferred. LangSmith configuration is preserved but live trace ingestion was not verified. **US$0 new provider spend**; no external writes or deployment. Use command-local `$env:pnpm_config_verify_deps_before_run='false'` with the existing pinned dependency installation if pnpm 11's automatic dependency verification attempts an unnecessary noninteractive reinstall; do not change global configuration.
+
 ## LangSmith observability (2026-09-26)
 
 `pnpm check` passed lint, strict types, 18 unit files / 116 tests and production build; `pnpm test:integration` passed 2 files / 56 tests; `pnpm test:e2e` passed nine Chromium journeys with the API and worker as separate fixture child processes. The observability unit tests check that fixture mode disables tracing, that payload hiding is active, and that producer metadata omits directions, source names and owner/project identifiers. Existing scripted Deep Agent integration paths still pass with trace run config attached. No live LangSmith ingestion was attempted; fixture/test processes force `LANGSMITH_TRACING=false` and blank its key. No paid model or Audiotool effect occurred. The build retains the existing large-chunk warning.

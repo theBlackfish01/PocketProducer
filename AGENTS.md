@@ -5,6 +5,7 @@ Read `docs/STATUS.md` first, then `docs/native-text-to-music.md` and relevant ar
 ## Product invariants
 
 - Responsive desktop-and-phone web app; selected design is Listening Room.
+- The current journey is Start → Producer workspace, preserving the score and section/part inspection. Public activity is an owner-scoped transactional projection, not model reasoning or LangSmith telemetry. Keep tracing private and fixture tests tracing-free; keep one coordinated activity consumer, idempotent recovery and explicit spending/version actions. See `docs/producer-workspace-plan.md` and `docs/architecture.md` for cursor/lock ordering.
 - Current path: construct expressive native musical structure from a direction and optional owned sources; inspect, revise with protected parts, compare immutable versions, and explicitly synchronize an editable Audiotool project. Native rendering/playback is deliberately deferred by the user. Never represent an SDK document or source placement as heard audio.
 - The native v2 document is the canonical source of truth for native construction. Legacy four-stem composition/audio remains a separate working history, not a template or migration target. Revisions are immutable. The model proposes validated domain operations; it does not bypass ownership, budgets, locks or synchronization constraints.
 - Protect accepted audio during work. Enforce cancellation/lease/head checks before commit. Retries must not duplicate paid or external effects.

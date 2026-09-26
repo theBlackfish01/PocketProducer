@@ -1,6 +1,16 @@
 # Listening Room design system
 
-## Current: focused score and confirmed-change polish — 2026-09-26
+## Current: Start and Producer workspace — 2026-09-26
+
+Keep the existing logo, ivory/forest/burnt-orange palette, editorial typography and score geometry. Start asks for one idea with optional sounds and collapsed creation settings. Acceptance opens a compact working room: the score is primary, Producer contains persisted directions and confirmed updates, and Sounds, Parts, Versions, Usage and Audiotool open only when requested. The existing score, inspector and Before/After/Changes components are unchanged; the surrounding layout is not a replacement DAW.
+
+The owned `producer-feed.tsx`, `use-producer-activity.ts`, `producer-workspace.css` and URL adapter compose existing React, shadcn/Base UI, Tailwind and Lucide. No component CLI, paid kit, new primitive family or dependency change was needed. A 350 px Producer column is used only when the content container is at least 1,060 px, retaining a 680 px score. Below that, a keyboard-operable Arrangement/Producer switch avoids squeezing the score or adding a second modal workflow. Tools reuse existing Base UI sheets and focus behavior. Phone input uses 16 px text, dynamic-viewport feed height and safe-area padding.
+
+Activity is plain text with long directions collapsed, 30 mounted rows and explicit older pages. New updates do not move someone reading older messages. Historical rows do not animate on reload; confirmed score motion retains its existing identity/reduced-motion guards. Public updates describe intention or committed musical facts, never private reasoning, raw tools or tracing. A new direction remains explicitly unsent while work runs and requires scope review if the selected version changes.
+
+Upgrade checks: preserve dependency pins and owned control source; run check/integration/e2e/visual suites, inspect wide desktop, intermediate/tablet and phone states, ensure the score still has useful width, verify dialog return focus and keyboard/safe-area behavior, and test lost acknowledgements plus restored history. React review kept the feed bounded/memoized and the score callbacks stable; this is not an exhaustive screen-reader or performance certification.
+
+## Historical: focused score and confirmed-change polish — 2026-09-26
 
 The working score takes the full panel width unless **Sounds & tools** is opened. A compact established-session hero retains the logo and editorial palette. Section inspection is separate from revision scope; focused detail replaces the overview until explicitly reopened. The direction form follows the score on every viewport, while phone users have a safe-area shortcut hidden during form focus. **Manage parts** discloses the secondary ensemble controls instead of repeating them by default.
 

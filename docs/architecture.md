@@ -8,7 +8,17 @@ The producer sees a pinned workspace, three project-local skills, the original b
 
 The worker's Deep Agent runs can emit LangSmith traces with safe job/attempt correlation and hidden inputs/outputs by default. Tracing is diagnostic and never substitutes for the durable plan, native step ledger, provider-effect accounting or accepted version. Fixture mode disables tracing. See [observability setup and privacy](observability.md).
 
-## Preserved legacy audio architecture
+## Producer workspace and public activity — 2026-09-26
+
+`/sessions/:id/start` is the idea-entry view; `/sessions/:id` is the durable working room; `/sessions/:id/audio` retains the separate playable history. Navigation is a small React/History adapter, not a framework migration. The OAuth callback is excluded. An accepted request moves into the workspace; refresh discovers work on the server even without a browser receipt. Another tab cannot start competing native construction while a request is active or awaiting a safe decision. Idempotency lookup still precedes that guard.
+
+Migration **015_public_activity.sql** adds owner/project-scoped presentation history. Accepted directions, plans, confirmed batches, completion, explicit selection and recovery facts are projected in their existing state transactions. Payloads are a strict allowlist, never raw model/tool/trace objects. Origins deduplicate replay; a locked per-project clock allocates cursors in commit order. Acquire operational project/job locks first and the clock last; multi-job expiry sweeps prelock their jobs and visit clocks in project order. A rolled-back state change has no public event. Existing directions are marked historical, not reconstructed as invented producer speech.
+
+`GET /api/v1/projects/:id/activity` returns a repeatable-read snapshot of head, current construction, draft identity, safe actions, allowance and bounded history. `after` pages forward, `before` pages older entries. A cursor beyond the stored watermark returns `reset=true` with recent history, supporting restored local databases. `/activity/stream` honors `Last-Event-ID`, verifies ownership/origin before opening, and repeatedly rechecks access. Shared per-room one-second tail reads use short database transactions, not a connection per browser. Batches are at most 100, total streams 64, queued output bounded; backpressure ends a stream and application shutdown closes it before awaiting connections.
+
+The browser has one activity consumer: snapshot then SSE; on interruption it closes SSE and polls the same cursor endpoint with bounded backoff (2–15 seconds), without simultaneously running both. Reload reattempts SSE. Delivery is deduplicated and ignored after room/unmount changes; mounted conversation rows are bounded to 30 with explicit older pages. Canonical draft retrieval follows changed step/hash or lifecycle identity, not every text update. Public narration cannot apply music, select a version, authorize spending or feed an unbounded conversation into the model. LangSmith remains a private diagnostic boundary with unchanged defaults.
+
+## Preserved legacy audio implementation
 
 ## Runtime shape
 
