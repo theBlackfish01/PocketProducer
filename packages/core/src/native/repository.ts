@@ -7,7 +7,7 @@ import { JobControlError, type JobRecord } from "../db/repository.js";
 import { nativeDiff, nativeDocumentSchema, nativeMusicHash, pinnedContext, type NativeDocument, type NativeOperation } from "./model.js";
 import { NATIVE_MAPPING_VERSION } from "./adapter.js";
 import type { NativeSampleResources } from "./adapter.js";
-import { jobNativeRunLimits, nativeProfileSchema, nativeRunLimits, originalNativeRequest } from "./profile.js";
+import { jobNativeRunLimits, minimumNextNativeReservationUsd, nativeProfileSchema, nativeRunLimits, nativeRunLimitsSchema, originalNativeRequest } from "./profile.js";
 import { nativePlanSchema, nativeStageSchema, type NativePlan, type NativeStage } from "./plan.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
@@ -87,7 +87,7 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     await client.query("BEGIN");
     const project = await client.query("SELECT 1 FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [projectId, ownerId]);
     if (!project.rowCount) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
-    const result = await client.query<{ kind: string; state: string; error_code: string | null; request: Record<string, unknown> }>("SELECT kind,state,error_code,request FROM job WHERE id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [jobId, ownerId, projectId]);
+    const result = await client.query<{ kind: string; state: string; error_code: string | null; error_message: string | null; request: Record<string, unknown> }>("SELECT kind,state,error_code,error_message,request FROM job WHERE id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [jobId, ownerId, projectId]);
     const job = result.rows[0];
     if (!job) throw Object.assign(new Error("Request not found"), { statusCode: 404 });
     if (!["native-generation", "native-revision"].includes(job.kind) || job.state !== "needs_attention" || job.error_code !== "NATIVE_PARTIAL") throw Object.assign(new Error("Only an unfinished native draft can continue"), { statusCode: 409 });
@@ -98,6 +98,14 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     const callCount = effects.rows.filter((effect) => effect.step === "producer-model-call").length;
     const limits = jobNativeRunLimits(job.request);
     if (callCount >= (limits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB)) throw Object.assign(new Error("The request has reached its configured model-call limit; continuation needs an explicitly approved limit change"), { statusCode: 409 });
+    if (limits) {
+      const amounts = await client.query<{ job_committed: string; site_committed: string }>(`SELECT
+        COALESCE(SUM(CASE WHEN job_id=$1 THEN CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END ELSE 0 END),0)::text AS job_committed,
+        COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS site_committed FROM effect`, [jobId]);
+      const hasMusic = await client.query("SELECT 1 FROM native_job_step WHERE job_id=$1 LIMIT 1", [jobId]);
+      const minimum = minimumNextNativeReservationUsd(limits, Boolean(hasMusic.rowCount));
+      if (limits.maxJobCostUsd - Number(amounts.rows[0]!.job_committed) / 1_000_000 < minimum || getConfig().INITIAL_BUILD_API_BUDGET_USD - Number(amounts.rows[0]!.site_committed) / 1_000_000 < minimum) throw Object.assign(new Error("A next model call cannot fit the current request or installation allowance; increase the applicable limit before continuing"), { statusCode: 409 });
+    }
     const unfinished = effects.rows.some((effect) => effect.step === "native-producer-result" && effect.state === "dispatched");
     if (!unfinished) throw Object.assign(new Error("No safely resumable producer effect remains"), { statusCode: 409 });
     await client.query("UPDATE job SET state='queued',stage=NULL,error_code=NULL,error_message=NULL,deadline_at=now()+make_interval(secs=>$2),updated_at=now() WHERE id=$1", [jobId, limits?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS]);
@@ -108,7 +116,7 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
   finally { client.release(); }
 }
 
-export async function extendNativePartialJob(ownerId: string, projectId: string, jobId: string): Promise<void> {
+export async function extendNativePartialJob(ownerId: string, projectId: string, jobId: string, requested?: { maxCalls?: number | undefined; maxInputTokens?: number | undefined; maxOutputTokens?: number | undefined; deadlineSeconds?: number | undefined; maxJobCostUsd?: number | undefined }): Promise<void> {
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -119,14 +127,20 @@ export async function extendNativePartialJob(ownerId: string, projectId: string,
     if (!row || !["native-generation", "native-revision"].includes(row.kind)) throw Object.assign(new Error("Native construction request not found"), { statusCode: 404 });
     if (row.state !== "needs_attention" || row.error_code !== "NATIVE_PARTIAL") throw Object.assign(new Error("Only a safely paused construction draft can extend its allowance"), { statusCode: 409 });
     const old = jobNativeRunLimits(row.request);
-    if (!old || old.profile !== "standard") throw Object.assign(new Error("This request has no available profile extension"), { statusCode: 409 });
+    if (!old || (!requested && old.profile !== "standard")) throw Object.assign(new Error("This request has no available profile extension"), { statusCode: 409 });
     const expectedHead = typeof row.request.expectedNativeHeadId === "string" ? row.request.expectedNativeHeadId : null;
     const currentHead = await head(client, ownerId, projectId, true);
     if (currentHead !== expectedHead) throw Object.assign(new Error("The selected version changed; this draft cannot extend"), { statusCode: 409 });
     const effects = await client.query<{ step: string; state: string; cost_status: string }>("SELECT step,state,cost_status FROM effect WHERE job_id=$1 FOR UPDATE", [jobId]);
     if (effects.rows.some((effect) => effect.step !== "native-producer-result" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A provider outcome needs reconciliation before extension"), { statusCode: 409 });
-    const target = nativeRunLimits("extended");
-    const next = { ...old, profile: "extended" as const, maxCalls: Math.max(old.maxCalls, target.maxCalls), maxInputTokens: Math.max(old.maxInputTokens, target.maxInputTokens), maxOutputTokens: Math.max(old.maxOutputTokens, target.maxOutputTokens), deadlineSeconds: Math.max(old.deadlineSeconds, target.deadlineSeconds), maxJobCostUsd: Math.max(old.maxJobCostUsd, target.maxJobCostUsd) };
+    const config = getConfig();
+    const target = requested ? { maxCalls: config.MAX_MODEL_CALLS_PER_JOB, maxInputTokens: config.MAX_OPENAI_INPUT_TOKENS, maxOutputTokens: config.NATIVE_MODEL_OUTPUT_TOKENS, deadlineSeconds: config.MAX_JOB_SECONDS, maxJobCostUsd: config.MAX_JOB_COST_USD } : nativeRunLimits("extended");
+    if (requested && Object.keys(requested).some((key) => !["maxCalls", "maxInputTokens", "maxOutputTokens", "deadlineSeconds", "maxJobCostUsd"].includes(key))) throw Object.assign(new Error("Unknown allowance dimension"), { statusCode: 422 });
+    const proposed = requested ? { ...old, ...Object.fromEntries(Object.entries(requested).filter(([, value]) => value !== undefined)) } : { ...old, profile: "extended" as const, maxCalls: Math.max(old.maxCalls, target.maxCalls), maxInputTokens: Math.max(old.maxInputTokens, target.maxInputTokens), maxOutputTokens: Math.max(old.maxOutputTokens, target.maxOutputTokens), deadlineSeconds: Math.max(old.deadlineSeconds, target.deadlineSeconds), maxJobCostUsd: Math.max(old.maxJobCostUsd, target.maxJobCostUsd) };
+    const next = nativeRunLimitsSchema.parse(proposed);
+    for (const field of ["maxCalls", "maxInputTokens", "maxOutputTokens", "deadlineSeconds", "maxJobCostUsd"] as const) {
+      if (next[field] < old[field] || next[field] > target[field]) throw Object.assign(new Error(`${field} must stay between the captured and installation limits`), { statusCode: 422 });
+    }
     if (next.maxCalls === old.maxCalls && next.maxInputTokens === old.maxInputTokens && next.maxOutputTokens === old.maxOutputTokens && next.deadlineSeconds === old.deadlineSeconds && next.maxJobCostUsd === old.maxJobCostUsd) throw Object.assign(new Error("The configured installation has no higher allowance available"), { statusCode: 409 });
     const updatedRequest = { ...originalNativeRequest(row.request), _nativeRunCurrent: next };
     await client.query("UPDATE job SET request=$2::jsonb,updated_at=now() WHERE id=$1", [jobId, JSON.stringify(updatedRequest)]);
@@ -175,8 +189,8 @@ export async function nativeSnapshot(ownerId: string, projectId: string) {
 }
 
 export async function nativeDraftView(ownerId: string, projectId: string, jobId: string) {
-  const found = await getPool().query<{ kind: string; state: string; error_code: string | null; request: Record<string, unknown> }>(
-    "SELECT j.kind,j.state,j.error_code,j.request FROM job j JOIN project p ON p.id=j.project_id WHERE j.id=$1 AND j.owner_id=$2 AND p.owner_id=$2 AND j.project_id=$3 AND p.deleted_at IS NULL",
+  const found = await getPool().query<{ kind: string; state: string; error_code: string | null; error_message: string | null; request: Record<string, unknown> }>(
+    "SELECT j.kind,j.state,j.error_code,j.error_message,j.request FROM job j JOIN project p ON p.id=j.project_id WHERE j.id=$1 AND j.owner_id=$2 AND p.owner_id=$2 AND j.project_id=$3 AND p.deleted_at IS NULL",
     [jobId, ownerId, projectId]
   );
   const row = found.rows[0];
@@ -202,11 +216,28 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const effectsKnown = [...effects.rows, ...otherEffects.rows].every((effect) => effect.state === "succeeded" && effect.cost_status === "observed");
   const runLimits = jobNativeRunLimits(request);
   const callLimit = runLimits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB;
-  const canContinue = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effects.rows.length < callLimit && effectsKnown;
+  const budgetRows = await getPool().query<{ job_spent: string; job_reserved: string; job_unknown: string; site_committed: string }>(`SELECT
+    COALESCE(SUM(actual_cost_microusd) FILTER (WHERE job_id=$1),0)::text AS job_spent,
+    COALESCE(SUM(GREATEST(reservation_microusd-actual_cost_microusd,0)) FILTER (WHERE job_id=$1 AND state IN ('reserved','dispatched','uncertain')),0)::text AS job_reserved,
+    COALESCE(SUM(GREATEST(reservation_microusd,actual_cost_microusd)) FILTER (WHERE job_id=$1 AND cost_status='unknown'),0)::text AS job_unknown,
+    COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS site_committed FROM effect`, [jobId]);
+  const budget = budgetRows.rows[0]!;
+  const spentUsd = Number(budget.job_spent) / 1_000_000;
+  const reservedUsd = Number(budget.job_reserved) / 1_000_000;
+  const siteRemainingUsd = Math.max(0, getConfig().INITIAL_BUILD_API_BUDGET_USD - Number(budget.site_committed) / 1_000_000);
+  const stopped = row.error_message ?? "";
+  const minimumNextCallUsd = runLimits ? minimumNextNativeReservationUsd(runLimits, session.applied.length > 0) : 0;
+  const siteBudgetBlocked = siteRemainingUsd < minimumNextCallUsd;
+  const budgetBlocked = siteBudgetBlocked || (runLimits?.maxJobCostUsd ?? 0) - spentUsd - reservedUsd < minimumNextCallUsd;
+  const inputBlocked = /OPENAI_INPUT_LIMIT_EXCEEDED/.test(stopped) && (runLimits?.maxInputTokens ?? 0) <= (jobNativeRunLimits(originalNativeRequest(request))?.maxInputTokens ?? 0);
+  const outputBlocked = /OPENAI_INCOMPLETE_RESPONSE/.test(stopped) && (runLimits?.maxOutputTokens ?? 0) <= (jobNativeRunLimits(originalNativeRequest(request))?.maxOutputTokens ?? 0);
+  const canContinue = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effects.rows.length < callLimit && effectsKnown && !budgetBlocked && !inputBlocked && !outputBlocked;
+  const config = getConfig();
   const target = runLimits?.profile === "standard" ? nativeRunLimits("extended") : null;
-  const canExtend = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effectsKnown && !!runLimits && !!target && (target.maxCalls > runLimits.maxCalls || target.maxInputTokens > runLimits.maxInputTokens || target.maxOutputTokens > runLimits.maxOutputTokens || target.deadlineSeconds > runLimits.deadlineSeconds || target.maxJobCostUsd > runLimits.maxJobCostUsd);
-  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
-  return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, plan: await loadNativePlan(jobId), runLimits, canContinue, canExtend, continuationReason };
+  const maximum = { maxCalls: config.MAX_MODEL_CALLS_PER_JOB, maxInputTokens: config.MAX_OPENAI_INPUT_TOKENS, maxOutputTokens: config.NATIVE_MODEL_OUTPUT_TOKENS, deadlineSeconds: config.MAX_JOB_SECONDS, maxJobCostUsd: config.MAX_JOB_COST_USD };
+  const canExtend = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && effectsKnown && !siteBudgetBlocked && !!runLimits && (Object.keys(maximum) as Array<keyof typeof maximum>).some((field) => maximum[field] > runLimits[field]);
+  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : siteBudgetBlocked ? "The installation-wide API allowance cannot reserve another call; increasing this request alone will not help." : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance; increase it before continuing." : budgetBlocked ? "This request's own cost allowance is exhausted; increase it explicitly before continuing." : inputBlocked || outputBlocked ? "This request needs a higher input or output allowance before continuing." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
+  return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, plan: await loadNativePlan(jobId), runLimits, budget: { spentUsd, reservedUsd, unknownUsd: Number(budget.job_unknown) / 1_000_000, siteRemainingUsd, minimumNextCallUsd, modelCalls: effects.rows.length }, extensionCeiling: maximum, suggestedProfileExtension: target, canContinue, canExtend, continuationReason, stopReason: stopped };
 }
 
 export async function loadNativePlan(jobId: string): Promise<{ plan: NativePlan; stage: NativeStage; inspectedDocumentHash: string | null } | null> {
@@ -221,7 +252,7 @@ export async function saveNativePlan(job: JobRecord, raw: NativePlan): Promise<v
   try {
     await client.query("BEGIN");
     await assertSyncLease(client, job);
-    await client.query("INSERT INTO native_job_plan(job_id,plan,stage) VALUES($1,$2,'planned') ON CONFLICT(job_id) DO UPDATE SET plan=EXCLUDED.plan,updated_at=now()", [job.id, JSON.stringify(plan)]);
+    await client.query("INSERT INTO native_job_plan(job_id,plan,stage) VALUES($1,$2,'planned') ON CONFLICT(job_id) DO UPDATE SET plan=EXCLUDED.plan,stage='planned',inspected_document_hash=NULL,updated_at=now()", [job.id, JSON.stringify(plan)]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }

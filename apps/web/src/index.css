@@ -114,6 +114,10 @@ button:disabled { cursor: not-allowed; }
 .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 26px; }
 .job-status { margin-top: 28px; padding: 18px 20px; border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border)); border-radius: 16px; background: color-mix(in srgb, var(--primary) 5%, var(--card)); }
 .job-status strong { display: block; margin-bottom: 4px; }
+.native-extension-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+.native-extension-fields label { display: grid; gap: 5px; color: var(--foreground); font-size: .8rem; font-weight: 600; }
+.native-extension-fields input { width: 100%; min-height: 38px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); color: var(--foreground); }
+.native-extension-fields input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .composer-shell { position: relative; z-index: 3; margin-top: 36px; }
 .composer { width: min(100%, 1120px); margin: 0 auto; padding: 12px; border: 1px solid var(--input); border-radius: 20px; background: color-mix(in srgb, var(--card) 96%, transparent); box-shadow: 0 16px 45px rgba(24,37,31,.1); backdrop-filter: blur(12px); pointer-events: auto; }
 .composer textarea { min-height: 48px; max-height: 150px; resize: vertical; border: 0; background: transparent; box-shadow: none; font-size: 1rem; }

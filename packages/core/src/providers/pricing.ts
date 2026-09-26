@@ -1,11 +1,13 @@
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  cachedInputTokens?: number;
 }
 
 export interface ModelPrice {
   inputUsdPerMillion: number;
   outputUsdPerMillion: number;
+  cachedInputUsdPerMillion?: number | undefined;
   modality: "text" | "audio";
   source: string;
   verifiedOn: string;
@@ -14,6 +16,7 @@ export interface ModelPrice {
 const prices: Record<string, ModelPrice> = {
   "openai:gpt-6-astra": {
     inputUsdPerMillion: 10,
+    cachedInputUsdPerMillion: 1,
     outputUsdPerMillion: 50,
     modality: "text",
     source: "https://developers.openai.com/api/docs/models/gpt-6-astra",
@@ -39,7 +42,8 @@ export function tokenCostMicrousd(provider: "openai" | "gemini", model: string, 
 }
 
 export function tokenCostMicrousdAtPrice(price: ModelPrice, usage: TokenUsage): number {
-  return Math.ceil(usage.inputTokens * price.inputUsdPerMillion + usage.outputTokens * price.outputUsdPerMillion);
+  const cached = Math.max(0, Math.min(usage.inputTokens, usage.cachedInputTokens ?? 0));
+  return Math.ceil((usage.inputTokens - cached) * price.inputUsdPerMillion + cached * (price.cachedInputUsdPerMillion ?? price.inputUsdPerMillion) + usage.outputTokens * price.outputUsdPerMillion);
 }
 
 export function tokenCostUsd(provider: "openai" | "gemini", model: string, usage: TokenUsage): number {

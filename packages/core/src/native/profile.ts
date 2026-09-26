@@ -8,15 +8,21 @@ export type NativeProfile = z.infer<typeof nativeProfileSchema>;
 export const nativeRunLimitsSchema = z.object({
   profile: nativeProfileSchema,
   model: z.string().min(1),
-  pricing: z.object({ inputUsdPerMillion: z.number().min(0), outputUsdPerMillion: z.number().min(0), modality: z.enum(["text", "audio"]), source: z.string(), verifiedOn: z.string() }).optional(),
+  pricing: z.object({ inputUsdPerMillion: z.number().min(0), cachedInputUsdPerMillion: z.number().min(0).optional(), outputUsdPerMillion: z.number().min(0), modality: z.enum(["text", "audio"]), source: z.string(), verifiedOn: z.string() }).optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]),
-  maxCalls: z.number().int().min(0).max(100),
-  maxInputTokens: z.number().int().min(1_000).max(128_000),
-  maxOutputTokens: z.number().int().min(400).max(32_768),
-  deadlineSeconds: z.number().int().min(10).max(3_600),
-  maxJobCostUsd: z.number().min(0).max(15)
+  maxCalls: z.number().int().min(0).max(300),
+  maxInputTokens: z.number().int().min(1_000).max(256_000),
+  maxOutputTokens: z.number().int().min(400).max(65_536),
+  deadlineSeconds: z.number().int().min(10).max(21_600),
+  maxJobCostUsd: z.number().min(0).max(100)
 });
 export type NativeRunLimits = z.infer<typeof nativeRunLimitsSchema>;
+export function minimumNextNativeReservationUsd(limits: NativeRunLimits, hasConfirmedMusic = false): number {
+  // The callback reserves the configured response ceiling before dispatch.
+  // A small input floor is only a UI/recovery lower bound, not a quote.
+  const responseCeiling = hasConfirmedMusic ? Math.min(limits.maxOutputTokens, limits.profile === "extended" ? 12_288 : 8_192) : limits.maxOutputTokens;
+  return Math.ceil(responseCeiling * (limits.pricing?.outputUsdPerMillion ?? 50) + 1_000 * (limits.pricing?.inputUsdPerMillion ?? 10)) / 1_000_000;
+}
 
 // Captured when the job is accepted, not re-created from mutable configuration
 // on worker restart. The site-wide remaining allowance is checked separately.

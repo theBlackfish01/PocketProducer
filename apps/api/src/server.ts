@@ -146,7 +146,8 @@ app.post("/api/v1/projects/:projectId/native/requests/:jobId/continue", async (r
 
 app.post("/api/v1/projects/:projectId/native/requests/:jobId/extend", async (request) => {
   const { projectId, jobId } = z.object({ projectId: idSchema, jobId: idSchema }).parse(request.params);
-  await extendNativePartialJob(ownerId, projectId, jobId);
+  const limits = z.object({ maxCalls: z.number().int().min(1).optional(), maxInputTokens: z.number().int().min(1_000).optional(), maxOutputTokens: z.number().int().min(400).optional(), deadlineSeconds: z.number().int().min(10).optional(), maxJobCostUsd: z.number().min(0).optional() }).strict().parse(request.body ?? {});
+  await extendNativePartialJob(ownerId, projectId, jobId, Object.keys(limits).length ? limits : undefined);
   return { jobId, extended: true };
 });
 

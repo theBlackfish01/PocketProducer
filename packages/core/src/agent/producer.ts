@@ -127,30 +127,37 @@ export function openAiCost(usage: { inputTokens: number; outputTokens: number })
   return tokenCostUsd("openai", "gpt-6-astra", usage);
 }
 
-function usageFromLlmResult(result: LLMResult): { inputTokens: number; outputTokens: number } {
-  const totals = { inputTokens: 0, outputTokens: 0 };
+export function usageFromLlmResult(result: LLMResult): { inputTokens: number; outputTokens: number; cachedInputTokens: number } {
+  const totals = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
   for (const generations of result.generations) {
     for (const generation of generations) {
-      const message = "message" in generation ? generation.message as BaseMessage & { usage_metadata?: { input_tokens?: number; output_tokens?: number } } : undefined;
+      const message = "message" in generation ? generation.message as BaseMessage & { usage_metadata?: { input_tokens?: number; output_tokens?: number; input_token_details?: { cache_read?: number } }; response_metadata?: { tokenUsage?: { promptTokensDetails?: { cachedTokens?: number } }; token_usage?: { prompt_tokens_details?: { cached_tokens?: number } } } } : undefined;
       totals.inputTokens += message?.usage_metadata?.input_tokens ?? 0;
       totals.outputTokens += message?.usage_metadata?.output_tokens ?? 0;
+      totals.cachedInputTokens += message?.usage_metadata?.input_token_details?.cache_read ?? message?.response_metadata?.token_usage?.prompt_tokens_details?.cached_tokens ?? message?.response_metadata?.tokenUsage?.promptTokensDetails?.cachedTokens ?? 0;
     }
   }
-  const tokenUsage = result.llmOutput?.tokenUsage as { promptTokens?: number; completionTokens?: number } | undefined;
+  const tokenUsage = result.llmOutput?.tokenUsage as { promptTokens?: number; completionTokens?: number; promptTokensDetails?: { cachedTokens?: number } } | undefined;
   if (totals.inputTokens === 0) totals.inputTokens = tokenUsage?.promptTokens ?? 0;
   if (totals.outputTokens === 0) totals.outputTokens = tokenUsage?.completionTokens ?? 0;
+  if (totals.cachedInputTokens === 0) totals.cachedInputTokens = tokenUsage?.promptTokensDetails?.cachedTokens ?? 0;
+  totals.cachedInputTokens = Math.max(0, Math.min(totals.inputTokens, totals.cachedInputTokens));
   return totals;
 }
 
 export class AccountedOpenAICalls extends BaseCallbackHandler {
   name = "pocket-producer-accounting";
   private readonly effects = new Map<string, string>();
+  private currentOutputTokenBound: number;
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   costMicrousd = 0;
 
   constructor(private readonly job: JobRecord, private readonly model: string, private readonly operationHash: string, private readonly outputTokenBound = 900) {
     super({ raiseError: true, _awaitHandler: true });
+    this.currentOutputTokenBound = outputTokenBound;
   }
+
+  setOutputTokenBound(bound: number): void { this.currentOutputTokenBound = Math.min(this.outputTokenBound, bound); }
 
   private cost(usage: { inputTokens: number; outputTokens: number }): number {
     const capturedPrice = jobNativeRunLimits(this.job.request)?.pricing;
@@ -158,7 +165,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   }
 
   override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
-    const request = boundOpenAiRequest(messages, this.outputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens);
+    const request = boundOpenAiRequest(messages, this.currentOutputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens);
     const messageHash = canonicalHash(request.normalizedMessages);
     const reservation = await reserveProviderEffect({
       job: this.job,

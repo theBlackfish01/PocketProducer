@@ -113,21 +113,29 @@ test("saved partial work stays separate from the selected version and explains a
   const selected = await (await page.request.get(`/api/v1/projects/${projectId}/native`)).json() as { currentRevisionId: string; current: { document: Record<string, unknown> } };
   const jobId = crypto.randomUUID();
   await page.route(`**/api/v1/jobs/${jobId}`, async (route) => route.fulfill({ json: { id: jobId, project_id: projectId, kind: "native-revision", state: "needs_attention", stage: "partial", error_code: "NATIVE_PARTIAL", error_message: null, result_revision_id: null, events: [] } }));
-  await page.route(`**/api/v1/projects/${projectId}/native/requests/${jobId}/draft`, async (route) => route.fulfill({ json: { jobId, state: "needs_attention", selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 2, document: { ...selected.current.document, title: "Unselected draft" }, documentHash: "fixture-draft-hash", canContinue: false, canExtend: true, runLimits: { profile: "standard", maxCalls: 40, deadlineSeconds: 1800, maxJobCostUsd: 5 }, continuationReason: "This request has used its configured model-call allowance." } }));
+  let extensions = 0, continuations = 0;
+  await page.route(`**/api/v1/projects/${projectId}/native/requests/${jobId}/draft`, async (route) => route.fulfill({ json: { jobId, state: "needs_attention", selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 2, document: { ...selected.current.document, title: "Unselected draft" }, documentHash: "fixture-draft-hash", canContinue: extensions > 0, canExtend: true, runLimits: { profile: extensions ? "extended" : "standard", maxCalls: extensions ? 60 : 40, maxInputTokens: 64000, maxOutputTokens: 16384, deadlineSeconds: 1800, maxJobCostUsd: 5 }, extensionCeiling: { maxCalls: 300, maxInputTokens: 256000, maxOutputTokens: 65536, deadlineSeconds: 21600, maxJobCostUsd: 100 }, budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 4.49, minimumNextCallUsd: 0.42, modelCalls: 3 }, continuationReason: extensions ? null : "This request has used its configured model-call allowance." } }));
   await page.evaluate(({ key, receipt }) => localStorage.setItem(key, JSON.stringify(receipt)), { key: `pocket-producer:native-receipt:${projectId}`, receipt: { operation: "native-revision", key: crypto.randomUUID(), jobId, signature: selected.currentRevisionId } });
   await page.reload();
   await expect(page.getByRole("heading", { name: "Work in progress" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Unfinished arrangement preview" })).toContainText("Not your current version · 2 confirmed changes");
   await expect(page.getByText("This request has used its configured model-call allowance.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue saved draft" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Extend this request and continue" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Increase request limits" })).toBeVisible();
+  await expect(page.getByText(/\$0.51 used.*\$4.49/)).toBeVisible();
   await expect(page.getByText(/1 saved version/)).toBeVisible();
   await page.screenshot({ path: `${evidence}/native-partial.png`, fullPage: true });
-  let extensions = 0, continuations = 0;
-  await page.route(`**/api/v1/projects/${projectId}/native/requests/${jobId}/extend`, async (route) => { extensions++; await route.fulfill({ json: { jobId, extended: true } }); });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: `${evidence}/native-partial-mobile.png`, fullPage: true });
+  await page.route(`**/api/v1/projects/${projectId}/native/requests/${jobId}/extend`, async (route) => { expect(route.request().postDataJSON()).toMatchObject({ maxCalls: 60 }); extensions++; await route.fulfill({ json: { jobId, extended: true } }); });
   await page.route(`**/api/v1/projects/${projectId}/native/requests/${jobId}/continue`, async (route) => { continuations++; await route.fulfill({ status: 202, json: { jobId } }); });
-  await page.getByRole("button", { name: "Extend this request and continue" }).click();
-  await expect.poll(() => [extensions, continuations]).toEqual([1, 1]);
+  await page.getByLabel("Model calls").fill("60");
+  await page.getByRole("button", { name: "Increase request limits" }).click();
+  await expect.poll(() => [extensions, continuations]).toEqual([1, 0]);
+  await expect(page.getByRole("button", { name: "Continue saved draft" })).toBeVisible();
+  await page.getByRole("button", { name: "Continue saved draft" }).click();
+  await expect.poll(() => continuations).toBe(1);
 });
 
 test("a queued and running sync never polls a construction draft or erases an unsent detailed brief", async ({ page }) => {

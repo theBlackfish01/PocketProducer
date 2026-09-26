@@ -5,7 +5,7 @@ import type { NexusEntity } from "@audiotool/nexus/document";
 import { nativePresetFingerprint, type LibrarySample, type NativePreset } from "./library.js";
 import { assertNativeDeviceMapping, materializedNotes, nativeDocumentSchema, type NativeDocument, type NativePart } from "./model.js";
 
-export const NATIVE_MAPPING_VERSION = "nexus-native-v5";
+export const NATIVE_MAPPING_VERSION = "nexus-native-v6";
 export const NEXUS_TICKS_PER_CANONICAL_TICK = Ticks.Beat / 960;
 export function toNexusTicks(canonicalTicks: number): number {
   const value = canonicalTicks * NEXUS_TICKS_PER_CANONICAL_TICK;
@@ -135,6 +135,7 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
             : t.create("autoFilter", { ...fxPosition, ...effect.parameters });
           t.create("desktopAudioCable", { fromSocket: wetOutput, toSocket: fx.fields.audioInput.location });
           wetOutput = fx.fields.audioOutput.location;
+          effectTargets.set(effect.id, fx.fields);
         }
         t.create("desktopAudioCable", { fromSocket: wetOutput, toSocket: merge.fields.audioInputB.location });
         output = merge.fields.audioOutput.location;
@@ -235,6 +236,58 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
         const automationTrack = t.create("automationTrack", { automatedParameter: target.location as typeof channel.fields.preGain.location, orderAmongTracks: document.parts.length + automationEvents });
         const collection = t.create("automationCollection", {});
         t.create("automationRegion", { track: automationTrack.location, collection: collection.location, region: { displayName: `${part.name} ${curve.target}`, positionTicks: 0, durationTicks: duration, loopDurationTicks: duration } });
+        for (const point of curve.points) { t.create("automationEvent", { collection: collection.location, positionTicks: toNexusTicks(point.tick), value: point.value, interpolation: point.interpolation === "step" || !point.interpolation ? 1 : 2, slope: point.interpolation === "sloped" ? point.slope ?? 0 : 0 }); automationEvents += 1; }
+      }
+    }
+    for (const [groupIndex, group] of (document.groups ?? []).entries()) {
+      const nativeGroup = groups.get(group.id)!;
+      const effectTargets = new Map<string, unknown>();
+      let output = nativeGroup.fields.insertOutput.location;
+      const createGroupEffect = (effect: NonNullable<NativeDocument["groups"]>[number]["effects"] extends Array<infer E> | undefined ? E : never, index: number, branch: string) => {
+        const position = { displayName: `${group.name} ${branch} ${effect.type}`, positionX: 160 + groupIndex * 220 + index * 100, positionY: 750 + groupIndex * 150 + (branch === "wet" ? 60 : 0) };
+        const fx = effect.type === "stompboxDelay" ? t.create("stompboxDelay", { ...position, ...effect.parameters })
+          : effect.type === "stompboxReverb" ? t.create("stompboxReverb", { ...position, ...effect.parameters })
+          : effect.type === "stompboxCompressor" ? t.create("stompboxCompressor", { ...position, ...effect.parameters })
+          : effect.type === "stompboxParametricEqualizer" ? t.create("stompboxParametricEqualizer", { ...position, ...effect.parameters })
+          : effect.type === "stompboxTube" ? t.create("stompboxTube", { ...position, ...effect.parameters })
+          : effect.type === "stompboxChorus" ? t.create("stompboxChorus", { ...position, ...effect.parameters })
+          : effect.type === "stompboxPitchDelay" ? t.create("stompboxPitchDelay", { ...position, ...effect.parameters })
+          : t.create("autoFilter", { ...position, ...effect.parameters });
+        effectTargets.set(effect.id, fx.fields);
+        return fx;
+      };
+      for (const [index, effect] of (group.effects ?? []).entries()) {
+        const fx = createGroupEffect(effect, index, "insert");
+        t.create("desktopAudioCable", { fromSocket: output, toSocket: fx.fields.audioInput.location });
+        output = fx.fields.audioOutput.location;
+      }
+      let blend: NexusEntity<"audioMerger"> | null = null;
+      if (group.parallel) {
+        const split = t.create("audioSplitter", { displayName: `${group.name} shared dry/wet split`, blendModeIndex: 1, positionX: 220 + groupIndex * 220, positionY: 830 + groupIndex * 150 });
+        blend = t.create("audioMerger", { displayName: `${group.name} shared dry/wet blend`, blendModeIndex: 1, mergeCoords: { x: group.parallel.wetMix, y: (1 - group.parallel.wetMix) / 2 }, positionX: 600 + groupIndex * 220, positionY: 830 + groupIndex * 150 });
+        t.create("desktopAudioCable", { fromSocket: output, toSocket: split.fields.audioInput.location });
+        t.create("desktopAudioCable", { fromSocket: split.fields.audioOutputA.location, toSocket: blend.fields.audioInputA.location });
+        let wet = split.fields.audioOutputB.location;
+        for (const [index, effect] of group.parallel.effects.entries()) {
+          const fx = createGroupEffect(effect, index, "wet");
+          t.create("desktopAudioCable", { fromSocket: wet, toSocket: fx.fields.audioInput.location });
+          wet = fx.fields.audioOutput.location;
+        }
+        t.create("desktopAudioCable", { fromSocket: wet, toSocket: blend.fields.audioInputB.location });
+        output = blend.fields.audioOutput.location;
+      }
+      if ((group.effects?.length ?? 0) || group.parallel) t.create("desktopAudioCable", { fromSocket: output, toSocket: nativeGroup.fields.insertInput.location });
+      for (const curve of group.automation ?? []) {
+        const effectMatch = /^effect\.([a-z][a-z0-9-]{0,63})\.([A-Za-z][A-Za-z0-9]*)$/.exec(curve.target);
+        const target = curve.target === "gain" ? nativeGroup.fields.faderParameters.fields.postGain
+          : curve.target === "pan" ? nativeGroup.fields.faderParameters.fields.panning
+          : curve.target.startsWith("compressor.") ? nativeField(nativeGroup.fields.compressor, curve.target.slice(11))
+          : curve.target === "parallel.wetMix" ? blend?.fields.mergeCoords.fields.x
+          : effectMatch ? nativeField(effectTargets.get(effectMatch[1]!), effectMatch[2]!) : null;
+        if (!target || typeof target !== "object" || !("location" in target)) throw new Error(`Group automation ${curve.id} has no native target`);
+        const track = t.create("automationTrack", { automatedParameter: target.location as typeof nativeGroup.fields.faderParameters.fields.postGain.location, orderAmongTracks: document.parts.length + automationEvents });
+        const collection = t.create("automationCollection", {});
+        t.create("automationRegion", { track: track.location, collection: collection.location, region: { displayName: `${group.name} ${curve.target}`, positionTicks: 0, durationTicks: duration, loopDurationTicks: duration } });
         for (const point of curve.points) { t.create("automationEvent", { collection: collection.location, positionTicks: toNexusTicks(point.tick), value: point.value, interpolation: point.interpolation === "step" || !point.interpolation ? 1 : 2, slope: point.interpolation === "sloped" ? point.slope ?? 0 : 0 }); automationEvents += 1; }
       }
     }

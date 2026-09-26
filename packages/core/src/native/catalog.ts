@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { getSchemaLocationDetails, schemaPathToSchemaLocation, type SchemaPath } from "@audiotool/nexus/document";
 import { nativeParameterRanges } from "./model.js";
 
-export const NATIVE_CATALOG_VERSION = "nexus-0.0.17-schema-v1";
+export const NATIVE_CATALOG_VERSION = "nexus-0.0.17-schema-v2";
 const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "audioSplitter", "audioMerger", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
 const musicalMeaning: Record<string, { family: string; purpose: string; caveat?: string }> = {
   heisenberg: { family: "instrument", purpose: "Subtractive synth for basses, pads and leads." },
@@ -20,13 +20,13 @@ const musicalMeaning: Record<string, { family: string; purpose: string; caveat?:
   audioDevice: { family: "routing", purpose: "Playback device and channel path created by the pinned sample insertion helper." },
   audioTrack: { family: "arrangement", purpose: "Timeline track for one or more ready owned sample regions." },
   mixerChannel: { family: "routing", purpose: "Part channel with gain and pan routing." },
-  mixerGroup: { family: "routing", purpose: "Shared part group with gain/pan, bounded compressor and supported sidechain source." },
+  mixerGroup: { family: "routing", purpose: "Shared part group with gain/pan, ordered insert effects, a dry/wet parallel chain, automation and a supported sidechain source." },
   mixerReverbAux: { family: "routing", purpose: "Shared reverb return selected by part send levels." },
   mixerDelayAux: { family: "routing", purpose: "One shared tempo-stepped delay return selected by part send levels." },
   mixerSideChainCable: { family: "routing", purpose: "Validated control link from a part channel to a group compressor." },
   desktopAudioCable: { family: "routing", purpose: "Connects an instrument or effect output to a compatible audio input." },
-  audioSplitter: { family: "routing", purpose: "Duplicates a part signal into separate dry and processed paths." },
-  audioMerger: { family: "routing", purpose: "Blends a part's dry and processed paths before its mixer channel." },
+  audioSplitter: { family: "routing", purpose: "Duplicates a part or shared group signal into separate dry and processed paths." },
+  audioMerger: { family: "routing", purpose: "Blends a part or shared group's dry and processed paths." },
   stompboxDelay: { family: "effect", purpose: "Time-based repeats; timing and feedback need bounded parameter checks." },
   stompboxReverb: { family: "effect", purpose: "Spatial decay; structure cannot prove mix quality." },
   stompboxCompressor: { family: "effect", purpose: "Dynamics control; structural presence does not establish loudness quality." },

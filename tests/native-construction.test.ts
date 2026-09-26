@@ -1,9 +1,57 @@
 import { describe, expect, it } from "vitest";
-import { analyzeNativeSection, applyNativeOperations, canonicalHash, discoverNativeCapabilities, fixtureConstruct, fixtureRevise, inspectNativeCapability, materializedNotes, nativeDiff, nativeMusicHash, NativeToolSession, pinnedContext, protectedPartHash, seedNativeDocument, toNexusTicks, validateNativeOffline, type JobRecord } from "@pocket/core";
+import { analyzeNativeSection, applyNativeOperations, canonicalHash, discoverNativeCapabilities, fixtureConstruct, fixtureRevise, inspectNativeCapability, materializedNotes, nativeCompletionIssues, nativeDiff, nativeMusicHash, NativeToolSession, pinnedContext, protectedPartHash, seedNativeDocument, toNexusTicks, validateNativeOffline, type JobRecord } from "@pocket/core";
 
 function session(direction: string) { return new NativeToolSession({} as JobRecord, seedNativeDocument(direction), false); }
 
 describe("native construction contracts", () => {
+  it("maps one shared group dry/wet compressor and saturator path through actual insert sockets", async () => {
+    const built = applyNativeOperations(seedNativeDocument("Shared drum bus"), [
+      { kind: "addNotes", partId: "starting-voice", notes: [{ id: "hit", startTick: 0, durationTicks: 240, pitch: 36, velocity: 0.8 }] },
+      { kind: "upsertGroup", group: { id: "drum-bus", name: "Drum bus", gain: 0.8, pan: 0, parallel: { wetMix: 0.32, effects: [{ id: "squeeze", type: "stompboxCompressor", parameters: { thresholdDb: -12, ratio: 0.5 } }, { id: "warmth", type: "stompboxTube", parameters: { drive: 2.4, tone: 0, postGain: 0.7 } }] }, automation: [{ id: "drive-rise", target: "effect.warmth.postGain", points: [{ tick: 0, value: 0.25 }, { tick: 3840, value: 0.6 }] }] } },
+      { kind: "routePart", partId: "starting-voice", groupId: "drum-bus" }
+    ]);
+    const verified = await validateNativeOffline(built);
+    expect(verified.structuralReadback.parallelSplits).toBe(1);
+    expect(verified.structuralReadback.parallelMerges).toBe(1);
+    expect(verified.structuralReadback.groupLinks).toBe(1);
+    expect(verified.structuralReadback.automationTracks).toBe(1);
+    const cables = verified.structuralReadback.semanticEntities.filter((entity) => entity.type === "desktopAudioCable");
+    expect(cables.length).toBeGreaterThanOrEqual(6);
+    expect(JSON.stringify(cables)).toContain("mixerGroup:0");
+    expect(JSON.stringify(verified.structuralReadback.semanticEntities)).toContain("2.4");
+    expect(() => applyNativeOperations(built, [{ kind: "removeGroup", groupId: "drum-bus" }])).toThrow();
+    const protectedVersion = applyNativeOperations(built, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
+    expect(() => applyNativeOperations(protectedVersion, [{ kind: "upsertGroup", group: { ...protectedVersion.groups![0]!, parallel: { wetMix: 0.8, effects: protectedVersion.groups![0]!.parallel!.effects } } }])).toThrow(/Protected part/);
+  });
+  it("edits, orders and removes shared processing without bypassing a kept part", async () => {
+    const base = applyNativeOperations(seedNativeDocument("A shared drum group"), [
+      { kind: "addNotes", partId: "starting-voice", notes: [{ id: "beat", startTick: 0, durationTicks: 240, pitch: 36, velocity: 0.8 }] },
+      { kind: "upsertGroup", group: { id: "drum-bus", name: "Drums", gain: 0.8, pan: 0 } },
+      { kind: "routePart", partId: "starting-voice", groupId: "drum-bus" }
+    ]);
+    const edited = applyNativeOperations(base, [
+      { kind: "addGroupEffect", groupId: "drum-bus", effect: { id: "warmth", type: "stompboxTube", parameters: { drive: 2 } } },
+      { kind: "addGroupEffect", groupId: "drum-bus", effect: { id: "eq", type: "stompboxParametricEqualizer", parameters: { frequencyHz: 120 } }, beforeEffectId: "warmth" },
+      { kind: "moveGroupEffect", groupId: "drum-bus", effectId: "warmth", beforeEffectId: "eq" },
+      { kind: "replaceGroupEffect", groupId: "drum-bus", effect: { id: "warmth", type: "stompboxTube", parameters: { drive: 3 } } },
+      { kind: "setGroupParallel", groupId: "drum-bus", parallel: { wetMix: 0.3, effects: [{ id: "squeeze", type: "stompboxCompressor", parameters: { thresholdDb: -12 } }] } },
+      { kind: "setGroupAutomation", groupId: "drum-bus", automation: { id: "blend-rise", target: "parallel.wetMix", points: [{ tick: 0, value: 0.2 }, { tick: 3840, value: 0.45 }] } }
+    ]);
+    expect(edited.groups?.[0]?.effects?.map((effect) => effect.id)).toEqual(["warmth", "eq"]);
+    expect((await validateNativeOffline(edited)).structuralReadback.parallelSplits).toBe(1);
+    expect(() => applyNativeOperations(edited, [{ kind: "removeGroupParallel", groupId: "drum-bus" }])).toThrow(/unsupported target|no parallel blend/);
+    const withoutCurve = applyNativeOperations(edited, [{ kind: "removeGroupAutomation", groupId: "drum-bus", automationId: "blend-rise" }, { kind: "removeGroupParallel", groupId: "drum-bus" }, { kind: "removeGroupEffect", groupId: "drum-bus", effectId: "eq" }]);
+    expect(withoutCurve.groups?.[0]?.effects?.map((effect) => effect.id)).toEqual(["warmth"]);
+    const kept = applyNativeOperations(edited, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
+    expect(() => applyNativeOperations(kept, [{ kind: "replaceGroupEffect", groupId: "drum-bus", effect: { id: "warmth", type: "stompboxTube", parameters: { drive: 4 } } }])).toThrow(/Protected part/);
+  });
+  it("rejects a wrong tempo, meter or section span even when a plan says complete", () => {
+    const document = applyNativeOperations(seedNativeDocument("A 12-bar song in 3/4 at 86 BPM, intro 1-4, chorus 5-12"), [
+      { kind: "setStructure", bars: 12, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 6, intent: "" }, { id: "chorus", name: "Chorus", startBar: 6, endBar: 12, intent: "" }] },
+      { kind: "addNotes", partId: "starting-voice", notes: [{ id: "theme", startTick: 0, durationTicks: 960, pitch: 62, velocity: 0.7 }] }
+    ]);
+    expect(nativeCompletionIssues(document, document.direction, "generation")).toEqual(expect.arrayContaining([expect.stringContaining("86 BPM"), expect.stringContaining("3/4"), expect.stringContaining("intro at bars 1–4") ]));
+  });
   it("reports sounding notes crossing a section boundary separately from new onsets", () => {
     const base = seedNativeDocument("A held transition over the boundary");
     const document = applyNativeOperations(base, [
@@ -96,7 +144,69 @@ describe("native construction contracts", () => {
     const edit = new NativeToolSession(job, built, false);
     await edit.apply("silence-arrival", [{ kind: "silenceSectionClips", partId: "texture", sectionId: "arrival" }]);
     expect(edit.document.parts[0]?.libraryRegions).toMatchObject([{ startTick: 11520, durationTicks: 3840, sourceStartSeconds: 1, sourceDurationSeconds: 2 }]);
-    expect(() => applyNativeOperations(built, [{ kind: "replaceLibrarySample", partId: "texture", region: { ...built.parts[0]!.libraryRegions![0]!, playbackMode: "loop" } }, { kind: "silenceSectionClips", partId: "texture", sectionId: "arrival" }])).toThrow(/preserving loop phase/);
+    const loop = applyNativeOperations(built, [{ kind: "replaceLibrarySample", partId: "texture", region: { ...built.parts[0]!.libraryRegions![0]!, playbackMode: "loop" } }, { kind: "silenceSectionClips", partId: "texture", sectionId: "arrival" }]);
+    expect(loop.parts[0]?.libraryRegions).toMatchObject([{ startTick: 11520, durationTicks: 3840, sourceStartSeconds: 1, sourceDurationSeconds: 4, playbackMode: "loop" }]);
+  });
+  it("changes only the middle of a looped clip, retaining source phase on both sides", async () => {
+    const built = applyNativeOperations(seedNativeDocument("A twelve-bar loop with a quieter middle"), [
+      { kind: "setStructure", bars: 12, tempoBpm: 120, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "" }, { id: "middle", name: "Middle", startBar: 4, endBar: 8, intent: "" }, { id: "ending", name: "Ending", startBar: 8, endBar: 12, intent: "" }] },
+      { kind: "addPart", part: { id: "texture", name: "Texture", role: "source", device: { type: "audio", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], libraryRegions: [{ id: "long-loop", sampleName: "samples/texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 5, bpm: 120, startTick: 0, durationTicks: 46080, sourceStartSeconds: 1, sourceDurationSeconds: 3, playbackMode: "loop", gain: 0.6, provenance: "audiotool-library" }], effects: [], automation: [] } }
+    ]);
+    const edit = new NativeToolSession({ kind: "native-revision", request: { targetPartId: "texture", targetSectionId: "middle" } } as unknown as JobRecord, built, false);
+    await edit.apply("quiet-middle", [{ kind: "setSectionClipGain", partId: "texture", sectionId: "middle", gain: 0.3 }]);
+    const regions = edit.document.parts.find((part) => part.id === "texture")!.libraryRegions!;
+    expect(regions.some((region) => region.startTick === 15360 && region.gain === 0.3)).toBe(true);
+    expect(regions.filter((region) => region.startTick >= 30720).map((region) => region.sourceStartSeconds)).toContain(2);
+    expect((await validateNativeOffline(edit.document, {}, {}, { "samples/texture": { name: "samples/texture", ownerName: "users/fixture", durationSeconds: 5, bpm: 120 } as never })).structuralReadback.semanticEntities.filter((entity) => entity.type === "audioRegion").length).toBeGreaterThanOrEqual(3);
+    expect(() => applyNativeOperations(edit.document, [{ kind: "setSectionClipGain", partId: "texture", sectionId: "middle", gain: 0.3 }])).toThrow(/No clip gain changes/);
+  });
+  it("targets one crossing clip without touching its neighbor and moves a contained clip only within its section", async () => {
+    const built = applyNativeOperations(seedNativeDocument("Keep one texture in place while shifting another"), [
+      { kind: "setStructure", bars: 12, tempoBpm: 120, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "" }, { id: "middle", name: "Middle", startBar: 4, endBar: 8, intent: "" }, { id: "ending", name: "Ending", startBar: 8, endBar: 12, intent: "" }] },
+      { kind: "addPart", part: { id: "texture", name: "Texture", role: "source", device: { type: "audio", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], libraryRegions: [
+        { id: "crossing", sampleName: "samples/texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 8, bpm: 120, startTick: 11520, durationTicks: 23040, sourceStartSeconds: 1, sourceDurationSeconds: 3, playbackMode: "loop", gain: 0.6, provenance: "audiotool-library" },
+        { id: "contained", sampleName: "samples/texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 8, bpm: 120, startTick: 19200, durationTicks: 1920, sourceStartSeconds: 0, sourceDurationSeconds: 1, playbackMode: "once", gain: 0.5, provenance: "audiotool-library" }
+      ], effects: [], automation: [] } }
+    ]);
+    const job = { kind: "native-revision", request: { targetPartId: "texture", targetSectionId: "middle" } } as unknown as JobRecord;
+    const edit = new NativeToolSession(job, built, false);
+    await edit.apply("quieter-crossing", [{ kind: "setSectionClipGain", partId: "texture", sectionId: "middle", regionId: "crossing", gain: 0.25 }]);
+    expect(edit.document.parts[1]?.libraryRegions?.find((region) => region.id === "contained")).toEqual(built.parts[1]?.libraryRegions?.find((region) => region.id === "contained"));
+    expect(edit.document.parts[1]?.libraryRegions?.some((region) => region.gain === 0.25 && region.startTick >= 15360 && region.startTick < 30720)).toBe(true);
+    await edit.apply("shift-contained", [{ kind: "moveSectionClip", partId: "texture", sectionId: "middle", regionId: "contained", startTick: 20160 }]);
+    expect(edit.document.parts[1]?.libraryRegions?.find((region) => region.id === "contained")).toMatchObject({ startTick: 20160, sourceStartSeconds: 0, sourceDurationSeconds: 1 });
+    await expect(edit.apply("reject-crossing-move", [{ kind: "moveSectionClip", partId: "texture", sectionId: "middle", regionId: "r-missing", startTick: 21000 }])).rejects.toThrow(/exactly one region/);
+    expect(() => applyNativeOperations(built, [{ kind: "moveSectionClip", partId: "texture", sectionId: "middle", regionId: "crossing", startTick: 20160 }])).toThrow(/crosses/);
+    expect(() => applyNativeOperations(built, [{ kind: "moveSectionClip", partId: "texture", sectionId: "middle", regionId: "contained", startTick: 30000 }])).toThrow(/would leave/);
+    expect((await validateNativeOffline(edit.document, {}, {}, { "samples/texture": { name: "samples/texture", ownerName: "users/fixture", durationSeconds: 8, bpm: 120 } as never })).structuralReadback.semanticEntities.filter((entity) => entity.type === "audioRegion").length).toBeGreaterThanOrEqual(4);
+  });
+  it("edits a crossing gain ramp only in one section and rejects outside or sloped changes", async () => {
+    const built = applyNativeOperations(seedNativeDocument("Shape the middle only"), [
+      { kind: "setStructure", bars: 12, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "" }, { id: "middle", name: "Middle", startBar: 4, endBar: 8, intent: "" }, { id: "ending", name: "Ending", startBar: 8, endBar: 12, intent: "" }] },
+      { kind: "addNotes", partId: "starting-voice", notes: [{ id: "note", startTick: 0, durationTicks: 960, pitch: 60, velocity: 0.7 }] },
+      { kind: "addAutomation", partId: "starting-voice", automation: { id: "gain-ramp", target: "gain", points: [{ tick: 0, value: 0.2, interpolation: "linear" }, { tick: 46080, value: 0.8 }] } }
+    ]);
+    const job = { kind: "native-revision", request: { targetPartId: "starting-voice", targetSectionId: "middle" } } as unknown as JobRecord;
+    const edit = new NativeToolSession(job, built, false);
+    await edit.apply("middle-swell", [{ kind: "editSectionAutomation", partId: "starting-voice", sectionId: "middle", automationId: "gain-ramp", points: [{ tick: 15360, value: 0.4, interpolation: "linear" }, { tick: 23040, value: 0.9, interpolation: "linear" }, { tick: 30720, value: 0.6, interpolation: "linear" }] }]);
+    expect(edit.document.parts[0]?.automation[0]?.points).toHaveLength(5);
+    expect((await validateNativeOffline(edit.document)).readback.automationEvents).toBe(5);
+    await expect(new NativeToolSession(job, built, false).apply("outside-ramp", [{ kind: "replaceAutomation", partId: "starting-voice", automation: { id: "gain-ramp", target: "gain", points: [{ tick: 0, value: 0.1, interpolation: "linear" }, { tick: 46080, value: 0.8 }] } }])).rejects.toThrow(/outside that section/);
+    await expect(new NativeToolSession(job, built, false).apply("bad-boundary", [{ kind: "editSectionAutomation", partId: "starting-voice", sectionId: "middle", automationId: "gain-ramp", points: [{ tick: 15360, value: 0.8 }, { tick: 30720, value: 0.6 }] }])).rejects.toThrow(/Start boundary/);
+    const sloped = applyNativeOperations(built, [{ kind: "replaceAutomation", partId: "starting-voice", automation: { id: "gain-ramp", target: "gain", points: [{ tick: 0, value: 0.2, interpolation: "sloped", slope: 0.3 }, { tick: 46080, value: 0.8 }] } }]);
+    expect(() => applyNativeOperations(sloped, [{ kind: "editSectionAutomation", partId: "starting-voice", sectionId: "middle", automationId: "gain-ramp", points: [{ tick: 15360, value: 0.4 }, { tick: 30720, value: 0.6 }] }])).toThrow(/Sloped automation/);
+  });
+  it("preserves loop phase after silencing a middle section of one shared source clip", async () => {
+    const built = applyNativeOperations(seedNativeDocument("A looping texture with a silent middle"), [
+      { kind: "setStructure", bars: 12, tempoBpm: 120, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "" }, { id: "middle", name: "Middle", startBar: 4, endBar: 8, intent: "" }, { id: "ending", name: "Ending", startBar: 8, endBar: 12, intent: "" }] },
+      { kind: "removePart", partId: "starting-voice" },
+      { kind: "addPart", part: { id: "texture", name: "Texture", role: "source", device: { type: "audio", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], libraryRegions: [{ id: "long-loop", sampleName: "samples/texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 5, bpm: 120, startTick: 0, durationTicks: 46080, sourceStartSeconds: 1, sourceDurationSeconds: 3, playbackMode: "loop", gain: 0.5, provenance: "audiotool-library" }], effects: [], automation: [] } }
+    ]);
+    const job = { kind: "native-revision", request: { targetPartId: "texture", targetSectionId: "middle" } } as unknown as JobRecord;
+    const edit = new NativeToolSession(job, built, false);
+    await edit.apply("mute-middle-loop", [{ kind: "silenceSectionClips", partId: "texture", sectionId: "middle" }]);
+    expect(edit.document.parts[0]?.libraryRegions).toMatchObject([{ startTick: 0, durationTicks: 15360, sourceStartSeconds: 1, sourceDurationSeconds: 3 }, { startTick: 30720, durationTicks: 3840, sourceStartSeconds: 2, sourceDurationSeconds: 2, playbackMode: "once" }, { startTick: 34560, durationTicks: 11520, sourceStartSeconds: 1, sourceDurationSeconds: 3, playbackMode: "loop" }]);
+    expect((await validateNativeOffline(edit.document, {}, {}, { "samples/texture": { name: "samples/texture", ownerName: "users/fixture", durationSeconds: 5, bpm: 120 } as never })).structuralReadback.semanticEntities.filter((entity) => entity.type === "audioRegion")).toHaveLength(3);
   });
   it("keeps generated editorial titles on a word boundary", () => {
     const title = seedNativeDocument("Build an evolving 64-bar ambient journey with a slow lead and spacious transitions into a final release").title;

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalHash } from "../domain/composition.js";
+import { spliceSectionAutomation } from "./section.js";
 
 export const NATIVE_PPQ = 960;
 const id = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
@@ -9,6 +10,7 @@ export const nativeParameterRanges = {
   heisenberg: { gain: [0, 1], tuneSemitones: [-12, 12], playModeIndex: [1, 4], glideMs: [0, 5000], velocityFactor: [0, 1], unisonoCount: [1, 4], unisonoDetuneSemitones: [0, 1], unisonoStereoSpreadFactor: [-1, 1],
     "operatorA.gain": [0, 1], "operatorB.gain": [0, 1], "operatorC.gain": [0, 1], "operatorD.gain": [0, 1], "operatorA.waveformIndex": [1, 49], "operatorB.waveformIndex": [1, 49], "operatorC.waveformIndex": [1, 49], "operatorD.waveformIndex": [1, 49],
     "operatorA.detuneFactor": [0, 64], "operatorB.detuneFactor": [0, 64], "operatorC.detuneFactor": [0, 64], "operatorD.detuneFactor": [0, 64],
+    "operatorA.frequencyOffsetHz": [-9999.99, 9999.99], "operatorB.frequencyOffsetHz": [-9999.99, 9999.99], "operatorC.frequencyOffsetHz": [-9999.99, 9999.99], "operatorD.frequencyOffsetHz": [-9999.99, 9999.99],
     "operatorA.modulationFactorB": [0, 1], "operatorA.modulationFactorC": [0, 1], "operatorA.modulationFactorD": [0, 1], "operatorB.modulationFactorA": [0, 1], "operatorB.modulationFactorC": [0, 1], "operatorB.modulationFactorD": [0, 1], "operatorC.modulationFactorA": [0, 1], "operatorC.modulationFactorB": [0, 1], "operatorC.modulationFactorD": [0, 1], "operatorD.modulationFactorA": [0, 1], "operatorD.modulationFactorB": [0, 1], "operatorD.modulationFactorC": [0, 1],
     "operatorA.envelope2AmplitudeModulationDepth": [0, 1], "operatorB.envelope2AmplitudeModulationDepth": [0, 1], "operatorC.envelope2AmplitudeModulationDepth": [0, 1], "operatorD.envelope2AmplitudeModulationDepth": [0, 1], "lfo1.rateNormalized": [0, 1], "lfo2.rateNormalized": [0, 1],
     "filter.cutoffFrequencyHz": [33, 22050], "filter.resonance": [0.70710677, 60], "filter.keyboardTrackingAmount": [-1, 1],
@@ -41,12 +43,11 @@ const parameters = z.record(z.string(), z.number()).default({});
 const note = z.object({ id, startTick: z.number().int().min(0), durationTicks: z.number().int().min(1), pitch: z.number().int().min(0).max(127), velocity: z.number().min(0.01).max(1) });
 const point = z.object({ tick: z.number().int().min(0), value: z.number().min(0).max(1), interpolation: z.enum(["step", "linear", "sloped"]).optional(), slope: z.number().min(-1).max(1).optional() }).superRefine((value, context) => { if (value.slope !== undefined && value.interpolation !== "sloped") context.addIssue({ code: "custom", message: "Automation slope requires sloped interpolation" }); });
 const automatableDeviceFields: Record<string, Set<string>> = {
-  heisenberg: new Set(["gain", "glideMs", "velocityFactor", "operatorA.gain", "operatorB.gain", "operatorC.gain", "operatorD.gain", "operatorB.modulationFactorA", "operatorC.modulationFactorA", "operatorD.modulationFactorB", "lfo1.rateNormalized", "lfo2.rateNormalized", "filter.cutoffFrequencyHz", "filter.resonance", "envelopeMain.attackTimeNormalized", "envelopeMain.releaseTimeNormalized"]),
+  heisenberg: new Set(["gain", "glideMs", "velocityFactor", ...["A", "B", "C", "D"].flatMap((operator) => [`operator${operator}.gain`, `operator${operator}.detuneFactor`, `operator${operator}.frequencyOffsetHz`, ...["A", "B", "C", "D"].filter((other) => other !== operator).map((other) => `operator${operator}.modulationFactor${other}`)]), "lfo1.rateNormalized", "lfo2.rateNormalized", "filter.cutoffFrequencyHz", "filter.resonance", "envelopeMain.attackTimeNormalized", "envelopeMain.releaseTimeNormalized"]),
   pulverisateur: new Set(["gain", "glideTimeMs", "filter.cutoffFrequencyHz", "filter.resonance"]), gakki: new Set(["gain"]), beatbox8: new Set(["gain", "accentAmount", "bassdrum.gain", "bassdrum.tone", "bassdrum.decay", "snaredrum.gain", "snaredrum.tone", "snaredrum.snappy", "openHihat.decay"]), audio: new Set(["gain"])
 };
-const automatableEffectFields = new Set(["mix", "feedbackFactor", "cutoffFrequencyHz", "thresholdDb", "ratio", "releaseMs", "frequencyHz", "postGainDb"]);
+const automatableEffectFields = new Set(["mix", "feedbackFactor", "cutoffFrequencyHz", "thresholdDb", "ratio", "attackMs", "releaseMs", "frequencyHz", "postGainDb", "drive", "tone", "postGain", "roomSizeFactor", "filterModulationDepth", "lfoFrequencyHz"]);
 const mixerCompressor = z.object({ thresholdDb: z.number().min(-48).max(0), ratio: z.number().min(1).max(50), attackMs: z.number().min(0.001).max(200), releaseMs: z.number().min(0.001).max(2000), makeupGainDb: z.number().min(-24).max(24), detectionModeIndex: z.union([z.literal(1), z.literal(2)]).default(1), isActive: z.boolean().default(true) });
-const mixerGroup = z.object({ id, name: z.string().min(1).max(80), gain: z.number().min(0).max(1.995), pan: z.number().min(-1).max(1), parentId: id.optional(), compressor: mixerCompressor.optional(), sidechainFromPartId: id.optional() });
 const master = z.object({ gain: z.number().min(0).max(1.995), pan: z.number().min(-1).max(1), limiterEnabled: z.boolean() });
 const reverbBus = z.object({ id, name: z.string().min(1).max(80), roomSize: z.number().min(0).max(1), preDelayMs: z.number().min(8).max(500), damp: z.number().min(0).max(1) });
 const delayBus = z.object({ id, name: z.string().min(1).max(80), feedbackFactor: z.number().min(0).max(0.8), stepCount: z.number().int().min(1).max(7), stepLengthIndex: z.union([z.literal(1), z.literal(2), z.literal(3)]) });
@@ -55,6 +56,9 @@ const sourcePlayback = { playbackRate: z.number().min(0.5).max(2).optional(), st
 const libraryRegion = z.object({ id, sampleName: z.string().regex(/^samples\/[a-zA-Z0-9-]{1,120}$/), displayName: z.string().min(1).max(160), ownerName: z.string().max(160), durationSeconds: z.number().positive(), bpm: z.number().min(0).max(400),
   startTick: z.number().int().min(0), durationTicks: z.number().int().positive(), sourceStartSeconds: z.number().min(0), sourceDurationSeconds: z.number().positive(), playbackMode: z.enum(["once", "loop"]), gain: z.number().min(0).max(1), provenance: z.literal("audiotool-library"), ...sourcePlayback }).superRefine((value, context) => { if (value.pitchShiftSemitones !== undefined && value.stretchMode !== "preservePitch") context.addIssue({ code: "custom", message: "Pitch shifting needs preservePitch stretch mode" }); });
 const nativeEffect = z.object({ id, type: z.enum(["stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay"]), parameters }).superRefine((value, context) => mappedParameters(value.type, value.parameters, context));
+const mixerGroup = z.object({ id, name: z.string().min(1).max(80), gain: z.number().min(0).max(1.995), pan: z.number().min(-1).max(1), parentId: id.optional(), compressor: mixerCompressor.optional(), sidechainFromPartId: id.optional(),
+  effects: z.array(nativeEffect).max(6).optional(), parallel: z.object({ wetMix: z.number().min(0.01).max(0.99), effects: z.array(nativeEffect).min(1).max(4) }).optional(),
+  automation: z.array(z.object({ id, target: z.string().min(1).max(160), points: z.array(point).min(2).max(128) })).max(12).optional() });
 const part = z.object({
   id, name: z.string().min(1).max(80), role: z.enum(["percussion", "bass", "melody", "harmony", "texture", "lead", "fx", "source"]),
   device: z.object({ type: z.enum(["heisenberg", "pulverisateur", "gakki", "beatbox8", "audio"]), parameters,
@@ -95,6 +99,15 @@ export const nativeDocumentSchema = z.object({
   const groups = new Map((document.groups ?? []).map((value) => [value.id, value]));
   unique([...groups.keys()], "groups");
   for (const group of groups.values()) {
+    unique([...(group.effects ?? []).map((effect) => effect.id), ...(group.parallel?.effects ?? []).map((effect) => effect.id)], "group effects");
+    for (const curve of group.automation ?? []) {
+      if (curve.points.some((value) => value.tick > totalTicks) || curve.points.some((value, index) => index > 0 && value.tick <= curve.points[index - 1]!.tick)) context.addIssue({ code: "custom", path: ["groups"], message: `Invalid automation ${curve.id}` });
+      const effectMatch = /^effect\.([a-z][a-z0-9-]{0,63})\.([A-Za-z][A-Za-z0-9]*)$/.exec(curve.target);
+      const effect = effectMatch && [...(group.effects ?? []), ...(group.parallel?.effects ?? [])].find((value) => value.id === effectMatch[1]);
+      if (!["gain", "pan", "compressor.thresholdDb", "compressor.ratio", "compressor.attackMs", "compressor.releaseMs", "compressor.makeupGainDb", "parallel.wetMix"].includes(curve.target) && !(effect && effectMatch && automatableEffectFields.has(effectMatch[2]!) && Object.hasOwn(nativeParameterRanges[effect.type], effectMatch[2]!))) context.addIssue({ code: "custom", path: ["groups"], message: `Group automation ${curve.id} has unsupported target ${curve.target}` });
+      if (curve.target === "parallel.wetMix" && !group.parallel) context.addIssue({ code: "custom", path: ["groups"], message: `Group ${group.id} has no parallel blend` });
+      if (curve.target.startsWith("compressor.") && !group.compressor) context.addIssue({ code: "custom", path: ["groups"], message: `Group ${group.id} has no compressor` });
+    }
     if (group.parentId && !groups.has(group.parentId)) context.addIssue({ code: "custom", path: ["groups"], message: `Group ${group.id} has no parent` });
     const visited = new Set([group.id]);
     let parent = group.parentId;
@@ -141,7 +154,7 @@ export const nativeDocumentSchema = z.object({
       const devicePath = target.startsWith("device.") ? target.slice(7) : null;
       const effectMatch = /^effect\.([a-z][a-z0-9-]{0,63})\.([A-Za-z][A-Za-z0-9]*)$/.exec(target);
       const sendMatch = /^send\.([a-z][a-z0-9-]{0,63})\.gain$/.exec(target);
-      const effect = effectMatch && item.effects.find((value) => value.id === effectMatch[1]);
+      const effect = effectMatch && [...item.effects, ...(item.parallel?.effects ?? [])].find((value) => value.id === effectMatch[1]);
       const effectField = effectMatch?.[2];
       const validEffectTarget = effect && effectField && automatableEffectFields.has(effectField) && Object.hasOwn(nativeParameterRanges[effect.type], effectField);
       if (!["gain", "pan"].includes(target) && !(target === "filter" && item.effects.some((value) => value.type === "autoFilter")) && !(devicePath && automatableDeviceFields[item.device.type]?.has(devicePath)) && !validEffectTarget && !(sendMatch && item.sends?.some((value) => value.busId === sendMatch[1]))) context.addIssue({ code: "custom", path: ["parts"], message: `Automation ${curve.id} has an unsupported or dangling target ${target}` });
@@ -187,7 +200,9 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("replaceMotif"), motif }),
   z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional(), noteEdits: z.array(z.object({ noteId: id, omit: z.boolean().optional(), pitch: z.number().int().min(0).max(127).optional(), startTick: z.number().int().min(0).optional(), durationTicks: z.number().int().positive().optional(), velocity: z.number().min(0.01).max(1).optional() })).max(64).optional() }),
   z.object({ kind: z.literal("developSectionNotes"), partId: id, sectionId: id, pitchShiftSemitones: z.number().int().min(-12).max(12).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
-  z.object({ kind: z.literal("silenceSectionClips"), partId: id, sectionId: id }),
+  z.object({ kind: z.literal("silenceSectionClips"), partId: id, sectionId: id, regionId: id.optional() }),
+  z.object({ kind: z.literal("setSectionClipGain"), partId: id, sectionId: id, regionId: id.optional(), gain: z.number().min(0).max(1) }),
+  z.object({ kind: z.literal("moveSectionClip"), partId: id, sectionId: id, regionId: id, startTick: z.number().int().min(0) }),
   z.object({ kind: z.literal("placeMotif"), partId: id, placement: part.shape.placements.unwrap().element }),
   z.object({ kind: z.literal("replacePlacements"), partId: id, placements: part.shape.placements.unwrap() }),
   z.object({ kind: z.literal("addNotes"), partId: id, notes: z.array(note).min(1).max(256) }),
@@ -199,6 +214,15 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("setParallelChain"), partId: id, parallel: part.shape.parallel.unwrap() }),
   z.object({ kind: z.literal("removeParallelChain"), partId: id }),
   z.object({ kind: z.literal("upsertGroup"), group: mixerGroup }),
+  z.object({ kind: z.literal("setGroupMix"), groupId: id, gain: z.number().min(0).max(1.995).optional(), pan: z.number().min(-1).max(1).optional(), parentId: id.nullable().optional() }),
+  z.object({ kind: z.literal("addGroupEffect"), groupId: id, effect: nativeEffect, beforeEffectId: id.optional() }),
+  z.object({ kind: z.literal("replaceGroupEffect"), groupId: id, effect: nativeEffect }),
+  z.object({ kind: z.literal("removeGroupEffect"), groupId: id, effectId: id }),
+  z.object({ kind: z.literal("moveGroupEffect"), groupId: id, effectId: id, beforeEffectId: id.nullable() }),
+  z.object({ kind: z.literal("setGroupParallel"), groupId: id, parallel: mixerGroup.shape.parallel.unwrap() }),
+  z.object({ kind: z.literal("removeGroupParallel"), groupId: id }),
+  z.object({ kind: z.literal("setGroupAutomation"), groupId: id, automation: mixerGroup.shape.automation.unwrap().element }),
+  z.object({ kind: z.literal("removeGroupAutomation"), groupId: id, automationId: id }),
   z.object({ kind: z.literal("removeGroup"), groupId: id }),
   z.object({ kind: z.literal("routePart"), partId: id, groupId: id.nullable() }),
   z.object({ kind: z.literal("setReverbBus"), bus: reverbBus }),
@@ -214,6 +238,7 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("addAutomation"), partId: id, automation: part.shape.automation.unwrap().element }),
   z.object({ kind: z.literal("replaceAutomation"), partId: id, automation: part.shape.automation.unwrap().element }),
   z.object({ kind: z.literal("removeAutomation"), partId: id, automationId: id }),
+  z.object({ kind: z.literal("editSectionAutomation"), partId: id, sectionId: id, automationId: id, points: z.array(point).min(2).max(128) }),
   z.object({ kind: z.literal("placeSource"), partId: id, region: part.shape.sourceRegions.unwrap().element }),
   z.object({ kind: z.literal("replaceSource"), partId: id, region: part.shape.sourceRegions.unwrap().element }),
   z.object({ kind: z.literal("removeSource"), partId: id, regionId: id }),
@@ -277,7 +302,8 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
   const before = new Map([...locked].map((partId) => [partId, protectedPartHash(base, partId)]));
   for (const raw of operations) {
     const op = nativeOperationSchema.parse(raw);
-    const findPart = (partId: string) => { const item = next.parts.find((value) => value.id === partId); if (!item) throw new Error(`Unknown part ${partId}`); return item; };
+  const findPart = (partId: string) => { const item = next.parts.find((value) => value.id === partId); if (!item) throw new Error(`Unknown part ${partId}`); return item; };
+  const findGroup = (groupId: string) => { const item = next.groups?.find((value) => value.id === groupId); if (!item) throw new Error(`Unknown group ${groupId}`); return item; };
     switch (op.kind) {
       case "setTitle": next.title = op.title; break;
       case "setObjective": next.currentObjective = op.objective; break;
@@ -372,28 +398,56 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         item.placements = item.placements.filter((value) => !crossing.some((placement) => placement.id === value.id));
         break;
       }
-      case "silenceSectionClips": {
+      case "silenceSectionClips":
+      case "setSectionClipGain": {
         const item = findPart(op.partId);
         const section = next.sections.find((value) => value.id === op.sectionId);
         if (!section) throw new Error(`Unknown section ${op.sectionId}`);
         const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
+        const allRegions = [...item.sourceRegions, ...(item.libraryRegions ?? [])];
+        if (op.regionId && allRegions.filter((region) => region.id === op.regionId).length !== 1) throw new Error(`Clip ${op.regionId} must identify exactly one region on ${op.partId}`);
+        if (op.kind === "setSectionClipGain" && !allRegions.some((region) => (!op.regionId || region.id === op.regionId) && region.startTick < end && region.startTick + region.durationTicks > start && region.gain !== op.gain)) throw new Error(`No clip gain changes within ${op.sectionId}`);
         const split = <T extends NativePart["sourceRegions"][number] | NonNullable<NativePart["libraryRegions"]>[number]>(regions: T[]): T[] => regions.flatMap((region) => {
           const regionEnd = region.startTick + region.durationTicks;
-          if (region.startTick >= end || regionEnd <= start) return [region];
-          if (region.playbackMode === "loop" && (region.startTick < start || regionEnd > end)) throw new Error(`Loop ${region.id} crosses ${op.sectionId}; preserving loop phase needs an explicit clip edit`);
+          if ((op.regionId && region.id !== op.regionId) || region.startTick >= end || regionEnd <= start) return [region];
           const toSeconds = (ticks: number) => ticks / NATIVE_PPQ * 60 / next.tempoBpm * (region.playbackRate ?? 1);
           const result: T[] = [];
-          if (region.startTick < start) result.push({ ...region, id: `r-${canonicalHash({ id: region.id, section: op.sectionId, side: "before" }).slice(0,24)}`, durationTicks: start - region.startTick, sourceDurationSeconds: toSeconds(start - region.startTick) });
-          if (regionEnd > end) {
-            const consumed = toSeconds(end - region.startTick);
-            result.push({ ...region, id: `r-${canonicalHash({ id: region.id, section: op.sectionId, side: "after" }).slice(0,24)}`, startTick: end, durationTicks: regionEnd - end, sourceStartSeconds: region.sourceStartSeconds + consumed, sourceDurationSeconds: region.sourceDurationSeconds - consumed });
-          }
+          const addSegment = (from: number, to: number, side: string, gain: number) => {
+            if (from >= to) return;
+            const idFor = (suffix: string) => `r-${canonicalHash({ id: region.id, section: op.sectionId, side: suffix }).slice(0,24)}`;
+            if (region.playbackMode !== "loop") { result.push({ ...region, id: idFor(side), startTick: from, durationTicks: to - from, sourceStartSeconds: region.sourceStartSeconds + toSeconds(from - region.startTick), sourceDurationSeconds: toSeconds(to - from), gain }); return; }
+            const loopTicksRaw = region.sourceDurationSeconds / toSeconds(1);
+            if (Math.abs(loopTicksRaw - Math.round(loopTicksRaw)) > 1e-6) throw new Error(`Loop ${region.id} cannot be split exactly at this tempo and playback rate`);
+            const loopTicks = Math.round(loopTicksRaw);
+            const phaseTicks = (from - region.startTick) % loopTicks;
+            const tailTicks = phaseTicks ? Math.min(to - from, loopTicks - phaseTicks) : 0;
+            if (tailTicks) result.push({ ...region, id: idFor(`${side}-tail`), playbackMode: "once", startTick: from, durationTicks: tailTicks, sourceStartSeconds: region.sourceStartSeconds + toSeconds(phaseTicks), sourceDurationSeconds: toSeconds(tailTicks), gain });
+            if (to - from > tailTicks) result.push({ ...region, id: idFor(side), startTick: from + tailTicks, durationTicks: to - from - tailTicks, gain });
+          };
+          addSegment(region.startTick, Math.min(start, regionEnd), "before", region.gain);
+          if (op.kind === "setSectionClipGain") addSegment(Math.max(start, region.startTick), Math.min(end, regionEnd), "inside", op.gain);
+          addSegment(Math.max(end, region.startTick), regionEnd, "after", region.gain);
           return result;
         });
         const beforeHash = canonicalHash({ owned: item.sourceRegions, library: item.libraryRegions ?? [] });
         item.sourceRegions = split(item.sourceRegions);
         if (item.libraryRegions) item.libraryRegions = split(item.libraryRegions);
         if (beforeHash === canonicalHash({ owned: item.sourceRegions, library: item.libraryRegions ?? [] })) throw new Error(`No clips were changed in ${op.sectionId}`);
+        break;
+      }
+      case "moveSectionClip": {
+        const item = findPart(op.partId);
+        const section = next.sections.find((value) => value.id === op.sectionId);
+        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        const regions = [...item.sourceRegions, ...(item.libraryRegions ?? [])];
+        const matching = regions.filter((value) => value.id === op.regionId);
+        if (matching.length !== 1) throw new Error(`Clip ${op.regionId} must identify exactly one region on ${op.partId}`);
+        const region = matching[0]!;
+        const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
+        if (region.startTick < start || region.startTick + region.durationTicks > end) throw new Error(`Clip ${op.regionId} crosses ${op.sectionId}; move a bounded section-local clip or edit its gain instead`);
+        if (op.startTick < start || op.startTick + region.durationTicks > end) throw new Error(`Moved clip ${op.regionId} would leave ${op.sectionId}`);
+        if (op.startTick === region.startTick) throw new Error(`Clip ${op.regionId} did not move`);
+        region.startTick = op.startTick;
         break;
       }
       case "placeMotif": findPart(op.partId).placements.push(op.placement); break;
@@ -405,6 +459,15 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "setParallelChain": findPart(op.partId).parallel = op.parallel; break;
       case "removeParallelChain": delete findPart(op.partId).parallel; break;
       case "upsertGroup": { const groups = next.groups ??= []; const index = groups.findIndex((value) => value.id === op.group.id); if (index < 0) groups.push(op.group); else groups[index] = op.group; break; }
+      case "setGroupMix": { const group = findGroup(op.groupId); if (op.gain !== undefined) group.gain = op.gain; if (op.pan !== undefined) group.pan = op.pan; if (op.parentId !== undefined) { if (op.parentId) group.parentId = op.parentId; else delete group.parentId; } break; }
+      case "addGroupEffect": { const effects = findGroup(op.groupId).effects ??= []; if (effects.some((effect) => effect.id === op.effect.id)) throw new Error(`Duplicate group effect ${op.effect.id}`); const index = op.beforeEffectId ? effects.findIndex((effect) => effect.id === op.beforeEffectId) : effects.length; if (index < 0) throw new Error(`Unknown group effect ${op.beforeEffectId}`); effects.splice(index, 0, op.effect); break; }
+      case "replaceGroupEffect": { const effects = findGroup(op.groupId).effects ?? []; const index = effects.findIndex((effect) => effect.id === op.effect.id); if (index < 0) throw new Error(`Unknown group effect ${op.effect.id}`); effects[index] = op.effect; break; }
+      case "removeGroupEffect": { const group = findGroup(op.groupId); if (!group.effects?.some((effect) => effect.id === op.effectId)) throw new Error(`Unknown group effect ${op.effectId}`); group.effects = group.effects.filter((effect) => effect.id !== op.effectId); break; }
+      case "moveGroupEffect": { const effects = findGroup(op.groupId).effects ?? []; const index = effects.findIndex((effect) => effect.id === op.effectId); if (index < 0) throw new Error(`Unknown group effect ${op.effectId}`); const [effect] = effects.splice(index, 1); const destination = op.beforeEffectId ? effects.findIndex((item) => item.id === op.beforeEffectId) : effects.length; if (destination < 0) throw new Error(`Unknown group effect ${op.beforeEffectId}`); effects.splice(destination, 0, effect!); break; }
+      case "setGroupParallel": findGroup(op.groupId).parallel = op.parallel; break;
+      case "removeGroupParallel": delete findGroup(op.groupId).parallel; break;
+      case "setGroupAutomation": { const curves = findGroup(op.groupId).automation ??= []; const index = curves.findIndex((curve) => curve.id === op.automation.id); if (index < 0) curves.push(op.automation); else curves[index] = op.automation; break; }
+      case "removeGroupAutomation": { const group = findGroup(op.groupId); if (!group.automation?.some((curve) => curve.id === op.automationId)) throw new Error(`Unknown group automation ${op.automationId}`); group.automation = group.automation.filter((curve) => curve.id !== op.automationId); break; }
       case "removeGroup": next.groups = (next.groups ?? []).filter((value) => value.id !== op.groupId); break;
       case "routePart": { const item = findPart(op.partId); if (op.groupId) item.groupId = op.groupId; else delete item.groupId; break; }
       case "setReverbBus": next.reverbBus = op.bus; break;
@@ -420,6 +483,14 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "addAutomation": findPart(op.partId).automation.push(op.automation); break;
       case "replaceAutomation": { const curves = findPart(op.partId).automation; const index = curves.findIndex((value) => value.id === op.automation.id); if (index < 0) throw new Error(`Unknown automation ${op.automation.id}`); curves[index] = op.automation; break; }
       case "removeAutomation": { const item = findPart(op.partId); if (!item.automation.some((value) => value.id === op.automationId)) throw new Error(`Unknown automation ${op.automationId}`); item.automation = item.automation.filter((value) => value.id !== op.automationId); break; }
+      case "editSectionAutomation": {
+        const item = findPart(op.partId);
+        const section = next.sections.find((value) => value.id === op.sectionId);
+        const index = item.automation.findIndex((value) => value.id === op.automationId);
+        if (!section || index < 0) throw new Error("Unknown section or automation curve");
+        item.automation[index] = spliceSectionAutomation(item.automation[index]!, op.points, section.startBar * barTicks(next), section.endBar * barTicks(next));
+        break;
+      }
       case "placeSource": findPart(op.partId).sourceRegions.push(op.region); if (!next.sourceAssetIds.includes(op.region.assetId)) next.sourceAssetIds.push(op.region.assetId); break;
       case "replaceSource": { const item = findPart(op.partId); const index = item.sourceRegions.findIndex((value) => value.id === op.region.id); if (index < 0) throw new Error(`Unknown source region ${op.region.id}`); item.sourceRegions[index] = op.region; if (!next.sourceAssetIds.includes(op.region.assetId)) next.sourceAssetIds.push(op.region.assetId); break; }
       case "removeSource": { const item = findPart(op.partId); if (!item.sourceRegions.some((value) => value.id === op.regionId)) throw new Error(`Unknown source region ${op.regionId}`); item.sourceRegions = item.sourceRegions.filter((value) => value.id !== op.regionId); break; }
@@ -473,7 +544,8 @@ export function nativeDiff(before: NativeDocument | null, after: NativeDocument)
 
 export function pinnedContext(document: NativeDocument, revisionId: string | null, remote: { state: string; projectId: string | null; observedHash: string | null } = { state: "local", projectId: null, observedHash: null }) {
   return {
-    revisionId, documentHash: canonicalHash(document), direction: document.direction, currentObjective: document.currentObjective, assumptions: document.assumptions,
+    revisionId, documentHash: canonicalHash(document), briefHash: canonicalHash(document.direction), briefLength: document.direction.length,
+    currentObjective: document.currentObjective, assumptions: document.assumptions,
     tempoBpm: document.tempoBpm, meter: document.meter, bars: document.bars,
     sections: document.sections.map((value) => ({ id: value.id, name: value.name, bars: [value.startBar, value.endBar], intent: value.intent })),
     groups: document.groups ?? [], reverbBus: document.reverbBus ?? null, delayBus: document.delayBus ?? null, master: document.master ?? null,

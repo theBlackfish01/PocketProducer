@@ -27,20 +27,20 @@ const configSchema = z.object({
   FIXTURE_MODE: booleanString.default(false),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(1).default(1),
   JOB_LEASE_SECONDS: z.coerce.number().int().min(3).max(300).default(45),
-  MAX_MODEL_CALLS_PER_JOB: z.coerce.number().int().min(0).max(100).default(80),
-  MAX_OPENAI_INPUT_TOKENS: z.coerce.number().int().min(1_000).max(128_000).default(96_000),
-  NATIVE_MODEL_OUTPUT_TOKENS: z.coerce.number().int().min(400).max(32_768).default(32_768),
+  MAX_MODEL_CALLS_PER_JOB: z.coerce.number().int().min(0).max(300).default(80),
+  MAX_OPENAI_INPUT_TOKENS: z.coerce.number().int().min(1_000).max(256_000).default(96_000),
+  NATIVE_MODEL_OUTPUT_TOKENS: z.coerce.number().int().min(400).max(65_536).default(32_768),
   NATIVE_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("medium"),
   // This milestone implements one original render plus at most one repair and
   // one critique of the original candidate. Reject unsupported higher values.
   MAX_RENDER_ATTEMPTS_PER_JOB: z.coerce.number().int().min(1).max(2).default(2),
   MAX_AUDIO_CRITIQUE_PASSES: z.coerce.number().int().min(0).max(1).default(1),
-  MAX_JOB_SECONDS: z.coerce.number().int().min(10).max(3_600).default(3_600),
+  MAX_JOB_SECONDS: z.coerce.number().int().min(10).max(21_600).default(3_600),
   MAX_UPLOAD_BYTES: z.coerce.number().int().min(1_024).max(104_857_600).default(20_971_520),
   MAX_SOURCE_SECONDS: z.coerce.number().int().min(1).max(300).default(300),
   MAX_OUTPUT_SECONDS: z.coerce.number().int().min(10).max(120).default(60),
   INITIAL_BUILD_API_BUDGET_USD: z.coerce.number().min(0).max(100).default(5),
-  MAX_JOB_COST_USD: z.coerce.number().min(0).max(15).default(5),
+  MAX_JOB_COST_USD: z.coerce.number().min(0).max(100).default(5),
   GEMINI_ESTIMATED_CALL_COST_USD: z.coerce.number().min(0).max(0.25).default(0.05)
 });
 
