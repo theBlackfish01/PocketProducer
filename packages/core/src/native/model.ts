@@ -203,6 +203,7 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("silenceSectionClips"), partId: id, sectionId: id, regionId: id.optional() }),
   z.object({ kind: z.literal("setSectionClipGain"), partId: id, sectionId: id, regionId: id.optional(), gain: z.number().min(0).max(1) }),
   z.object({ kind: z.literal("moveSectionClip"), partId: id, sectionId: id, regionId: id, startTick: z.number().int().min(0) }),
+  z.object({ kind: z.literal("shiftSectionClip"), partId: id, sectionId: id, regionId: id, deltaTicks: z.number().int().min(-3840).max(3840).refine((value) => value !== 0) }),
   z.object({ kind: z.literal("placeMotif"), partId: id, placement: part.shape.placements.unwrap().element }),
   z.object({ kind: z.literal("replacePlacements"), partId: id, placements: part.shape.placements.unwrap() }),
   z.object({ kind: z.literal("addNotes"), partId: id, notes: z.array(note).min(1).max(256) }),
@@ -448,6 +449,50 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         if (op.startTick < start || op.startTick + region.durationTicks > end) throw new Error(`Moved clip ${op.regionId} would leave ${op.sectionId}`);
         if (op.startTick === region.startTick) throw new Error(`Clip ${op.regionId} did not move`);
         region.startTick = op.startTick;
+        break;
+      }
+      case "shiftSectionClip": {
+        const item = findPart(op.partId);
+        const section = next.sections.find((value) => value.id === op.sectionId);
+        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
+        const allRegions = [...item.sourceRegions, ...(item.libraryRegions ?? [])];
+        if (allRegions.filter((region) => region.id === op.regionId).length !== 1) throw new Error(`Clip ${op.regionId} must identify exactly one region on ${op.partId}`);
+        const split = <T extends NativePart["sourceRegions"][number] | NonNullable<NativePart["libraryRegions"]>[number]>(regions: T[]): T[] => regions.flatMap((region) => {
+          if (region.id !== op.regionId) return [region];
+          const regionEnd = region.startTick + region.durationTicks;
+          const innerStart = Math.max(start, region.startTick), innerEnd = Math.min(end, regionEnd);
+          if (innerStart >= innerEnd) throw new Error(`Clip ${region.id} does not overlap ${op.sectionId}`);
+          // The shifted material is deliberately cropped at the section edge.
+          // The corresponding source position uses original time, so a loop's
+          // phase and both untouched outside intervals remain exact.
+          const movedStart = Math.max(start, innerStart + op.deltaTicks);
+          const movedEnd = Math.min(end, innerEnd + op.deltaTicks);
+          if (movedStart >= movedEnd) throw new Error(`Shift would move all of ${region.id} outside ${op.sectionId}`);
+          const toSeconds = (ticks: number) => ticks / NATIVE_PPQ * 60 / next.tempoBpm * (region.playbackRate ?? 1);
+          const loopTicksRaw = region.playbackMode === "loop" ? region.sourceDurationSeconds / toSeconds(1) : null;
+          if (loopTicksRaw !== null && Math.abs(loopTicksRaw - Math.round(loopTicksRaw)) > 1e-6) throw new Error(`Loop ${region.id} cannot be split exactly at this tempo and playback rate`);
+          const loopTicks = loopTicksRaw === null ? null : Math.round(loopTicksRaw);
+          const result: T[] = [];
+          const addSegment = (from: number, to: number, side: string, offset: number) => {
+            if (from >= to) return;
+            const idFor = (suffix: string) => `r-${canonicalHash({ id: region.id, section: op.sectionId, side: suffix, deltaTicks: op.deltaTicks }).slice(0,24)}`;
+            if (loopTicks === null) {
+              result.push({ ...region, id: idFor(side), startTick: from + offset, durationTicks: to - from, sourceStartSeconds: region.sourceStartSeconds + toSeconds(from - region.startTick), sourceDurationSeconds: toSeconds(to - from) });
+              return;
+            }
+            const phaseTicks = (from - region.startTick) % loopTicks;
+            const tailTicks = phaseTicks ? Math.min(to - from, loopTicks - phaseTicks) : 0;
+            if (tailTicks) result.push({ ...region, id: idFor(`${side}-tail`), playbackMode: "once", startTick: from + offset, durationTicks: tailTicks, sourceStartSeconds: region.sourceStartSeconds + toSeconds(phaseTicks), sourceDurationSeconds: toSeconds(tailTicks) });
+            if (to - from > tailTicks) result.push({ ...region, id: idFor(side), startTick: from + tailTicks + offset, durationTicks: to - from - tailTicks });
+          };
+          addSegment(region.startTick, innerStart, "before", 0);
+          addSegment(movedStart - op.deltaTicks, movedEnd - op.deltaTicks, "inside", op.deltaTicks);
+          addSegment(innerEnd, regionEnd, "after", 0);
+          return result;
+        });
+        item.sourceRegions = split(item.sourceRegions);
+        if (item.libraryRegions) item.libraryRegions = split(item.libraryRegions);
         break;
       }
       case "placeMotif": findPart(op.partId).placements.push(op.placement); break;

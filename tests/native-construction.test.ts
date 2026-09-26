@@ -180,6 +180,24 @@ describe("native construction contracts", () => {
     expect(() => applyNativeOperations(built, [{ kind: "moveSectionClip", partId: "texture", sectionId: "middle", regionId: "contained", startTick: 30000 }])).toThrow(/would leave/);
     expect((await validateNativeOffline(edit.document, {}, {}, { "samples/texture": { name: "samples/texture", ownerName: "users/fixture", durationSeconds: 8, bpm: 120 } as never })).structuralReadback.semanticEntities.filter((entity) => entity.type === "audioRegion").length).toBeGreaterThanOrEqual(4);
   });
+  it("shifts only the selected section of crossing loop and one-shot clips while preserving outside source time", async () => {
+    const built = applyNativeOperations(seedNativeDocument("Move the middle textures without moving the opening or ending"), [
+      { kind: "setStructure", bars: 12, tempoBpm: 120, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "" }, { id: "middle", name: "Middle", startBar: 4, endBar: 8, intent: "" }, { id: "ending", name: "Ending", startBar: 8, endBar: 12, intent: "" }] },
+      { kind: "addPart", part: { id: "texture", name: "Texture", role: "source", device: { type: "audio", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], libraryRegions: [
+        { id: "loop", sampleName: "samples/texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 30, bpm: 120, startTick: 0, durationTicks: 46080, sourceStartSeconds: 1, sourceDurationSeconds: 3, playbackMode: "loop", gain: 0.5, provenance: "audiotool-library" },
+        { id: "once", sampleName: "samples/texture", displayName: "Texture", ownerName: "users/fixture", durationSeconds: 30, bpm: 120, startTick: 11520, durationTicks: 23040, sourceStartSeconds: 0, sourceDurationSeconds: 12, playbackMode: "once", gain: 0.5, provenance: "audiotool-library" }
+      ], effects: [], automation: [] } }
+    ]);
+    const edit = new NativeToolSession({ kind: "native-revision", request: { targetPartId: "texture", targetSectionId: "middle" } } as unknown as JobRecord, built, false);
+    await edit.apply("late-middle-loop", [{ kind: "shiftSectionClip", partId: "texture", sectionId: "middle", regionId: "loop", deltaTicks: 960 }]);
+    await edit.apply("early-middle-once", [{ kind: "shiftSectionClip", partId: "texture", sectionId: "middle", regionId: "once", deltaTicks: -480 }]);
+    const regions = edit.document.parts.find((part) => part.id === "texture")!.libraryRegions!;
+    expect(regions.some((region) => region.startTick === 16320 && region.gain === 0.5 && region.playbackMode === "once")).toBe(true);
+    expect(regions.some((region) => region.startTick === 15360 && region.sourceStartSeconds === 2.25 && region.playbackMode === "once")).toBe(true);
+    expect(regions.some((region) => region.startTick === 30720 && region.sourceStartSeconds === 2 && region.playbackMode === "once")).toBe(true);
+    expect((await validateNativeOffline(edit.document, {}, {}, { "samples/texture": { name: "samples/texture", ownerName: "users/fixture", durationSeconds: 30, bpm: 120 } as never })).structuralReadback.semanticEntities.filter((entity) => entity.type === "audioRegion").length).toBeGreaterThanOrEqual(7);
+    expect(() => applyNativeOperations(built, [{ kind: "shiftSectionClip", partId: "texture", sectionId: "middle", regionId: "loop", deltaTicks: 0 }])).toThrow();
+  });
   it("edits a crossing gain ramp only in one section and rejects outside or sloped changes", async () => {
     const built = applyNativeOperations(seedNativeDocument("Shape the middle only"), [
       { kind: "setStructure", bars: 12, sections: [{ id: "opening", name: "Opening", startBar: 0, endBar: 4, intent: "" }, { id: "middle", name: "Middle", startBar: 4, endBar: 8, intent: "" }, { id: "ending", name: "Ending", startBar: 8, endBar: 12, intent: "" }] },
