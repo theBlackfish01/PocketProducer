@@ -21,7 +21,7 @@ test("create/listen controls and accessible version flow", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("Pocket Producer").first()).toBeVisible();
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
-  await page.getByRole("button", { name: "Playable audio" }).click();
+  await page.getByRole("button", { name: "Playable audio", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Untitled listening room" })).toBeVisible();
   await page.getByLabel("Upload a WAV source").setInputFiles(resolve(".local/fixtures/owned-percussion.wav"));
   await expect(page.getByRole("dialog", { name: "Your sounds" }).getByRole("button", { name: "Play sound owned-percussion.wav" })).toBeVisible();
@@ -74,7 +74,7 @@ test("create/listen controls and accessible version flow", async ({ page }) => {
   expect(await page.evaluate((context) => Array.from({ length: localStorage.length }, (_item, index) => localStorage.getItem(localStorage.key(index) ?? "") ?? "").some((value) => value.includes(context.key)), acceptedContext)).toBe(true);
   await page.unroute("**/api/v1/projects/*/generations");
   await page.reload();
-  await page.getByRole("button", { name: "Playable audio" }).click();
+  await page.getByRole("button", { name: "Playable audio", exact: true }).click();
   await expect(page.getByRole("button", { name: "Play current version" })).toBeVisible({ timeout: 75_000 });
   expect(await page.evaluate(() => Array.from({ length: localStorage.length }, (_item, index) => localStorage.getItem(localStorage.key(index) ?? "") ?? "").some((value) => value.includes('"jobId"')))).toBe(true);
 
@@ -119,7 +119,7 @@ test("create/listen controls and accessible version flow", async ({ page }) => {
   const exportJob = await exportAccepted.json() as { jobId: string };
   await expect.poll(async () => (await (await page.request.get(`/api/v1/jobs/${exportJob.jobId}`)).json() as { state: string }).state, { timeout: 75_000 }).toBe("succeeded");
   await page.reload();
-  await page.getByRole("button", { name: "Playable audio" }).click();
+  await page.getByRole("button", { name: "Playable audio", exact: true }).click();
   await expect(page.getByText(/Audiotool export isn't available here/i)).toBeVisible({ timeout: 75_000 });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: `${evidenceDirectory}/listening-room-completed.png`, fullPage: true });
@@ -131,13 +131,14 @@ test("create/listen controls and accessible version flow", async ({ page }) => {
   await closePool();
   await page.evaluate(({ projectId, jobId, revisionId }) => localStorage.setItem(`pocket-producer:receipt:${projectId}`, JSON.stringify({ key: crypto.randomUUID(), projectId, operation: "export", baseRevisionId: revisionId, jobId })), { projectId: activeProjectId, jobId: exportJob.jobId, revisionId: selectedSnapshot.project.currentRevisionId });
   await page.reload();
-  await page.getByRole("button", { name: "Playable audio" }).click();
+  await page.getByRole("button", { name: "Playable audio", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("We need to check what happened");
   await page.getByRole("button", { name: "Check what happened" }).click();
   await expect(page.getByRole("alert")).toContainText("We need to check what happened");
 
   await direction.fill("Draft retained only in the completed room");
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await page.getByRole("button", { name: "Playable audio", exact: true }).click();
   await expect(page.getByRole("button", { name: "Play current version" })).toHaveCount(0);
   await expect(page.getByRole("slider", { name: "Seek through the current version" })).toHaveCount(0);
   await direction.fill("Draft retained only in the empty room");
@@ -168,7 +169,7 @@ test("phone layout keeps the focused direction control visible", async ({ page }
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await page.getByRole("button", { name: "Playable audio" }).click();
+  await page.getByRole("button", { name: "Playable audio", exact: true }).click();
   const direction = page.getByRole("textbox", { name: "Describe your playable audio" });
   await direction.focus();
   const box = await direction.boundingBox();

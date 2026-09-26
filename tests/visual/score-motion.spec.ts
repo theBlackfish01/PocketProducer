@@ -41,7 +41,7 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean 
     before.parts = [...before.parts, ...before.parts.map((part) => ({ ...part, id: `${part.id}-b`, name: `${part.name} II` })), ...before.parts.map((part) => ({ ...part, id: `${part.id}-c`, name: `${part.name} III` }))]
     after.parts = [...after.parts, ...before.parts.slice(8)]
   }
-  let draft = before, step = 1, writes = 0
+  let draft = before, step = 1, writes = 0, completed = false
   const version = (document: NativeDocument, ordinal: number) => ({ id: `version-${ordinal}`, parentRevisionId: ordinal === 2 ? "version-1" : null, ordinal, document, documentHash: `hash-${ordinal}`, changeSummary: "Shape the opening pulse", producer: {}, structuralDiff: { addedParts: [], changedParts: ["part-0"], changedSections: [], protectionChange: { added: [], removed: [] } }, createdAt: "2026-09-26T00:00:00Z" })
   const versions = [version(after, 2), version(before, 1)]
   await page.route("**/api/v1/**", async (route) => {
@@ -50,7 +50,9 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean 
     if (path.endsWith("/status")) json = { providers: { openai: false, gemini: false, audiotool: false }, uploadFormats: ["audio/wav"], nexus: { sdk: "fixture", liveExportVerified: false, connection: "unconfigured", oauth: null, session: { connected: false, userName: null, expiresAt: null } } }
     else if (path.endsWith("/projects")) json = { projects: [{ id: projectId, title: "Night Drive", currentRevisionId: null, version: 1, createdAt: "2026-09-26" }] }
     else if (path.endsWith(`/projects/${projectId}`)) json = { project: { id: projectId, title: "Night Drive", currentRevisionId: null }, assets: [], revisions: [], analyses: [], latestJob: null, currentRevision: null }
-    else if (path.endsWith("/native")) json = { currentRevisionId: "version-2", headVersion: 2, current: versions[0], versions, context: null, comparisons: {}, synchronization: { state: "local_only", projectId: null, revisionId: null, url: null }, legacyAudio: "none" }
+    else if (path.endsWith("/activity/stream")) { await route.abort(); return }
+    else if (path.endsWith("/activity")) json = { events: [], cursor: 0, nextCursor: 0, hasOlder: false, job: options.draft ? { id: "visual-job", project_id: projectId, kind: "native-revision", state: completed ? "succeeded" : "running", stage: "constructing", error_code: null } : null, headId: completed ? "version-3" : "version-2", draft: options.draft ? { step, hash: `draft-${step}` } : null, actions: { canSubmit: completed || !options.draft, canStop: Boolean(options.draft), issue: null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } }
+    else if (path.endsWith("/native")) json = { currentRevisionId: completed ? "version-3" : "version-2", headVersion: completed ? 3 : 2, current: completed ? version(after, 3) : versions[0], versions: completed ? [version(after, 3), ...versions] : versions, context: null, comparisons: {}, synchronization: { state: "local_only", projectId: null, revisionId: null, url: null }, legacyAudio: "none" }
     else if (path.endsWith("/preservation-preview")) json = { revisionId: "version-2", sectionId: null, namedParts: [], theme: null, unresolved: [] }
     else if (path.endsWith("/capabilities")) json = { matches: [], totalEntities: 0, version: "test" }
     else if (path.endsWith("/jobs/visual-job")) json = { id: "visual-job", project_id: projectId, kind: "native-revision", state: "running", stage: "constructing", error_code: null, events: [] }
@@ -59,9 +61,10 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean 
     await route.fulfill({ json })
   })
   if (options.draft) await page.addInitScript(({ projectId }) => localStorage.setItem(`pocket-producer:native-receipt:${projectId}`, JSON.stringify({ operation: "native-revision", key: "visual", jobId: "visual-job", signature: "visual" })), { projectId })
+  await page.setViewportSize({ width: 1600, height: 1000 })
   await page.goto("/")
   await expect(page.getByRole("heading", { name: "Night Drive", exact: true })).toBeVisible()
-  return { before, after, setDraft: (value: NativeDocument, count: number) => { draft = value; step = count }, writes: () => writes }
+  return { before, after, setDraft: (value: NativeDocument, count: number) => { draft = value; step = count }, writes: () => writes, complete: () => { completed = true } }
 }
 
 test.beforeAll(async () => { await mkdir(evidence, { recursive: true }) })
@@ -87,9 +90,10 @@ test("desktop and phone keep inspection, scope and comparison distinct", async (
   await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("More space, keep the bass")
   await expectReadableText(page.locator(".score-pitch-range").first())
   await expectReadableText(page.locator(".score-caption").last())
-  await expectReadableText(page.getByRole("button", { name: "Shape the arrangement", exact: true }))
+  await expectReadableText(page.getByRole("button", { name: "Make this change", exact: true }))
   await page.evaluate(() => window.scrollTo(0, 0))
   await page.screenshot({ path: `${evidence}/polish-desktop.png`, fullPage: true })
+  await page.getByRole("button", { name: "Version history", exact: true }).click()
   await page.getByRole("button", { name: "Compare", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "Before and after" })
   await dialog.getByRole("button", { name: "Opening", exact: true }).click()
@@ -106,13 +110,16 @@ test("desktop and phone keep inspection, scope and comparison distinct", async (
   await dialog.screenshot({ path: `${evidence}/polish-compare-phone.png` })
   await page.keyboard.press("Escape")
   await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeFocused()
+  await page.keyboard.press("Escape")
+  await page.getByRole("button", { name: "Producer", exact: true }).click()
   await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toHaveValue("More space, keep the bass")
-  await page.getByRole("button", { name: "Describe a change", exact: true }).click()
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).focus()
   await page.setViewportSize({ width: 390, height: 480 })
   await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toBeFocused()
   await expect(page.locator(".mobile-change-dock")).toBeHidden()
   await page.getByRole("textbox", { name: "Describe your arrangement" }).press("Tab")
   await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole("button", { name: "Arrangement", exact: true }).click()
   await page.locator(".score-section-choice").first().focus()
   await page.evaluate(() => window.scrollTo(0, 0))
   await page.screenshot({ path: `${evidence}/polish-phone.png`, fullPage: true })
@@ -122,6 +129,7 @@ test("desktop and phone keep inspection, scope and comparison distinct", async (
 
 test("confirmed same-density edits animate once; late/repeated receipts and reload do not replay", async ({ page }) => {
   const room = await mockRoom(page, { draft: true })
+  await page.getByRole("button", { name: "View work in progress" }).click()
   const draft = page.getByRole("region", { name: "Unfinished arrangement preview" })
   await expect(draft).toBeVisible()
   await draft.locator(".score-section-choice").first().click()
@@ -183,6 +191,7 @@ test("confirmed same-density edits animate once; late/repeated receipts and relo
   await expect(draft.locator(".living-score")).toHaveAttribute("data-score-identity", /draft-7/)
   await expect(draft.locator("[data-motion-note], [data-motion-clip]")).toHaveCount(0)
   room.setDraft(next, 2); await page.reload()
+  await page.getByRole("button", { name: "View work in progress" }).click()
   await expect(draft).toBeVisible(); await expect(draft.locator(".score-activity")).toHaveCount(0)
   expect(room.writes()).toBe(0)
 })
@@ -207,6 +216,7 @@ test("128-bar 24-part score has bounded nodes and measured interaction frames", 
   await page.getByRole("group", { name: "Visible role lanes" }).getByRole("button", { name: /Drums/ }).click()
   await expect(page.locator(".score-lane")).toHaveCount(21)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(820)
+  await page.getByRole("button", { name: "Version history", exact: true }).click()
   const comparisonMilliseconds = await page.getByRole("button", { name: "Compare", exact: true }).evaluate(async (button) => {
     const start = performance.now(); (button as HTMLButtonElement).click()
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
@@ -222,4 +232,42 @@ test("128-bar 24-part score has bounded nodes and measured interaction frames", 
   await writeFile(`${evidence}/polish-browser-performance-trace.json`, trace)
   await writeFile(`${evidence}/polish-performance.json`, JSON.stringify({ millisecondsToTwoFrames: milliseconds, comparisonMillisecondsToTwoFrames: comparisonMilliseconds, svgNodes: nodes, platform: platform(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, evidence: "Scripted UI fixture; not model or renderer evidence" }, null, 2))
   await page.screenshot({ path: `${evidence}/polish-large-tablet.png`, fullPage: true })
+})
+
+test("a next direction survives completion, while long activity stays bounded and does not steal scroll", async ({ page }) => {
+  const room = await mockRoom(page, { draft: true })
+  const input = page.getByRole("textbox", { name: "Describe your arrangement" })
+  await input.fill("Keep this next direction unsent; preserve the bass.")
+  await expect(page.getByRole("button", { name: "Not sent yet" })).toBeDisabled()
+  room.complete()
+  await expect(page.locator(".producer-workspace-header")).toContainText("Version 3")
+  await expect(input).toHaveValue("Keep this next direction unsent; preserve the bass.")
+  await expect(page.getByRole("dialog", { name: "Before and after" })).toBeHidden()
+  await expect(page.getByRole("button", { name: "Make this change" })).toBeDisabled()
+  await page.getByRole("button", { name: "I reviewed the updated scope" }).click()
+  await expect(page.getByRole("button", { name: "Make this change" })).toBeEnabled()
+  let count = 200
+  await page.route("**/api/v1/projects/visual-room/activity*", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.endsWith("/stream")) { await route.abort(); return }
+    const afterCursor = url.searchParams.has("after") ? Number(url.searchParams.get("after")) : null
+    const beforeCursor = Number(url.searchParams.get("before") ?? count + 1)
+    const all = Array.from({ length: count }, (_, i) => ({ cursor: i + 1, jobId: "visual-job", createdAt: "2026-09-26T12:00:00Z", payload: { version: 1, kind: i === 195 ? "request" : "music", text: i === 195 ? "<img src=x onerror=alert(1)> A careful musical brief. ".repeat(600) : `Confirmed musical update ${i + 1}` } }))
+    const events = afterCursor === null ? all.filter((event) => event.cursor < beforeCursor).slice(-30) : all.filter((event) => event.cursor > afterCursor).slice(0, 100)
+    await route.fulfill({ json: { events, cursor: count, nextCursor: afterCursor === null ? count : events.at(-1)?.cursor ?? afterCursor, job: null, headId: "version-3", draft: null, actions: { canSubmit: true, canStop: false, issue: null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } } })
+  })
+  await expect(page.locator(".producer-feed")).toContainText("Confirmed musical update 200", { timeout: 15_000 })
+  await expect(page.locator(".producer-message")).toHaveCount(30)
+  await expect(page.locator(".producer-feed img")).toHaveCount(0)
+  const feed = page.locator(".producer-feed")
+  await feed.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")) })
+  count++
+  await expect(page.getByRole("button", { name: "New updates" })).toBeVisible()
+  expect(await feed.evaluate((element) => element.scrollTop)).toBe(0)
+  await page.getByRole("button", { name: "Earlier activity" }).click()
+  await expect(page.getByRole("button", { name: "Return to latest" })).toBeVisible()
+  await expect(page.locator(".producer-message")).toHaveCount(30)
+  await page.getByRole("button", { name: "Return to latest" }).click()
+  await page.screenshot({ path: `${evidence}/workspace-long-feed.png`, fullPage: true })
+  expect(room.writes()).toBe(0)
 })

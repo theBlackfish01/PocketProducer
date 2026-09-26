@@ -14,6 +14,7 @@ import { api, type AppStatus, type Asset, type Job, type Project, type ProjectSn
 import { beginAudiotoolConnection, finishAudiotoolCallback } from "@/lib/audiotool"
 import { startWavRecording, type RecordingSession } from "@/lib/record-wav"
 import { friendlyIssue, jobProgress } from "@/lib/ui-copy"
+import { navigateSession, sessionFromPath } from "@/lib/session-route"
 
 const terminalStates = new Set(["succeeded", "failed", "cancelled", "needs_attention"])
 
@@ -176,7 +177,10 @@ export default function App() {
     void Promise.all([api.status(), api.listProjects()]).then(async ([status, list]) => {
       if (requestId !== projectRequestRef.current) return
       setProviders(status.providers); setNexus(status.nexus); setProjects(list.projects)
-      const first = list.projects[0]?.id ?? null; activeProjectRef.current = first; setProjectId(first)
+      const route = sessionFromPath(window.location.pathname)
+      const first = route?.id ?? list.projects[0]?.id ?? null
+      if (route && !list.projects.some((project) => project.id === route.id)) { setError("This session is no longer available. Choose a session from the sidebar."); return }
+      setNativeMode(route?.view !== "audio"); activeProjectRef.current = first; setProjectId(first)
       if (first) {
         const value = await api.snapshot(first)
         if (requestId !== projectRequestRef.current || activeProjectRef.current !== first) return
@@ -199,12 +203,18 @@ export default function App() {
       .finally(() => window.history.replaceState({}, "", "/"))
   }, [nexus.oauth])
 
+  useEffect(() => {
+    let active = true
+    const timer = window.setInterval(() => { void api.listProjects().then((value) => { if (active) setProjects(value.projects) }).catch(() => undefined) }, 8_000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [])
+
   useEffect(() => { if (projectId && draftProjectRef.current === projectId) localStorage.setItem(`pocket-producer:draft:${projectId}`, draft) }, [draft, projectId])
 
   useEffect(() => () => { recordingAbortRef.current?.abort(); recording?.discard() }, [recording])
 
   useEffect(() => {
-    if (!job || terminalStates.has(job.state)) return
+    if (!job || job.kind.startsWith("native-") || terminalStates.has(job.state)) return
     const polledJobId = job.id
     const polledProjectId = job.project_id
     const controller = new AbortController()
@@ -261,7 +271,7 @@ export default function App() {
 
   const createSession = async () => {
     setBusy(true); setError(null)
-    try { const { project } = await api.createProject("Untitled listening room"); await refreshProjects(project.id); setNavOpen(false) }
+    try { const { project } = await api.createProject("Untitled listening room"); await refreshProjects(project.id); setNativeMode(true); navigateSession(project.id, "start"); setNavOpen(false) }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to create session") }
     finally { setBusy(false) }
   }
@@ -369,7 +379,8 @@ export default function App() {
     if (asset) void playback.playItem(sourcePlaybackItem(asset))
   }
 
-  const chooseProject = async (id: string) => {
+  const chooseProject = async (id: string, fromHistory = false) => {
+    if (!fromHistory) navigateSession(id, nativeMode ? "arrange" : "audio")
     const requestId = ++projectRequestRef.current
     activeProjectRef.current = id
     draftProjectRef.current = id
@@ -388,6 +399,16 @@ export default function App() {
     catch (cause) { if (activeProjectRef.current === id) setError(cause instanceof Error ? cause.message : "Unable to open session") }
     finally { if (requestId === projectRequestRef.current) setLoading(false) }
   }
+
+  useEffect(() => {
+    const change = () => {
+      const route = sessionFromPath(window.location.pathname)
+      if (route) { setNativeMode(route.view !== "audio"); void chooseProject(route.id, true) }
+      else if (window.location.pathname === "/" && projects[0]) void chooseProject(projects[0].id, true)
+    }
+    window.addEventListener("popstate", change)
+    return () => window.removeEventListener("popstate", change)
+  }, [projects])
 
   const useSelectedVersion = async () => {
     if (!snapshot || !selectedRevisionId) return
@@ -452,7 +473,7 @@ export default function App() {
     <Button className="w-full justify-start rail-new" onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button>
     <div className="rail-heading"><FolderOpen className="size-4" /> Sessions</div>
     <p className="rail-caption">Recent</p>
-    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === projectId ? "page" : undefined} title={project.title} onClick={() => void chooseProject(project.id)}>{project.title}</button>)}</div>
+    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === projectId ? "page" : undefined} title={project.title} onClick={() => void chooseProject(project.id)}><span>{project.title}</span>{project.workspaceStatus && project.workspaceStatus !== "new" ? <small>{project.workspaceStatus === "working" ? "Working" : project.workspaceStatus === "attention" ? "Needs you" : "Ready"}</small> : null}</button>)}</div>
   </>, [projects, projectId, busy])
 
   return (
@@ -460,9 +481,9 @@ export default function App() {
       <aside className="session-rail" aria-label="Session navigation"><Brand />{navContent}<div className="rail-footer">Your private music workspace</div></aside>
       <main className="main-area"><div className="main-inner">
         <div className="mobile-topbar"><Brand /><Button variant="ghost" size="icon" aria-label="Open sessions" onClick={() => setNavOpen(true)}><Menu /></Button></div>
-        <div className="topline"><span>Listening Room <span aria-hidden="true">/</span> <strong>{snapshot?.project.title ?? "Welcome"}</strong></span><div className="mode-switch" role="group" aria-label="Room view"><Button variant={nativeMode ? "default" : "outline"} size="sm" aria-pressed={nativeMode} onClick={() => { playback.clear(); setNativeMode(true) }}>Arrange</Button><Button variant={!nativeMode ? "default" : "outline"} size="sm" aria-pressed={!nativeMode} onClick={() => { setNativeMode(false); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted); else playback.clear() }}>Playable audio</Button></div></div>
+        <div className="topline"><span>Listening Room <span aria-hidden="true">/</span> <strong>{snapshot?.project.title ?? "Welcome"}</strong></span><div className="mode-switch" role="group" aria-label="Room view"><Button variant={nativeMode ? "default" : "outline"} size="sm" aria-pressed={nativeMode} disabled={busy} onClick={() => { playback.clear(); setNativeMode(true); if (projectId) navigateSession(projectId) }}>Arrange</Button><Button variant={!nativeMode ? "default" : "outline"} size="sm" aria-pressed={!nativeMode} disabled={busy} onClick={() => { setNativeMode(false); if (projectId) navigateSession(projectId, "audio"); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted); else playback.clear() }}>Playable audio</Button></div></div>
 
-        {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot ? nativeMode ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} legacyVersionCount={snapshot.revisions.length} audiotoolConnected={nexus.session.connected} audiotoolAvailable={Boolean(nexus.oauth)} onConnectAudiotool={() => { void connectAudiotool() }} onAddSource={() => setSourcesOpen(true)} onAuditionSource={auditionSource} sourcePreview={nativeSourceItem ? <div className="source-mini-player"><AudioPlayer audio={playback.audio} item={nativeSourceItem} playing={playback.playing} currentTime={playback.currentTime} duration={playback.duration || nativeSourceItem.durationSeconds} volume={playback.volume} error={playback.error} onToggle={() => void playback.toggle()} onSeek={playback.seek} onVolume={playback.setVolume} /></div> : null} onLegacy={() => { setNativeMode(false); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted) }} onProjectUpdated={() => { void refreshProjectLabels(snapshot.project.id) }} /> : <>
+        {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot ? nativeMode ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} legacyVersionCount={snapshot.revisions.length} audiotoolConnected={nexus.session.connected} audiotoolAvailable={Boolean(nexus.oauth)} onConnectAudiotool={() => { void connectAudiotool() }} onAddSource={() => setSourcesOpen(true)} onAuditionSource={auditionSource} sourcePreview={nativeSourceItem ? <div className="source-mini-player"><AudioPlayer audio={playback.audio} item={nativeSourceItem} playing={playback.playing} currentTime={playback.currentTime} duration={playback.duration || nativeSourceItem.durationSeconds} volume={playback.volume} error={playback.error} onToggle={() => void playback.toggle()} onSeek={playback.seek} onVolume={playback.setVolume} /></div> : null} onLegacy={() => { setNativeMode(false); if (projectId) navigateSession(projectId, "audio"); const accepted = acceptedPlaybackItem(snapshot); if (accepted) playback.load(accepted) }} onProjectUpdated={() => { void refreshProjectLabels(snapshot.project.id) }} /> : <>
           <RoomHero status={activeJob ? "Making your audio" : currentRevision ? "Ready to listen" : "A fresh start"} title={currentRevision?.title ?? snapshot.project.title} description={currentRevision?.changeSummary ?? "Describe a direction or add your own sound. Your playable versions will stay together here."} meta={currentRevision ? `${Math.round(currentRevision.durationSeconds)} seconds · ${currentRevision.composition.sections.length} sections · Version ${currentRevision.ordinal}` : "Playable audio is separate from your editable arrangement"} actions={currentRevision && nexus.connection !== "unconfigured" ? <Button variant="outline" onClick={() => void (nexus.connection === "awaiting-authorization" ? connectAudiotool() : exportCurrent())} disabled={busy}><Headphones /> {nexus.connection === "awaiting-authorization" ? "Connect Audiotool" : "Export audio stems"}</Button> : null} />
           {currentRevision ? <details className="room-technical"><summary>How this version was made</summary><p>Producer: {producerProvenance}. Audio analysis: {currentAnalysis ? `${currentAnalysis.status} via ${currentAnalysis.model}` : providers.gemini ? "not run for this version" : "unavailable"}. Measured checks and interpretive notes are kept separate.</p></details> : null}
           {exportResult ? <div className="job-status" role={exportResult.state === "failed" || exportResult.state === "uncertain" ? "alert" : "status"}><strong>{exportResult.remote_url ? "Your Audiotool copy is ready" : exportResult.state === "disabled" ? "Audiotool export isn't available here" : exportResult.state === "uncertain" ? "We need to check the Audiotool result" : "Preparing your Audiotool copy"}</strong><span>{exportResult.remote_url ? "The audio stems can be edited separately in Audiotool." : "Your audio and saved versions remain in this room."}</span>{exportResult.remote_url ? <Button className="mt-3" variant="outline" size="sm" onClick={() => window.open(exportResult.remote_url ?? "", "_blank", "noopener,noreferrer")}>Open in Audiotool</Button> : null}{exportResult.error_message ? <details className="room-technical"><summary>Technical details</summary><p>{exportResult.error_message}</p></details> : null}</div> : null}

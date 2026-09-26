@@ -11,12 +11,10 @@ export interface NativeDraft {
 }
 
 export const nativeDraftKey = (projectId: string) => `pocket-producer:native-draft:${projectId}`
-export const defaultNativeDirection = (hasVersion: boolean) => hasVersion
-  ? "Develop the later section with a variation while keeping the selected parts unchanged."
-  : "Build an evolving instrumental with a clear motif and contrasting sections."
+export const defaultNativeDirection = () => ""
 
 export function freshNativeDraft(snapshot: NativeSnapshot | null): NativeDraft {
-  return { headId: snapshot?.currentRevisionId ?? null, direction: defaultNativeDirection(Boolean(snapshot?.current)), targetPartId: null, targetSectionId: null, protectedPartIds: snapshot?.current?.document.protectedPartIds ?? [], sourceIds: [], profile: "standard" }
+  return { headId: snapshot?.currentRevisionId ?? null, direction: defaultNativeDirection(), targetPartId: null, targetSectionId: null, protectedPartIds: snapshot?.current?.document.protectedPartIds ?? [], sourceIds: [], profile: "standard" }
 }
 
 export function reconcileNativeDraft(raw: unknown, snapshot: NativeSnapshot, assets: Asset[]): { draft: NativeDraft; notices: string[] } {

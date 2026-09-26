@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "./features/native/producer-workspace.css";
 
 @theme inline {
   --font-heading: Georgia, "Times New Roman", serif;

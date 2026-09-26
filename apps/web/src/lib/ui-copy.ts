@@ -17,6 +17,10 @@ export function jobProgress(job: Job) {
     analyzing: "Looking at your sound…",
     planning: "Planning the arrangement…",
     composing: "Building the parts…",
+    discovering: "Preparing the musical approach…",
+    constructing: "Shaping your arrangement…",
+    validating: "Checking your arrangement…",
+    synchronizing: "Preparing your Audiotool copy…",
     rendering: "Making playable audio…",
     checking: "Checking the result…",
     exporting: "Preparing your Audiotool copy…"

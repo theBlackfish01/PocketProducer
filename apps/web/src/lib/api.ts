@@ -1,4 +1,4 @@
-export interface Project { id: string; title: string; currentRevisionId: string | null; version: number; createdAt: string; updatedAt: string }
+export interface Project { id: string; title: string; currentRevisionId: string | null; version: number; createdAt: string; updatedAt: string; workspaceStatus?: "working" | "attention" | "ready" | "new" }
 export interface Asset { id: string; name: string; mimeType: string; durationSeconds: number; sampleRate: number; channels: number; readiness: string; provenance: string; audioUrl: string; createdAt: string }
 export interface Version { id: string; parentRevisionId: string | null; ordinal: number; title: string; durationSeconds: number; waveformPeaks: number[]; audioUrl: string; changeSummary: string; protectedTrackHashes: Record<string, string>; producer: Record<string, unknown>; createdAt: string }
 export interface Revision {
@@ -13,6 +13,8 @@ export interface Revision {
   producer: Record<string, unknown>;
 }
 export interface Job { id: string; project_id: string; kind: string; state: string; stage: string | null; error_code: string | null; error_message: string | null; result_revision_id: string | null; events?: Array<{ sequence: number; event_type: string; payload: Record<string, unknown> }> }
+export interface Activity { cursor: number; jobId: string | null; createdAt: string; payload: { version: 1; kind: string; text: string; historical?: boolean; revisionId?: string; baseRevisionId?: string | null; ordinal?: number; selected?: boolean; step?: number; documentHash?: string; sectionId?: string; partId?: string; sourceIds?: string[]; profile?: string; scope?: string } }
+export interface WorkspaceActivity { events: Activity[]; cursor: number; nextCursor: number; reset?: boolean; hasOlder: boolean; job: Job | null; headId: string | null; draft: { step: number; hash: string } | null; actions: { canSubmit: boolean; canStop: boolean; issue: "uncertain" | "paused" | null }; allowance: { remainingUsd: number; standardUsd: number; extendedUsd: number } }
 export interface NativeNote { id: string; startTick: number; durationTicks: number; pitch: number; velocity: number }
 export interface NativeAutomation { id: string; target: string; points: Array<{ tick: number; value: number; interpolation?: "step" | "linear" | "sloped"; slope?: number }> }
 export interface NativePlacement { id: string; motifId: string; startTick: number; repeats: number; transpose: number }
@@ -73,6 +75,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  activity: (id: string, query = "", signal?: AbortSignal) => request<WorkspaceActivity>(`/projects/${id}/activity${query}`, { signal }),
   status: () => request<AppStatus>("/status"),
   listProjects: () => request<{ projects: Project[] }>("/projects"),
   createProject: (title: string) => request<{ project: Project }>("/projects", { method: "POST", body: JSON.stringify({ title }) }),
