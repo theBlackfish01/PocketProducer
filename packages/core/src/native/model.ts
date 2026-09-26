@@ -76,7 +76,7 @@ const part = z.object({
   parallel: z.object({ wetMix: z.number().min(0.01).max(0.99), effects: z.array(nativeEffect).min(1).max(3) }).optional(),
   automation: z.array(z.object({ id, target: z.string().min(1).max(160), points: z.array(point).min(2).max(128) })).max(16).default([])
 });
-const motif = z.object({ id, partId: id, name: z.string().min(1).max(80), lengthTicks: z.number().int().positive(), notes: z.array(note).min(1).max(256) });
+const motif = z.object({ id, partId: id, name: z.string().min(1).max(80), lengthTicks: z.number().int().positive(), notes: z.array(note).min(1).max(256), familyId: id.optional(), derivedFromMotifId: id.optional() });
 const section = z.object({ id, name: z.string().min(1).max(80), startBar: z.number().int().min(0), endBar: z.number().int().positive(), intent: z.string().max(240).default("") });
 
 export const nativeDocumentSchema = z.object({
@@ -131,6 +131,9 @@ export const nativeDocumentSchema = z.object({
     if (!parts.has(item.partId)) context.addIssue({ code: "custom", path: ["motifs"], message: `Motif ${item.id} has no part` });
     if (item.notes.some((value) => value.startTick + value.durationTicks > item.lengthTicks)) context.addIssue({ code: "custom", path: ["motifs"], message: `Motif ${item.id} has notes outside its phrase` });
     unique(item.notes.map((value) => value.id), "motif notes");
+    const parent = item.derivedFromMotifId ? motifs.get(item.derivedFromMotifId) : null;
+    if (item.derivedFromMotifId && (!parent || parent.id === item.id || item.familyId !== (parent.familyId ?? parent.id))) context.addIssue({ code: "custom", path: ["motifs"], message: `Motif ${item.id} has invalid family provenance` });
+    if (!item.derivedFromMotifId && item.familyId && item.familyId !== item.id) context.addIssue({ code: "custom", path: ["motifs"], message: `Root motif ${item.id} must own its family identity` });
   }
   for (const item of document.parts) {
     unique([...item.effects.map((value) => value.id), ...(item.parallel?.effects.map((value) => value.id) ?? [])], "part effects");
@@ -200,6 +203,7 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("replaceMotif"), motif }),
   z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional(), noteEdits: z.array(z.object({ noteId: id, omit: z.boolean().optional(), pitch: z.number().int().min(0).max(127).optional(), startTick: z.number().int().min(0).optional(), durationTicks: z.number().int().positive().optional(), velocity: z.number().min(0.01).max(1).optional() })).max(64).optional() }),
   z.object({ kind: z.literal("developSectionNotes"), partId: id, sectionId: id, pitchShiftSemitones: z.number().int().min(-12).max(12).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
+  z.object({ kind: z.literal("handoffMotif"), sourceMotifId: id, targetPartId: id, newMotifId: id, name: z.string().min(1).max(80), placementId: id, startTick: z.number().int().min(0), repeats: z.number().int().min(1).max(64), transpose: z.number().int().min(-36).max(36).default(0) }),
   z.object({ kind: z.literal("silenceSectionClips"), partId: id, sectionId: id, regionId: id.optional() }),
   z.object({ kind: z.literal("setSectionClipGain"), partId: id, sectionId: id, regionId: id.optional(), gain: z.number().min(0).max(1) }),
   z.object({ kind: z.literal("moveSectionClip"), partId: id, sectionId: id, regionId: id, startTick: z.number().int().min(0) }),
@@ -240,6 +244,7 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("replaceAutomation"), partId: id, automation: part.shape.automation.unwrap().element }),
   z.object({ kind: z.literal("removeAutomation"), partId: id, automationId: id }),
   z.object({ kind: z.literal("editSectionAutomation"), partId: id, sectionId: id, automationId: id, points: z.array(point).min(2).max(128) }),
+  z.object({ kind: z.literal("setSectionEffectFeedback"), partId: id, sectionId: id, effectId: id, feedbackFactor: z.number().min(0).max(1) }),
   z.object({ kind: z.literal("placeSource"), partId: id, region: part.shape.sourceRegions.unwrap().element }),
   z.object({ kind: z.literal("replaceSource"), partId: id, region: part.shape.sourceRegions.unwrap().element }),
   z.object({ kind: z.literal("removeSource"), partId: id, regionId: id }),
@@ -363,8 +368,17 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         });
         if (JSON.stringify(notes) === JSON.stringify(source.notes)) throw new Error("A motif variation must change musical material");
         if (!notes.length || notes.some((value) => value.startTick < 0 || value.startTick + value.durationTicks > source.lengthTicks || value.pitch < 0 || value.pitch > 127 || value.velocity < 0.01 || value.velocity > 1)) throw new Error("Motif variation exceeds the original phrase bounds, MIDI range or velocity range");
-        next.motifs.push({ ...source, id: op.newMotifId, name: op.name, notes });
+        next.motifs.push({ ...source, id: op.newMotifId, name: op.name, notes, familyId: source.familyId ?? source.id, derivedFromMotifId: source.id });
         placement.motifId = op.newMotifId;
+        break;
+      }
+      case "handoffMotif": {
+        const source = next.motifs.find((value) => value.id === op.sourceMotifId);
+        const target = findPart(op.targetPartId);
+        if (!source || target.device.type === "audio" || target.device.type === "beatbox8") throw new Error("A melodic source motif and a compatible target instrument are required for a handoff");
+        if (next.motifs.some((value) => value.id === op.newMotifId)) throw new Error(`Motif ID ${op.newMotifId} already exists`);
+        next.motifs.push({ ...structuredClone(source), id: op.newMotifId, partId: target.id, name: op.name, familyId: source.familyId ?? source.id, derivedFromMotifId: source.id });
+        target.placements.push({ id: op.placementId, motifId: op.newMotifId, startTick: op.startTick, repeats: op.repeats, transpose: op.transpose });
         break;
       }
       case "developSectionNotes": {
@@ -536,6 +550,20 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         item.automation[index] = spliceSectionAutomation(item.automation[index]!, op.points, section.startBar * barTicks(next), section.endBar * barTicks(next));
         break;
       }
+      case "setSectionEffectFeedback": {
+        const item = findPart(op.partId);
+        const section = next.sections.find((value) => value.id === op.sectionId);
+        const effect = [...item.effects, ...(item.parallel?.effects ?? [])].find((value) => value.id === op.effectId);
+        const baseline = effect?.parameters.feedbackFactor;
+        if (!section || !effect || (effect.type !== "stompboxReverb" && effect.type !== "stompboxDelay" && effect.type !== "stompboxPitchDelay") || baseline === undefined) throw new Error("A section and reverb/delay effect with explicit feedback baseline are required");
+        if (op.feedbackFactor === baseline) throw new Error("Section feedback must differ from its baseline");
+        const target = `effect.${effect.id}.feedbackFactor`;
+        if (item.automation.some((curve) => curve.target === target)) throw new Error("Feedback already has an automation curve; edit its section instead");
+        const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
+        const points = [ ...(start > 0 ? [{ tick: 0, value: baseline, interpolation: "step" as const }] : []), { tick: start, value: op.feedbackFactor, interpolation: "step" as const }, { tick: end, value: baseline, interpolation: "step" as const } ];
+        item.automation.push({ id: `a-${canonicalHash({ partId: item.id, target, sectionId: section.id }).slice(0,24)}`, target, points });
+        break;
+      }
       case "placeSource": findPart(op.partId).sourceRegions.push(op.region); if (!next.sourceAssetIds.includes(op.region.assetId)) next.sourceAssetIds.push(op.region.assetId); break;
       case "replaceSource": { const item = findPart(op.partId); const index = item.sourceRegions.findIndex((value) => value.id === op.region.id); if (index < 0) throw new Error(`Unknown source region ${op.region.id}`); item.sourceRegions[index] = op.region; if (!next.sourceAssetIds.includes(op.region.assetId)) next.sourceAssetIds.push(op.region.assetId); break; }
       case "removeSource": { const item = findPart(op.partId); if (!item.sourceRegions.some((value) => value.id === op.regionId)) throw new Error(`Unknown source region ${op.regionId}`); item.sourceRegions = item.sourceRegions.filter((value) => value.id !== op.regionId); break; }
@@ -595,7 +623,7 @@ export function pinnedContext(document: NativeDocument, revisionId: string | nul
     sections: document.sections.map((value) => ({ id: value.id, name: value.name, bars: [value.startBar, value.endBar], intent: value.intent })),
     groups: document.groups ?? [], reverbBus: document.reverbBus ?? null, delayBus: document.delayBus ?? null, master: document.master ?? null,
     parts: document.parts.map((value) => ({ id: value.id, name: value.name, role: value.role, device: value.device.type, preset: value.device.preset ?? null, groupId: value.groupId ?? null, sends: value.sends ?? [], notes: materializedNotes(document, value.id).length, effects: value.effects.map((effect) => effect.type), parallel: value.parallel ? { wetMix: value.parallel.wetMix, effects: value.parallel.effects.map((effect) => effect.type) } : null, automation: value.automation.map((curve) => curve.target), sourceRegions: value.sourceRegions.length, libraryRegions: value.libraryRegions?.length ?? 0, protected: document.protectedPartIds.includes(value.id) })),
-    motifs: document.motifs.map((value) => ({ id: value.id, partId: value.partId, name: value.name, instances: document.parts.flatMap((item) => item.placements).filter((placement) => placement.motifId === value.id).length })),
+    motifs: document.motifs.map((value) => ({ id: value.id, partId: value.partId, name: value.name, familyId: value.familyId ?? (value.derivedFromMotifId ? null : value.id), derivedFromMotifId: value.derivedFromMotifId ?? null, instances: document.parts.flatMap((item) => item.placements).filter((placement) => placement.motifId === value.id).length })),
     sources: document.parts.flatMap((value) => value.sourceRegions.map((region) => ({ assetId: region.assetId, assetHash: region.assetHash, selectedInterval: [region.sourceStartSeconds, region.sourceStartSeconds + region.sourceDurationSeconds], state: "placed/referenced" as const }))),
     librarySamples: document.parts.flatMap((value) => (value.libraryRegions ?? []).map((region) => ({ sampleName: region.sampleName, ownerName: region.ownerName, selectedInterval: [region.sourceStartSeconds, region.sourceStartSeconds + region.sourceDurationSeconds], state: "placed/referenced; availability rechecked at validation/sync" as const }))),
     audio: document.audio.state, remote

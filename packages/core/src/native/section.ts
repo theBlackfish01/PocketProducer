@@ -3,7 +3,7 @@ import type { NativeDocument } from "./model.js";
 type Curve = NativeDocument["parts"][number]["automation"][number];
 type Point = Curve["points"][number];
 
-function valueAt(points: Point[], tick: number): number | null {
+export function automationValueAt(points: Point[], tick: number): number | null {
   if (!points.length || tick < points[0]!.tick) return null;
   const index = points.findIndex((point) => point.tick > tick);
   if (index < 0) return points.at(-1)!.value;
@@ -12,17 +12,22 @@ function valueAt(points: Point[], tick: number): number | null {
   if (left.interpolation === "sloped") throw new Error("Exact local comparison of a sloped automation segment is unsupported");
   return left.value + (right.value - left.value) * (tick - left.tick) / (right.tick - left.tick);
 }
+const valueAt = automationValueAt;
 
 // Compare the represented automation function outside [start,end), rather
 // than requiring unchanged arrays. Linear and stepped segments are exact at
 // every integer tick if they agree at their breakpoints and interval midpoints.
 // Sloped curves are deliberately rejected when changed: the SDK's easing law
 // is not inferred from its slope parameter.
-export function automationOutsideEqual(before: Curve[], after: Curve[], start: number, end: number, total: number): boolean {
+export function automationOutsideEqual(before: Curve[], after: Curve[], start: number, end: number, total: number, baseline?: (target: string) => number | null): boolean {
   const old = new Map(before.map((curve) => [curve.id, curve]));
   const next = new Map(after.map((curve) => [curve.id, curve]));
   for (const id of new Set([...old.keys(), ...next.keys()])) {
-    const a = old.get(id), b = next.get(id);
+    let a = old.get(id); const b = next.get(id);
+    if (!a && b && baseline) {
+      const value = baseline(b.target);
+      if (value !== null) a = { ...b, points: [{ tick: 0, value }, { tick: total, value }] };
+    }
     if (JSON.stringify(a) === JSON.stringify(b)) continue;
     if (!a || !b || a.target !== b.target || a.points.some((point) => point.interpolation === "sloped") || b.points.some((point) => point.interpolation === "sloped")) return false;
     if (start > 0 && (a.points[0]!.tick > start || b.points[0]!.tick > start)) return false;
@@ -41,11 +46,15 @@ export function automationOutsideEqual(before: Curve[], after: Curve[], start: n
 
 // Used for a "keep this role in this section" promise. Curves with changed
 // sloped easing are not asserted equivalent from sparse points alone.
-export function automationInsideEqual(before: Curve[], after: Curve[], start: number, end: number): boolean {
+export function automationInsideEqual(before: Curve[], after: Curve[], start: number, end: number, baseline?: (target: string) => number | null): boolean {
   const old = new Map(before.map((curve) => [curve.id, curve]));
   const next = new Map(after.map((curve) => [curve.id, curve]));
   for (const id of new Set([...old.keys(), ...next.keys()])) {
-    const a = old.get(id), b = next.get(id);
+    let a = old.get(id); const b = next.get(id);
+    if (!a && b && baseline) {
+      const value = baseline(b.target);
+      if (value !== null) a = { ...b, points: [{ tick: 0, value }, { tick: Math.max(end, b.points.at(-1)?.tick ?? end), value }] };
+    }
     if (JSON.stringify(a) === JSON.stringify(b)) continue;
     if (!a || !b || a.target !== b.target || a.points.some((point) => point.interpolation === "sloped") || b.points.some((point) => point.interpolation === "sloped")) return false;
     const ticks = new Set([start, end - 1]);

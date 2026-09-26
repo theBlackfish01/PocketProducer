@@ -12,6 +12,7 @@ type RoleRule = { label: string; matches: Role[] };
 export interface NativeRequirement extends RoleRule {
   kind: "required" | "absent" | "preserve" | "change" | "ambiguous";
   section: string | null;
+  changeMeasure?: "reduce-density";
   evidence: { start: number; end: number; text: string };
 }
 export interface NativeBriefIntent {
@@ -29,16 +30,61 @@ export interface NativeBriefIntent {
   preservedRoles: RoleRule[];
   sectionPreservations: Array<{ section: string } & RoleRule>;
   changeRoles: RoleRule[];
+  changeRequirements: NativeRequirement[];
   constructionRequirements: Array<"shared-parallel-drums" | "sidechain" | "automation">;
   advisory: string[];
+}
+
+export interface ResolvedNativePreservation {
+  namedParts: Array<{ id: string; name: string; evidence: string }>;
+  theme: { familyId: string; motifIds: string[]; label: string; evidence: string } | null;
+  unresolved: string[];
+}
+
+export function resolveNativePreservation(direction: string, document: NativeDocument, sectionId?: string | null): ResolvedNativePreservation {
+  const brief = interpretNativeBrief(direction);
+  const namedParts = document.parts.filter((part) => brief.preservedRoles.some((rule) => rule.matches.includes(part.role)))
+    .map((part) => ({ id: part.id, name: part.name, evidence: brief.requirements.find((rule) => rule.kind === "preserve" && rule.matches.includes(part.role))?.evidence.text ?? "Named in the request" }));
+  const themePhrase = /\b(?:keep|preserve|leave|do not change|don't change|without changing)\b[^.!?;]{0,100}\b(?:the\s+)?(?:theme|motif|hook)\b/i.exec(direction)?.[0] ?? null;
+  if (!themePhrase) return { namedParts, theme: null, unresolved: [] };
+  const section = document.sections.find((value) => value.id === sectionId);
+  const start = section ? section.startBar * document.meter.numerator * 960 * 4 / document.meter.denominator : 0;
+  const end = section ? section.endBar * document.meter.numerator * 960 * 4 / document.meter.denominator : Infinity;
+  const families = new Map<string, typeof document.motifs>();
+  for (const motif of document.motifs) {
+    const part = document.parts.find((value) => value.id === motif.partId);
+    if (!part || !["lead", "melody"].includes(part.role) || !part.placements.some((placement) => placement.motifId === motif.id && placement.startTick < end && placement.startTick + placement.repeats * motif.lengthTicks > start)) continue;
+    const familyId = motif.familyId ?? (motif.derivedFromMotifId ? null : motif.id);
+    if (!familyId) continue;
+    families.set(familyId, [...(families.get(familyId) ?? []), motif]);
+  }
+  if (families.size === 1) {
+    const [familyId, motifs] = [...families][0]!;
+    return { namedParts, theme: { familyId, motifIds: motifs.map((motif) => motif.id), label: motifs.find((motif) => motif.id === familyId)?.name ?? motifs[0]!.name, evidence: themePhrase }, unresolved: [] };
+  }
+  if (families.size === 0) {
+    const melodyParts = document.parts.filter((part) => ["lead", "melody"].includes(part.role));
+    if (melodyParts.length === 1) return { namedParts: [...namedParts, { id: melodyParts[0]!.id, name: melodyParts[0]!.name, evidence: `${themePhrase} (one melodic part; no linked phrase)` }], theme: null, unresolved: [] };
+  }
+  return { namedParts, theme: null, unresolved: [families.size > 1 ? "Several distinct melodic phrase families could be the theme; name the part or phrase to keep" : "No uniquely identifiable melodic theme is present; name the part to keep"] };
 }
 
 const scope = (text: string): string | null => {
   const found = /\b(?:in|during|throughout|for)\s+(?:the\s+)?([a-z][a-z0-9 -]{0,38}?)(?:\s+section)?(?=\s*(?:[,;.!?]|$|\band\b|\bbut\b|\bthen\b))/i.exec(text.trim());
   const name = found?.[1]?.trim().toLowerCase().replace(/^(?:for|in)\s+(?:the\s+)?/, "") ?? null;
-  return name && !/^(?:a|an|the|one|total|overall)$/.test(name) && !/^(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+bars?)$/.test(name) ? name : null;
+  // "Bring in chords" names material, not a section. A false section here
+  // makes an otherwise valid construction impossible to complete.
+  return name && !/^(?:a|an|the|one|total|overall|chords?|harmony|bass|drums?|percussion|beats?|pads?|lead|melody|motif|theme|notes?|samples?|sounds?)$/.test(name) && !/^(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+bars?)$/.test(name) ? name : null;
 };
 const unique = <T extends RoleRule>(rules: T[]): T[] => rules.filter((rule, index) => rules.findIndex((other) => other.label === rule.label && ("section" in other ? other.section : null) === ("section" in rule ? rule.section : null)) === index);
+const directivePattern = /\b(?:do\s+not\s+(?:change|alter|touch|use)|don't\s+(?:change|alter|touch|use)|without\s+(?:changing|altering|touching)|keep|preserve|leave|no|without|omit|exclude|skip|remove|avoid|thin|simplify|reduce|brighten|darken|shorten|change|alter|develop|vary|make|include|add|bring|create|write|use|introduce|maybe|perhaps|optionally|optional|could)\b/gi;
+function directiveKind(cue: string): NativeRequirement["kind"] {
+  if (/^(?:do not (?:change|alter|touch)|don't (?:change|alter|touch)|without (?:changing|altering|touching)|keep|preserve|leave)/i.test(cue)) return "preserve";
+  if (/^(?:do not use|don't use|no|without|omit|exclude|skip|remove|avoid)/i.test(cue)) return "absent";
+  if (/^(?:maybe|perhaps|optionally|optional|could)/i.test(cue)) return "ambiguous";
+  if (/^(?:thin|simplify|reduce|brighten|darken|shorten|change|alter|develop|vary|make)/i.test(cue)) return "change";
+  return "required";
+}
 
 // Hard authority belongs to a role mention's own clause, never to all roles
 // in a sentence. Conflicting global instructions become advisory, not a veto.
@@ -67,21 +113,19 @@ export function interpretNativeBrief(direction: string): NativeBriefIntent {
   for (const chunk of chunks) {
     const sentence = chunk[0];
     const mentions = roles.flatMap((role) => [...sentence.matchAll(role.pattern)].map((match) => ({ role, index: match.index, end: match.index + match[0].length }))).sort((a, b) => a.index - b.index);
-    for (let index = 0; index < mentions.length; index++) {
-      const mention = mentions[index]!;
-      const previous = mentions[index - 1]?.end ?? 0;
-      const next = mentions[index + 1]?.index ?? sentence.length;
-      const before = sentence.slice(previous, mention.index);
-      const after = sentence.slice(mention.end, next);
-      const near = `${before}${sentence.slice(mention.index, mention.end)}${after}`;
-      const preserving = /\b(?:without\s+(?:changing|altering|touching)|keep|preserve|leave)\b/i.test(before.slice(-65));
-      const negated = /\b(?:no|without|omit|exclude|skip|remove|do not use|don't use)\s*(?:any\s+)?$/i.test(before.trimEnd());
-      const optional = /\b(?:maybe|perhaps|optionally|optional|could|if useful)\b/i.test(before);
-      const changing = /\b(?:change|alter|brighten|darken|simplify|develop|vary|make)\b/i.test(before.slice(-65));
-      const section = scope(after) ?? scope(before);
-      const kind: NativeRequirement["kind"] = preserving ? "preserve" : negated ? "absent" : optional ? "ambiguous" : changing ? "change" : "required";
-      const start = (chunk.index ?? 0) + previous;
-      requirements.push({ kind, section, label: mention.role.label, matches: mention.role.matches, evidence: { start, end: (chunk.index ?? 0) + next, text: near.trim().slice(0, 180) } });
+    const directives = [...sentence.matchAll(directivePattern)].map((match) => ({ cue: match[0], start: match.index, end: match.index + match[0].length }));
+    for (const mention of mentions) {
+      const cueIndex = directives.findLastIndex((candidate) => candidate.start < mention.index);
+      const cue = directives[cueIndex];
+      const nextCue = directives[cueIndex + 1];
+      const phraseStart = cue?.start ?? 0;
+      const phraseEnd = nextCue?.start ?? sentence.length;
+      const phrase = sentence.slice(phraseStart, phraseEnd);
+      const rawKind = cue ? directiveKind(cue.cue) : /\bunchanged\b/i.test(phrase) ? "preserve" : "required";
+      const kind = (["required", "change"].includes(rawKind) && (cueIndex > 0 && directiveKind(directives[cueIndex - 1]!.cue) === "ambiguous" || /\bif useful\b/i.test(phrase))) ? "ambiguous" : rawKind;
+      const section = scope(phrase) ?? (cue ? scope(sentence.slice(0, cue.start)) : null);
+      const changeMeasure = kind === "change" && mention.role.label === "drums" && (/^(?:thin|simplify|reduce)$/i.test(cue?.cue ?? "") || /\b(?:sparser|fewer hits|less busy)\b/i.test(phrase)) ? "reduce-density" as const : undefined;
+      requirements.push({ kind, section, label: mention.role.label, matches: mention.role.matches, ...(changeMeasure ? { changeMeasure } : {}), evidence: { start: (chunk.index ?? 0) + phraseStart, end: (chunk.index ?? 0) + phraseEnd, text: phrase.trim().slice(0, 180) } });
     }
   }
   const deduped = new Map<string, NativeRequirement>();
@@ -104,6 +148,7 @@ export function interpretNativeBrief(direction: string): NativeBriefIntent {
     preservedRoles: unique(boundedRequirements.filter((rule) => rule.kind === "preserve" && !rule.section).map(({ label, matches }) => ({ label, matches }))),
     sectionPreservations: unique(boundedRequirements.filter((rule) => rule.kind === "preserve" && rule.section).map(({ section, label, matches }) => ({ section: section!, label, matches }))),
     changeRoles: unique(boundedRequirements.filter((rule) => rule.kind === "change").map(({ label, matches }) => ({ label, matches }))),
+    changeRequirements: unique(boundedRequirements.filter((rule) => rule.kind === "change")),
     constructionRequirements,
     advisory
   };

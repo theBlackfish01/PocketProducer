@@ -114,6 +114,42 @@ describe("audio-independent native job lifecycle", () => {
     expect(protectedPartHash(saved.current!.document, "lead")).not.toBe(protectedPartHash(base.current!.document, "lead"));
     expect(saved.current?.document.parts).toHaveLength(2);
   }, 120_000);
+  it("repairs a wrong scoped candidate through the worker before saving the selected version", async () => {
+    const scratchId = (await createProject(ownerId, "Living arrangement revision")).id;
+    extraProjects.push(scratchId);
+    const form = { title: "Two rooms", tempoBpm: 120, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "first-main", name: "First Main", bars: 4 }, { id: "second-main", name: "Second Main", bars: 4 }], parts: [
+      { id: "drums", name: "Soft drums", role: "percussion", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [0, 4, 16, 17, 18, 19].map((beat) => ({ beat, durationBeats: 0.25, pitch: 36, velocity: 0.7 })) },
+      { id: "bass", name: "Warm bass", role: "bass", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 16, durationBeats: 1, pitch: 40, velocity: 0.7 }] },
+      { id: "lead", name: "Theme lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [{ id: "theme", name: "Main theme", lengthBeats: 4, notes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }], placements: [{ id: "theme-first", motifId: "theme", startBar: 0, repeats: 1 }, { id: "theme-return", motifId: "theme", startBar: 4, repeats: 1 }], freeNotes: [] },
+      { id: "air", name: "Air", role: "harmony", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 16, durationBeats: 4, pitch: 60, velocity: 0.5 }], effects: [{ id: "wash", type: "stompboxReverb", parameters: { feedbackFactor: 0.8, mix: 0.4 } }] }
+    ] };
+    const first = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "living-base", request: { direction: "A theme with drums, bass and harmony", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    await processJob(await claim(first.id, "living-base"), { scriptedModel: fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respond(new AIMessage("A structured arrangement was made.")), library: createNativeLibrary(null) });
+    const base = (await nativeSnapshot(ownerId, scratchId)).current!;
+    expect(base.document.parts).toHaveLength(4);
+    const direction = "Give this more space. Thin the drums, shorten the ambience, but keep the theme and bass.";
+    const revision = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-revision", idempotencyKey: "living-scoped-repair", request: { direction, sourceAssetIds: [], baseNativeRevisionId: base.id, expectedNativeHeadId: base.id, targetSectionId: "second-main" }, expectedHeadId: base.id });
+    const bass = base.document.parts.find((part) => part.id === "bass")!;
+    const drums = base.document.parts.find((part) => part.id === "drums")!;
+    const wrong = [{ kind: "replaceNotes", partId: "bass", notes: bass.notes.map((note) => ({ ...note, pitch: note.pitch + 1 })) }];
+    const repair = [{ kind: "replaceNotes", partId: "bass", notes: bass.notes }, { kind: "replaceNotes", partId: "drums", notes: drums.notes.filter((note) => note.startTick < 16 * 960 || note.startTick < 18 * 960) }, { kind: "setSectionEffectFeedback", partId: "air", sectionId: "second-main", effectId: "wash", feedbackFactor: 0.35 }];
+    const model = fakeModel().respondWithTools([{ name: "apply_native_batch", args: { stepKey: "wrong-candidate", operations: wrong } }]).respond(new AIMessage("I changed the mix."))
+      .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "actual-local-repair", operations: repair } }]).respond(new AIMessage("The drum events were reduced locally and feedback was lowered only in Second Main; the theme and bass remain."));
+    await processJob(await claim(revision.id, "living-revision"), { scriptedModel: model, library: createNativeLibrary(null) });
+    const saved = (await nativeSnapshot(ownerId, scratchId)).current!;
+    expect((await jobSnapshot(ownerId, revision.id)).state).toBe("succeeded");
+    expect(saved.parentRevisionId).toBe(base.id);
+    expect(saved.document.parts.find((part) => part.id === "drums")!.notes).toHaveLength(drums.notes.length - 2);
+    expect(protectedPartHash(saved.document, "bass")).toBe(protectedPartHash(base.document, "bass"));
+    expect(saved.document.motifs).toEqual(base.document.motifs);
+    expect(saved.document.parts.find((part) => part.id === "air")!.automation[0]?.points).toEqual([{ tick: 0, value: 0.8, interpolation: "step" }, { tick: 15360, value: 0.35, interpolation: "step" }, { tick: 30720, value: 0.8, interpolation: "step" }]);
+    expect(JSON.stringify(model.calls.map((call) => call.messages))).toMatch(/Requested preservation of Warm bass was not met/);
+    expect(JSON.stringify(model.calls.map((call) => call.messages))).toMatch(/Requested reduction of drums was not constructed/);
+    await selectNativeRevision(ownerId, scratchId, base.id, saved.id);
+    expect((await nativeSnapshot(ownerId, scratchId)).currentRevisionId).toBe(base.id);
+    await selectNativeRevision(ownerId, scratchId, saved.id, base.id);
+    expect((await nativeSnapshot(ownerId, scratchId)).currentRevisionId).toBe(saved.id);
+  }, 120_000);
   it("runs 48 model turns through the worker without confusing graph steps with the captured call limit", async () => {
     const scratchId = (await createProject(ownerId, "Sustained graph construction")).id;
     extraProjects.push(scratchId);

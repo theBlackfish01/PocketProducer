@@ -12,6 +12,11 @@ describe("traceable native brief constraints", () => {
     expect(brief.sectionRequirements).toEqual([]);
     expect(brief.requiredRoles.map((role) => role.label)).toEqual(["lead or melody", "bass"]);
   });
+  it("does not mistake entering chords for a section named chords", () => {
+    const brief = interpretNativeBrief("Start with pulse and haze, bring in chords and bass, break for a lead response, then return with a restrained coda");
+    expect(brief.sectionRequirements).toEqual([]);
+    expect(brief.requiredRoles.map((rule) => rule.label)).toEqual(expect.arrayContaining(["harmony", "bass", "lead or melody"]));
+  });
   it("accepts explicit exclusions without requesting the excluded roles", () => {
     expect(interpretNativeBrief("Do not use drums; write a 4-bar melody").requiredRoles).toEqual([{ label: "lead or melody", matches: ["lead", "melody"] }]);
     expect(interpretNativeBrief("Make a 4-bar melody with no drums and no bass")).toMatchObject({ totalBars: 4, excludedRoles: [{ label: "drums" }, { label: "bass" }] });
@@ -58,6 +63,55 @@ describe("traceable native brief constraints", () => {
       expect(parsed.sectionExclusions).toEqual([{ section: "intro", label: "drums", matches: ["percussion"] }]);
       expect(parsed.sectionRequirements).toEqual([{ section: "chorus", label: "drums", matches: ["percussion"] }]);
     }
+  });
+  it("applies one directive across coordinated roles and never reverses ordinary negation", () => {
+    for (const wording of ["Do not change the bass.", "Don't touch the bass.", "Leave the bass unchanged."]) {
+      const parsed = interpretNativeBrief(wording);
+      expect(parsed.preservedRoles.map((rule) => rule.label), wording).toEqual(["bass"]);
+      expect(parsed.changeRoles, wording).toEqual([]);
+    }
+    for (const wording of ["Thin the drums, but keep the melody and bass.", "Preserve bass and lead; simplify the drums."]) {
+      const parsed = interpretNativeBrief(wording);
+      expect(parsed.preservedRoles.map((rule) => rule.label).sort(), wording).toEqual(["bass", "lead or melody"]);
+      expect(parsed.changeRoles.map((rule) => rule.label), wording).toEqual(["drums"]);
+    }
+    expect(interpretNativeBrief("Keep the melody and the bass unchanged.").preservedRoles.map((rule) => rule.label).sort()).toEqual(["bass", "lead or melody"]);
+    expect(interpretNativeBrief("No drums or bass; write a melody.").excludedRoles.map((rule) => rule.label)).toEqual(["drums", "bass"]);
+    expect(interpretNativeBrief("No drums or bass; write a melody.").requiredRoles.map((rule) => rule.label)).toEqual(["lead or melody"]);
+  });
+  it("rejects a wrong revised bass and unchanged drums, not just a wrong parse", () => {
+    const base = applyNativeOperations(melody, [{ kind: "addPart", part: part("bass", "bass") }, { kind: "addPart", part: { ...part("drums", "percussion"), notes: [
+      { id: "kick-one", startTick: 0, durationTicks: 240, pitch: 36, velocity: 0.8 },
+      { id: "kick-two", startTick: 960, durationTicks: 240, pitch: 36, velocity: 0.8 },
+      { id: "kick-three", startTick: 1920, durationTicks: 240, pitch: 36, velocity: 0.8 }
+    ] } }]);
+    const direction = "Thin the drums, but keep the melody and bass.";
+    const changedBass = applyNativeOperations(base, [{ kind: "replaceNotes", partId: "bass", notes: [{ id: "bass-note", startTick: 0, durationTicks: 960, pitch: 48, velocity: 0.7 }] }]);
+    expect(nativeCompletionIssues(changedBass, direction, "revision", [], base)).toEqual(expect.arrayContaining([
+      "Requested preservation of bass was not met", "Requested change to drums was not constructed"
+    ]));
+    const merelyChangedDrumMix = applyNativeOperations(base, [{ kind: "setMix", partId: "drums", gain: 0.5 }]);
+    expect(nativeCompletionIssues(merelyChangedDrumMix, direction, "revision", [], base)).toContain("Requested reduction of drums was not constructed");
+    const thinner = applyNativeOperations(base, [{ kind: "replaceNotes", partId: "drums", notes: base.parts.find((item) => item.id === "drums")!.notes.slice(0, 2) }]);
+    expect(nativeCompletionIssues(thinner, direction, "revision", [], base)).toEqual([]);
+  });
+  it("resolves an evidenced theme family and demands a local ambience feedback reduction", () => {
+    const base = applyNativeOperations(seedNativeDocument("Two main sections"), [
+      { kind: "setStructure", bars: 8, sections: [{ id: "first-main", name: "First Main", startBar: 0, endBar: 4, intent: "" }, { id: "second-main", name: "Second Main", startBar: 4, endBar: 8, intent: "" }] },
+      { kind: "removePart", partId: "starting-voice" },
+      { kind: "addPart", part: { ...part("drums", "percussion"), notes: [{ id: "hit-a", startTick: 15360, durationTicks: 240, pitch: 36, velocity: 0.8 }, { id: "hit-b", startTick: 16320, durationTicks: 240, pitch: 36, velocity: 0.8 }] } },
+      { kind: "addPart", part: part("bass", "bass") },
+      { kind: "addPart", part: { ...part("theme-lead", "melody"), notes: [], placements: [{ id: "theme-placement", motifId: "theme", startTick: 15360, repeats: 1, transpose: 0 }] } },
+      { kind: "addPart", part: { ...part("pad", "harmony"), effects: [{ id: "wash", type: "stompboxReverb" as const, parameters: { feedbackFactor: 0.8, mix: 0.4 } }] } },
+      { kind: "defineMotif", motif: { id: "theme", partId: "theme-lead", name: "Main theme", lengthTicks: 3840, notes: [{ id: "phrase-note", startTick: 0, durationTicks: 960, pitch: 67, velocity: 0.75 }] } }
+    ]);
+    const direction = "Give this more space. Thin the drums, shorten the ambience, but keep the theme and bass.";
+    const thinner = applyNativeOperations(base, [{ kind: "replaceNotes", partId: "drums", notes: base.parts.find((item) => item.id === "drums")!.notes.slice(0, 1) }, { kind: "setSectionEffectFeedback", partId: "pad", sectionId: "second-main", effectId: "wash", feedbackFactor: 0.35 }]);
+    expect(nativeCompletionIssues(thinner, direction, "revision", [], base, "second-main")).toEqual([]);
+    const wrongTheme = applyNativeOperations(thinner, [{ kind: "replaceMotif", motif: { ...thinner.motifs[0]!, notes: [{ ...thinner.motifs[0]!.notes[0]!, pitch: 68 }] } }]);
+    expect(nativeCompletionIssues(wrongTheme, direction, "revision", [], base, "second-main")).toContain("Requested preservation of theme Main theme was not met");
+    const noAmbience = applyNativeOperations(base, [{ kind: "replaceNotes", partId: "drums", notes: base.parts.find((item) => item.id === "drums")!.notes.slice(0, 1) }]);
+    expect(nativeCompletionIssues(noAmbience, direction, "revision", [], base, "second-main")).toContain("Requested shorter ambience has no evidenced local reverb/delay feedback reduction");
   });
   it("preserves only the requested section of a role while allowing a later change", () => {
     const base = applyNativeOperations(melody, [{ kind: "setStructure", bars: 8, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "" }, { id: "chorus", name: "Chorus", startBar: 4, endBar: 8, intent: "" }] }, { kind: "addNotes", partId: "lead", notes: [{ id: "late", startTick: 15360, durationTicks: 960, pitch: 67, velocity: 0.7 }] }]);

@@ -6,7 +6,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createJob, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
+  createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resolveNativePreservation, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
 } from "@pocket/core";
 
 const config = getConfig();
@@ -113,6 +113,15 @@ app.get("/api/v1/native/library/presets", async (request) => {
 app.get("/api/v1/projects/:projectId/native", async (request) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   return nativeSnapshot(ownerId, projectId);
+});
+
+app.post("/api/v1/projects/:projectId/native/preservation-preview", async (request) => {
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  const body = z.object({ direction: z.string().trim().min(1).max(32_768), expectedNativeHeadId: idSchema, targetSectionId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).nullable() }).parse(request.body);
+  const snapshot = await nativeSnapshot(ownerId, projectId);
+  if (!snapshot.current || snapshot.currentRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("The selected arrangement changed; refresh before revising"), { statusCode: 409 });
+  if (body.targetSectionId && !snapshot.current.document.sections.some((section) => section.id === body.targetSectionId)) throw Object.assign(new Error("Selected section no longer exists"), { statusCode: 409 });
+  return { revisionId: snapshot.currentRevisionId, sectionId: body.targetSectionId, ...resolveNativePreservation(body.direction, snapshot.current.document, body.targetSectionId) };
 });
 
 app.get("/api/v1/projects/:projectId/native/requests/:jobId/draft", async (request) => {
