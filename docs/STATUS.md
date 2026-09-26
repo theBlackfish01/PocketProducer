@@ -1,5 +1,11 @@
 # Live implementation status
 
+## Native producer tool recovery (2026-09-27)
+
+The LangSmith failure from invalid parallel `inspect_native_capability` calls is repaired locally. Expected tool/schema/path errors now return concise corrective results to the Deep Agent without aborting sibling discovery calls. A pinned valid path example is included; invalid nested SDK fields are handled too. Unexpected tool errors can pause as continuable work only after confirming job authority and all model-call effects; unknown outcomes remain fenced. No accepted version is selected on a pause. See [recovery contract](native-tool-recovery.md).
+
+Provider-free evidence: `pnpm check` passed lint, types, 23 unit files / 130 tests and production build; `pnpm test:integration` passed 4 files / 66 tests, including actual parallel-call correction and pause/resume with isolated PostgreSQL. A final targeted schema-field rerun is recorded in the completion report. No OpenAI, Gemini, Audiotool or LangSmith call was made by these tests; new live provider spend is US$0. The masked trace still cannot reveal the original invalid arguments, and live-model recovery is not yet verified.
+
 ## Current: Start → Producer workspace (2026-09-26)
 
 Implemented locally on `8ee9fcf`, preserving the user's LangSmith additions and unrelated course/walkthrough edits. **New session** is a focused idea-entry screen; server acceptance opens a durable workspace with the existing score beside **Producer**, or an Arrangement/Producer switch on narrower screens. Sounds, parts, history, usage and Audiotool are optional panels. The logo, palette, score/section inspection, protected revisions, comparison and explicit saved-version choice remain intact. Successful revisions still become current automatically and are labeled honestly.

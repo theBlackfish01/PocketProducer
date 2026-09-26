@@ -10,7 +10,7 @@ import { z } from "zod";
 import { getConfig, REPOSITORY_ROOT } from "../config.js";
 import { producerTraceConfig } from "../observability.js";
 import { canonicalHash } from "../domain/composition.js";
-import type { JobRecord } from "../db/repository.js";
+import { heartbeat, JobControlError, type JobRecord } from "../db/repository.js";
 import { AccountedOpenAICalls, checkpoint } from "../agent/producer.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "../providers/effects.js";
 import { discoverNativeCapabilities, inspectNativeCapability } from "./catalog.js";
@@ -19,14 +19,26 @@ import { interpretNativeBrief, resolveNativePreservation } from "./intent.js";
 import { adoptUnfinishedNativeProducerEffect, advanceNativePlan, loadConfirmedNativeModelCalls, loadNativePlan, loadNativeProducerCompletion, loadNativeSteps, nativeModelEffectsSafeToContinue, recordNativeProducerCompletion, recoverConfirmedNativeProducerResult, saveNativePlan, saveNativeStep } from "./repository.js";
 import { nativeFormOperations, nativeFormSchema } from "./form.js";
 import { searchNativeResources, type NativeSourceProfile } from "./resources.js";
-import type { NativeLibrary } from "./library.js";
+import { NativeLibraryError, type NativeLibrary } from "./library.js";
 import { jobNativeRunLimits, originalNativeRequest } from "./profile.js";
 import { nativePlanSchema } from "./plan.js";
 import { automationInsideEqual, automationOutsideEqual, automationValueAt } from "./section.js";
+import { NativeUnexpectedToolError, nativeToolArgumentFeedback, nativeToolFeedback, nativeToolFeedbackText, type NativeToolFeedback } from "./tool-recovery.js";
 
 export interface NativeSource { assetId: string; assetHash: string; durationSeconds: number; rights: string; name?: string; profile?: NativeSourceProfile }
+class NativeGraphInterruptedError extends Error {
+  constructor() { super("A construction step stopped unexpectedly. Confirmed work can be continued after review."); this.name = "NativeGraphInterruptedError"; }
+}
+class NativeModelOutcomeUncertainError extends Error {
+  constructor() { super("A model call has no confirmed outcome. Its usage must be reconciled before continuation."); this.name = "NativeModelOutcomeUncertainError"; }
+}
 const op = (value: unknown): NativeOperation => nativeOperationSchema.parse(value);
-const toolFailure = (error: unknown): string => `Error: ${error instanceof Error ? error.message : "Native tool failed"}`;
+const toolFailure = (error: unknown): string => {
+  // Never turn loss of authority or an ambiguous provider outcome into a
+  // routine model correction. These require the worker's fenced lifecycle.
+  if (error instanceof JobControlError || error instanceof TypeError || error instanceof AggregateError || (error instanceof NativeLibraryError && error.code === "provider-failed") || (error instanceof Error && (("code" in error && typeof error.code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z]+)$/.test(error.code)) || /NATIVE_STEP_REPLAY_CONFLICT|NATIVE_HISTORY_INCONSISTENT|outcome is not safely replayable|uncertain|ECONN|network|socket|timeout/i.test(error.message)))) throw error;
+  return `Error: ${error instanceof Error ? error.message : "Native tool failed"}`;
+};
 export function assertNativeModelCompletion(response: unknown): void {
   if (!response || typeof response !== "object") return;
   const value = response as Record<string, unknown>;
@@ -486,6 +498,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
     let inspectionHash: string | null = null;
     const inspectedSections = new Set<string>();
     const brief = interpretNativeBrief(input.direction);
+    const failedToolCalls = new Map<string, number>();
     files["/workspace/context.json"] = { content: JSON.stringify({ pinned: context, brief: { hash: canonicalHash(input.direction), length: input.direction.length, readWith: "read_native_brief" }, conservativeBriefChecks: brief, mode: input.mode, targets: { partId: input.targetPartId, sectionId: input.targetSectionId }, ownedSources: input.sources }), mimeType: "application/json", created_at: created, modified_at: created };
     const safeContext = { revisionId: context.revisionId, documentHash: context.documentHash, protectedPartIds: context.parts.filter((part) => part.protected).map((part) => part.id), audio: context.audio };
     const modelOptions = { model: modelName, apiKey: config.OPENAI_API_KEY, useResponsesApi: true, reasoning: { effort: run?.reasoningEffort ?? config.NATIVE_REASONING_EFFORT }, maxRetries: 0, timeout: Math.min(180_000, Math.max(1_000, new Date(input.session.job.deadlineAt).getTime() - Date.now())) } as const;
@@ -517,7 +530,26 @@ export async function produceNative(input: { session: NativeToolSession; directi
         tool((raw: unknown) => { const { sectionId, focusPartId } = z.object({ sectionId: z.string(), focusPartId: z.string().optional() }).parse(raw); latestInspection = analyzeNativeSection(input.session.document, sectionId, focusPartId); const hash = canonicalHash(input.session.document); if (inspectionHash !== hash) { inspectionHash = hash; inspectedSections.clear(); } inspectedSections.add(sectionId); return latestInspection; }, { name: "inspect_native_section", description: "Inspect a section's actual note onsets, sounding overlap, density, ranges, repeated motif instances, source intervals and automation targets. Includes material spanning its boundaries; optionally preview eight notes for one part.", schema: z.object({ sectionId: z.string(), focusPartId: z.string().optional() }) }),
         tool(async (raw: unknown) => { try { const { stepKey, operations } = z.object({ stepKey: z.string().regex(/^[a-z0-9-]{1,96}$/), operations: z.array(nativeOperationSchema).min(1).max(128) }).parse(raw); if (operations.some((value) => value.kind === "protect")) throw new Error("Only the user's explicit protection control may change locks"); const result = await input.session.apply(stepKey, operations); latestInspection = null; inspectionHash = null; inspectedSections.clear(); return result; } catch (error) { return toolFailure(error); } }, { name: "apply_native_batch", description: "Apply bounded validated musical operations, then read the actual diff. harmonizeSection writes exact voiced chord cycles; sequenceSectionPattern writes MIDI groove/ghost notes with timing and velocity; varyMotifInstance develops one phrase and handoffMotif transfers a proven family to another instrument. Use group effect add/replace/move/remove and setGroupParallel for shared routing, or setParallelChain for one part. setSectionClipGain/silenceSectionClips accept an optional regionId to target one crossing clip; moveSectionClip retimes a fully contained clip, while shiftSectionClip offsets only the selected section of a crossing clip and crops at its boundaries without disturbing outside source phase. editSectionAutomation preserves outside-section behavior; setSectionEffectFeedback creates a local reverb/delay feedback change from an explicit baseline and restores it at the section end. Instrument/operator modulation, sidechain, sends and master settings are mapped. Use stable unique step keys; protections and revision scope are enforced.", schema: z.object({ stepKey: z.string().regex(/^[a-z0-9-]{1,96}$/), operations: z.array(nativeOperationSchema).min(1).max(128) }) })
       ],
-      middleware: [createMiddleware({ name: "VerifiedNativeContext", wrapModelCall: async (request, handler) => {
+      middleware: [createMiddleware({ name: "VerifiedNativeContext", wrapToolCall: async (request, handler) => {
+        const respond = (feedback: NativeToolFeedback) => {
+          const key = `${request.toolCall.name}:${canonicalHash(request.toolCall.args)}`;
+          const failures = (failedToolCalls.get(key) ?? 0) + 1;
+          failedToolCalls.set(key, failures);
+          return new ToolMessage({ tool_call_id: request.toolCall.id ?? "", name: request.toolCall.name, status: "error", content: nativeToolFeedbackText(feedback, failures >= 3) });
+        };
+        const schema = request.tool && "schema" in request.tool ? request.tool.schema : null;
+        const invalid = nativeToolArgumentFeedback(schema, request.toolCall.args);
+        if (invalid) return respond(invalid);
+        try { return await handler(request); }
+        catch (error) {
+          const feedback = nativeToolFeedback(request.toolCall.name, error);
+          if (!feedback) {
+            if (error instanceof JobControlError || (error instanceof Error && /NATIVE_STEP_REPLAY_CONFLICT|NATIVE_HISTORY_INCONSISTENT|outcome is not safely replayable|EFFECT_(?:DISPATCHED|UNCERTAIN)/i.test(error.message))) throw error;
+            throw new NativeUnexpectedToolError(request.toolCall.name, error);
+          }
+          return respond(feedback);
+        }
+      }, wrapModelCall: async (request, handler) => {
         const hasConfirmedMusic = input.session.applied.length > 0;
         accounting.setOutputTokenBound(hasConfirmedMusic ? smallerOutputTokens : outputTokens);
         if (!hasConfirmedMusic) { const response = await handler({ ...request, model: startingModel }); assertNativeModelCompletion(response); return response; }
@@ -569,6 +601,17 @@ export async function produceNative(input: { session: NativeToolSession; directi
     // producer result and not an unknown remote effect. Leave its aggregate
     // dispatched so the same job can continue from durable steps if budget
     // remains or is explicitly extended later.
+    if (error instanceof AggregateError || error instanceof NativeUnexpectedToolError || (error instanceof Error && error.message.startsWith("Unexpected native tool failure in "))) {
+      const control = error instanceof AggregateError ? error.errors.find((item: unknown) => item instanceof JobControlError) : undefined;
+      if (control) throw control;
+      // LangGraph can still abort a whole superstep on an unexpected tool
+      // exception. Resume only if every model call has a confirmed outcome;
+      // never re-dispatch a call whose billing/result is ambiguous.
+      const currentControl = await heartbeat(input.session.job);
+      if (currentControl) throw new JobControlError(currentControl, "Construction attempt is no longer active");
+      if (!await nativeModelEffectsSafeToContinue(input.session.job.id)) throw new NativeModelOutcomeUncertainError();
+      throw new NativeGraphInterruptedError();
+    }
     if (error instanceof Error && (/^(NATIVE_INCOMPLETE|MODEL_CALL_LIMIT_EXCEEDED|MODEL_BUDGET_EXCEEDED|OPENAI_INPUT_LIMIT_EXCEEDED|OPENAI_INCOMPLETE_RESPONSE)/.test(error.message) || error.name === "GraphRecursionError" || /Recursion limit of \d+ reached/.test(error.message)) && input.session.applied.length && await nativeModelEffectsSafeToContinue(input.session.job.id)) throw error;
     await failProviderEffect({ effectId: reservation.id, job: input.session.job, errorClass: error instanceof Error ? error.name : "UnknownError", uncertain: error instanceof Error && /timeout|abort|network|ECONN|socket|uncertain/i.test(`${error.name} ${error.message}`) });
     throw error;

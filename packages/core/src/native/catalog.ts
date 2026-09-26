@@ -5,6 +5,9 @@ import { getSchemaLocationDetails, schemaPathToSchemaLocation, type SchemaPath }
 import { nativeParameterRanges } from "./model.js";
 
 export const NATIVE_CATALOG_VERSION = "nexus-0.0.17-schema-v2";
+export class NativeSchemaPathError extends Error {
+  constructor(message: string) { super(message); this.name = "NativeSchemaPathError"; }
+}
 const writable = new Set(["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "audioSplitter", "audioMerger", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "sample", "audioDevice", "audioTrack", "audioRegion"]);
 const musicalMeaning: Record<string, { family: string; purpose: string; caveat?: string }> = {
   heisenberg: { family: "instrument", purpose: "Subtractive synth for basses, pads and leads." },
@@ -64,13 +67,18 @@ async function schemaRoots(): Promise<string[]> {
 export async function discoverNativeCapabilities(query = "", limit = 24) {
   const normalized = query.trim().toLowerCase();
   const roots = await schemaRoots();
-  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length, matches: roots.filter((type) => !normalized || `${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""}`.toLowerCase().includes(normalized)).slice(0, Math.max(1, Math.min(64, limit))).map((type) => ({ type, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), operationContract: nativeOperationContract(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
+  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length, pathExample: "/beatbox8Pattern/length", pathFormat: "/entity/field; use a root returned in matches and slash-separated schema fields", matches: roots.filter((type) => !normalized || `${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""}`.toLowerCase().includes(normalized)).slice(0, Math.max(1, Math.min(64, limit))).map((type) => ({ type, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), operationContract: nativeOperationContract(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
 }
 
 export async function inspectNativeCapability(path: string) {
-  if (!/^\/[A-Za-z0-9]+(?:\/(?:[A-Za-z0-9]+|\[[0-9]+\]))*$/.test(path) || path.length > 160) throw new Error("Invalid Nexus schema path");
+  if (!/^\/[A-Za-z0-9]+(?:\/(?:[A-Za-z0-9]+|\[[0-9]+\]))*$/.test(path) || path.length > 160) throw new NativeSchemaPathError("Invalid Nexus schema path");
   const root = path.split("/")[1]!;
-  if (!(await schemaRoots()).includes(root)) throw new Error("Nexus entity is not in the pinned schema");
-  const details = getSchemaLocationDetails(schemaPathToSchemaLocation(path as SchemaPath));
+  if (!(await schemaRoots()).includes(root)) throw new NativeSchemaPathError("Nexus entity is not in the pinned schema");
+  let details: ReturnType<typeof getSchemaLocationDetails>;
+  try { details = getSchemaLocationDetails(schemaPathToSchemaLocation(path as SchemaPath)); }
+  catch (error) {
+    if (error instanceof Error && /^can't find field /.test(error.message)) throw new NativeSchemaPathError("Field is not in the pinned Nexus schema");
+    throw error;
+  }
   return { version: NATIVE_CATALOG_VERSION, path, musical: musicalMeaning[root] ?? { family: "other", purpose: "Not yet curated for construction", caveat: "Discovery does not imply writable support" }, writableInPocketProducer: writable.has(root), operationContract: nativeOperationContract(root), schema: details };
 }

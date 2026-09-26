@@ -290,6 +290,7 @@ describe("native construction contracts", () => {
     expect((await discoverNativeCapabilities("audioRegion")).matches[0]?.writableInPocketProducer).toBe(true);
     expect((await discoverNativeCapabilities("audioRegion")).matches[0]?.operationContract.prerequisite).toMatch(/Owned ready WAV/);
     const detail = await inspectNativeCapability("/beatbox8Pattern/length");
+    await expect(inspectNativeCapability("/beatbox8Pattern/notReal")).rejects.toThrow("Field is not in the pinned Nexus schema");
     expect(detail.schema.type).toBe("primitive");
     expect(toNexusTicks(960)).toBe(3840);
   });
