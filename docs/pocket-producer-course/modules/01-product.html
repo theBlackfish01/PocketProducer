@@ -1,0 +1,34 @@
+<section class="module" id="module-1" aria-labelledby="title-1">
+  <div class="module-inner">
+    <div class="hero">
+      <div class="chapter-heading">
+        <div>
+          <span class="hero-kicker">An interactive architecture field guide · 27 September 2026</span>
+          <h1 id="title-1">How Pocket Producer works.</h1>
+          <p class="deck">Follow a musical idea through the Listening Room, the durable producer, the score, and the boundaries where evidence matters.</p>
+          <div class="hero-meta"><span class="pill green">8 chapters</span><span class="pill">Read in order or jump around</span><span class="pill orange">Native ≠ audio</span></div>
+        </div>
+        <div class="hero-graphic" aria-hidden="true"><div class="graphic-center"><span>Listening Room</span>Direction → structure → revision</div></div>
+      </div>
+    </div>
+    <div class="section-label">01 / The product contract</div>
+    <h3>One composition workspace</h3>
+    <p class="lead">Describe a piece, follow the producer, inspect its score, and revise or copy it to Audiotool. Optional owned WAVs live under <strong>Sounds</strong>. The separate Playable audio product has been removed; there is no second editor or generated-audio history.</p>
+    <div class="interactive" data-tabs>
+      <div class="interactive-head"><h3>Switch the product lens</h3><p class="hint">Compare saved music with the optional recordings used to make it.</p></div>
+      <div class="tablist" role="tablist" aria-label="Product path"><button id="mode-native" role="tab" aria-controls="mode-native-panel" aria-selected="true">Saved composition</button><button id="mode-source" role="tab" aria-controls="mode-source-panel" aria-selected="false">Optional source sounds</button></div>
+      <div class="tab-panel" id="mode-native-panel" role="tabpanel" aria-labelledby="mode-native">
+        <h4>A native v2 score, not a recording</h4><p>Sections, parts, exact notes, reusable motifs, source clips, effects, routing, and automation are saved as an immutable document. You can inspect and revise its structure, compare versions, and explicitly synchronize an editable Audiotool project. Native rendering and playback are intentionally deferred.</p><span class="pill orange">No native play button</span> <span class="pill green">Symbolic inspection</span>
+      </div>
+      <div class="tab-panel" id="mode-source-panel" role="tabpanel" aria-labelledby="mode-source" hidden>
+        <h4>Your recordings, not a preview of the piece</h4><p>Upload or record an owned sound under Sounds, audition it with labeled seek and volume controls, and select it for your next direction. This plays the original source only. It does not render or play the constructed composition.</p><span class="pill green">Source audition</span> <span class="pill">Optional input</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card"><small>The user-facing promise</small><h3>Construct, inspect, revise</h3><p>The user can say what they want musically, inspect what was actually built, preserve parts, and compare saved alternatives. The score must never imply sound measurements it does not have.</p></div>
+      <div class="card orange"><small>The honesty rule</small><h3>Editable does not mean audible</h3><p>A valid SDK document or an Audiotool project link is evidence of structure and mapping. It is not proof the native piece rendered, played, sounded good, or used a source with independent rights.</p></div>
+    </div>
+    <div class="source-box"><strong>Grounding</strong><a href="../PROJECT-WALKTHROUGH.md">Current project walkthrough</a> · <a href="../adr/002-native-construction-first.md">Native-first decision</a> · <a href="../native-text-to-music.md">Construction contract</a></div>
+    <div class="chapter-end"><span>Next: where a request goes after you press Create arrangement.</span><a href="#module-2">02 / The system →</a></div>
+  </div>
+</section>

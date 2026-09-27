@@ -26,6 +26,7 @@
     "test:e2e": "pnpm test:e2e:prepare && playwright test --config tests/playwright.config.ts",
     "test:visual": "playwright test --config tests/visual.playwright.config.ts",
     "test:course": "tsx scripts/verify-course.ts",
+    "test:course:static": "tsx scripts/verify-course-static.ts",
     "verify:native-live": "tsx scripts/verify-native-live.ts",
     "reconcile:native-sync": "tsx scripts/reconcile-native-sync.ts",
     "budget:status": "tsx scripts/check-provider-budget.ts",
