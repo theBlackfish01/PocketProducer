@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { claimJobById, createNativeJob, createProject, dispatchOutbox, failProviderEffect, getConfig, getPool, markEffectDispatched, reserveProviderEffect, type JobRecord } from "@pocket/core";
 import { createNativeLibrary, jobSnapshot, nativeSnapshot } from "@pocket/core";
 import { processJob } from "@pocket/worker";
-import { AIMessage, CompatibleProducerModel, AccountedOpenAICalls } from "@pocket/core/test-support";
+import { AIMessage, fakeModel, CompatibleProducerModel, AccountedOpenAICalls } from "@pocket/core/test-support";
 const config = getConfig(), original = { ...config };
 const owners: string[] = [], jobs: JobRecord[] = [];
 beforeAll(async () => {
@@ -62,6 +62,16 @@ it.each(["gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"])("constructs throu
   expect(requests[0]?.tools.some((t) => t.function.name === "compose_native_form")).toBe(true);
   expect(JSON.stringify(requests[1]?.messages)).toContain("Wire-built phrase");
 }, 30_000);
+
+it("captures Luna xhigh and completes a scripted construction through the real worker", async () => {
+  const selected = await job(owners[1]!, "gpt-6-luna");
+  expect(selected.request._nativeRun).toMatchObject({ model: "gpt-6-luna", provider: "openai", reasoningEffort: "xhigh" });
+  const form = { title: "Luna phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
+  await processJob(selected, { scriptedModel: fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respond(new AIMessage("Finished")), library: createNativeLibrary(null) });
+  expect((await jobSnapshot(selected.ownerId, selected.id)).state).toBe("succeeded");
+  expect((await nativeSnapshot(selected.ownerId, selected.projectId)).current?.document.parts[0]?.notes[0]?.pitch).toBe(64);
+  expect((await getPool().query("SELECT request FROM job WHERE id=$1", [selected.id])).rows[0].request._nativeRun).toEqual(selected.request._nativeRun);
+});
 
 it("holds a missing Gateway cost as unknown through the actual accounting callback", async () => {
   Object.assign(config, { INITIAL_BUILD_API_BUDGET_USD: 100, MAX_JOB_COST_USD: 100, DEFAULT_USER_BUDGET_USD: 100, GATEWAY_POOL_BUDGET_USD: 100 });

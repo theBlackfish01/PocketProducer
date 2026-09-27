@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { getConfig } from "../config.js";
 
-export const producerModelSchema = z.enum(["gpt-6-sol", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"]);
+// Keep historical job models readable; only current choices enter through the public API.
+export const producerModelSchema = z.enum(["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"]);
+export const selectableProducerModelSchema = z.enum(["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash"]);
 export type ModelProvider = "openai" | "gemini" | "gateway";
 export function modelProvider(model: string): ModelProvider {
   if (model.startsWith("gpt-")) return "openai";
@@ -16,8 +18,8 @@ export function modelCredentials(model: string) {
     : { provider, apiKey: config.AI_GATEWAY_API_KEY ?? config.VERCEL_AI_GATEWAY_API_KEY, baseURL: "https://ai-gateway.vercel.sh/v1" };
 }
 export function producerModels() {
-  return producerModelSchema.options.map((id) => ({ id,
-    label: id === "gpt-6-sol" ? "GPT-6 Sol" : id === "gemini-3.7-flash" ? "Gemini 3.7 Flash" : "DeepSeek V4 Pro",
+  return selectableProducerModelSchema.options.map((id) => ({ id,
+    label: id === "gpt-6-sol" ? "GPT-6 Sol" : id === "gpt-6-luna" ? "GPT-6 Luna · xhigh" : "Gemini 3.7 Flash",
     provider: modelProvider(id), available: getConfig().FIXTURE_MODE || Boolean(modelCredentials(id).apiKey),
   }));
 }

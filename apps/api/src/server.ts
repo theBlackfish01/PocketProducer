@@ -5,7 +5,7 @@ import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
 import { registerActivityRoutes } from "./activity-stream.js";
-import { assistMusicalPrompt, byteRange, clearConnectedProfile, connectedAudiotoolProfile, producerModels, producerModelSchema } from "@pocket/core";
+import { assistMusicalPrompt, byteRange, clearConnectedProfile, connectedAudiotoolProfile, producerModels, selectableProducerModelSchema as producerModelSchema } from "@pocket/core";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createNativeLibrary, createProject, decodeWav, encodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot,
   abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listNativeSoundFeedback, listProjects, nativeDraftView, nativePresetRecipes, nativeSnapshot, providerAvailability, readNativeRecipe, requireProject, resolveNativePreservation, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, saveNativeSoundFeedback, selectNativeRevision, storeImmutableAudio

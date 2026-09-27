@@ -43,6 +43,6 @@ export function reconcileNativeDraft(raw: unknown, snapshot: NativeSnapshot, ass
     protectedPartIds: headChanged ? fallback.protectedPartIds : [...new Set(requestedProtections.filter((id) => partIds.has(id)))],
     sourceIds: [...new Set(requestedSources.filter((id) => assetIds.has(id)))],
     profile: saved.profile === "extended" ? "extended" : "standard",
-    model: typeof saved.model === "string" && ["gpt-6-sol", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"].includes(saved.model) ? saved.model : "gpt-6-sol"
+    model: typeof saved.model === "string" && ["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash"].includes(saved.model) ? saved.model : "gpt-6-sol"
   }, notices }
 }

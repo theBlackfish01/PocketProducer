@@ -12,18 +12,22 @@ test("producer selection persists and reaches the real job without changing a ru
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
   const chooser = page.getByRole("combobox", { name: "Producer model" });
   await expect(chooser).toBeEnabled();
-  await chooser.selectOption("gemini-3.7-flash");
+  await expect(chooser.locator("option")).toHaveText(["GPT-6 Sol", "GPT-6 Luna · xhigh", "Gemini 3.7 Flash"]);
+  const projectId = new URL(page.url()).pathname.split("/")[2]!;
+  const rejected = await page.request.post(`/api/v1/projects/${projectId}/native/constructions`, { headers: { "Idempotency-Key": `removed-model-${Date.now()}` }, data: { direction: "A small warm melody", model: "deepseek/deepseek-v4-pro-0813", expectedNativeHeadId: null } });
+  expect(rejected.status()).toBe(422);
+  await chooser.selectOption("gpt-6-luna");
   await direction(page).fill("A small warm melody over a soft pulse");
   await page.reload();
-  await expect(chooser).toHaveValue("gemini-3.7-flash");
+  await expect(chooser).toHaveValue("gpt-6-luna");
   await page.screenshot({ path: resolve(evidence, "model-picker-desktop.png"), fullPage: true });
   const sent = page.waitForRequest((r) => r.url().endsWith("/native/constructions") && r.method() === "POST");
   await page.getByRole("button", { name: "Create arrangement" }).click();
-  expect((await sent).postDataJSON()).toMatchObject({ model: "gemini-3.7-flash" });
+  expect((await sent).postDataJSON()).toMatchObject({ model: "gpt-6-luna" });
   await expect(page.locator(".producer-workspace-header")).toContainText("Version 1", { timeout: 90_000 });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(chooser).toBeVisible();
-  await chooser.selectOption("deepseek/deepseek-v4-pro-0813");
+  await chooser.selectOption("gemini-3.7-flash");
   await page.screenshot({ path: resolve(evidence, "model-picker-phone.png"), fullPage: true });
 });
 async function producer(page: Page) { await expect(page.locator(".producer-workspace-header")).toBeVisible(); const tab = page.getByRole("button", { name: "Producer", exact: true }); if (await tab.isVisible()) await tab.click(); }

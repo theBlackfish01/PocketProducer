@@ -2,10 +2,38 @@ import { afterEach, expect, it, vi } from "vitest";
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { getConfig } from "../config.js";
 import { nativeRunLimits, jobNativeRunLimits } from "../native/profile.js";
-import { CompatibleProducerModel, compatibleMessages, reportedGatewayCost } from "./compatible-model.js";
-import { modelCredentials, producerModels } from "./models.js";
+import { CompatibleProducerModel, compatibleMessages, producerChatModel, reportedGatewayCost } from "./compatible-model.js";
+import { modelCredentials, producerModels, selectableProducerModelSchema } from "./models.js";
 const config = getConfig(), original = { ...config };
-afterEach(() => { Object.assign(config, original); vi.restoreAllMocks(); });
+afterEach(() => { Object.assign(config, original); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it("offers Luna xhigh instead of DeepSeek while retaining captured historical jobs", () => {
+  expect(producerModels().map((model) => model.id)).toEqual(["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash"]);
+  expect(selectableProducerModelSchema.safeParse("deepseek/deepseek-v4-pro-0813").success).toBe(false);
+  const luna = nativeRunLimits("standard", "gpt-6-luna");
+  expect(luna).toMatchObject({ provider: "openai", model: "gpt-6-luna", reasoningEffort: "xhigh", pricing: { inputUsdPerMillion: 0.1, outputUsdPerMillion: 0.5 } });
+  config.NATIVE_REASONING_EFFORT = "low";
+  expect(jobNativeRunLimits({ _nativeRun: luna })).toEqual(luna);
+  const historical = nativeRunLimits("extended", "deepseek/deepseek-v4-pro-0813");
+  expect(jobNativeRunLimits({ _nativeRun: historical })).toEqual(historical);
+});
+
+it("sends Luna tools through OpenAI Responses with xhigh and the existing OpenAI key", async () => {
+  config.OPENAI_API_KEY = "offline-openai-test";
+  const transport = vi.fn(() => Promise.resolve(Response.json({ id: "resp_offline", object: "response", created_at: 1, status: "completed", model: "gpt-6-luna", output: [{ type: "function_call", id: "fc_offline", call_id: "call_offline", name: "inspect", arguments: "{}", status: "completed" }], usage: { input_tokens: 20, output_tokens: 10, total_tokens: 30, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 5 } } })));
+  vi.stubGlobal("fetch", transport);
+  const run = nativeRunLimits("standard", "gpt-6-luna");
+  const model = producerChatModel(run.model, 1000, run.reasoningEffort, 1000);
+  if (!model.bindTools) throw new Error("Producer must support tools");
+  const response = await model.bindTools([{ type: "function", function: { name: "inspect", parameters: { type: "object", properties: {} } } }]).invoke("Inspect the arrangement");
+  expect(response.tool_calls?.[0]?.name).toBe("inspect");
+  expect(transport).toHaveBeenCalledTimes(1);
+  const [url, init] = transport.mock.calls[0] as unknown as [string, RequestInit];
+  expect(String(url)).toBe("https://api.openai.com/v1/responses");
+  expect(new Headers(init.headers).get("authorization")).toBe("Bearer offline-openai-test");
+  if (typeof init.body !== "string") throw new Error("Expected a JSON request body");
+  expect(JSON.parse(init.body)).toMatchObject({ model: "gpt-6-luna", reasoning: { effort: "xhigh" }, tools: [{ type: "function", name: "inspect" }] });
+});
 
 it("captures the selected provider and price without changing old jobs", () => {
   for (const item of producerModels()) {

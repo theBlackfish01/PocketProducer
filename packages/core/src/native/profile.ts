@@ -11,7 +11,7 @@ export const nativeRunLimitsSchema = z.object({
   model: z.string().min(1),
   provider: z.enum(["openai", "gemini", "gateway"]).optional(),
   pricing: z.object({ inputUsdPerMillion: z.number().min(0), cachedInputUsdPerMillion: z.number().min(0).optional(), cacheWriteUsdPerMillion: z.number().min(0).optional(), outputUsdPerMillion: z.number().min(0), modality: z.enum(["text", "audio"]), source: z.string(), verifiedOn: z.string() }).optional(),
-  reasoningEffort: z.enum(["low", "medium", "high"]),
+  reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]),
   maxCalls: z.number().int().min(0).max(300),
   maxInputTokens: z.number().int().min(1_000).max(256_000),
   maxOutputTokens: z.number().int().min(400).max(65_536),
@@ -49,7 +49,7 @@ export function nativeRunLimits(profile: NativeProfile, selectedModel?: string):
     ? { calls: 80, input: 160_000, output: 32_768, seconds: 3_600, cost: 15 }
     : { calls: 80, input: 128_000, output: 16_384, seconds: 1_800, cost: 5 };
   return nativeRunLimitsSchema.parse({
-    profile, model, provider: modelProvider(model), pricing: pricingEvidence(modelProvider(model), model), reasoningEffort: config.NATIVE_REASONING_EFFORT,
+    profile, model, provider: modelProvider(model), pricing: pricingEvidence(modelProvider(model), model), reasoningEffort: model === "gpt-6-luna" ? "xhigh" : config.NATIVE_REASONING_EFFORT,
     maxCalls: Math.min(target.calls, config.MAX_MODEL_CALLS_PER_JOB),
     maxInputTokens: Math.min(target.input, config.MAX_OPENAI_INPUT_TOKENS),
     maxOutputTokens: Math.min(target.output, config.NATIVE_MODEL_OUTPUT_TOKENS),

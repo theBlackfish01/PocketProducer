@@ -31,4 +31,4 @@ export * from "./providers/effects.js";
 export * from "./providers/pricing.js";
 export * from "./providers/prompt-assistance.js";
 export * from "./storage/local-storage.js";
-export { producerModels, producerModelSchema } from "./providers/models.js";
+export { producerModels, producerModelSchema, selectableProducerModelSchema } from "./providers/models.js";
