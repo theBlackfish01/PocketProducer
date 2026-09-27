@@ -1,5 +1,9 @@
 # Live implementation status
 
+## README presentation cleanup — 2026-09-27
+
+Removed the requested “Status, privacy and boundaries” section and its license paragraph from the README; separate security/provenance documents remain unchanged. Cropped only the screenshot's bottom whitespace, from 1600×1221 to 1600×1145, retaining the complete interface and a small bottom margin. Visually inspected the crop and checked the Git diff. Documentation/image-only change; no application behavior, environment, provider calls or data changes, and no application test rerun was needed.
+
 ## Private GitHub preparation — 2026-09-27
 
 Created `theBlackfish01/PocketProducer` and verified **PRIVATE** before uploading source. Reviewed the pending model-choice and course work into separate commits, refreshed README/setup with an actual isolated-fixture screenshot, added security/provenance guidance, zero-cost first-run defaults and portable CI/install configuration. [Readiness review](REPOSITORY-READINESS.md). Existing credentials, `.env`, accepted data and financial accounting are unchanged; no paid API call, remote music mutation, deployment or submission occurred. A history/working-tree/archive credential scan found no matches; this is heuristic evidence, not a security certification.

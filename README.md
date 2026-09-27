@@ -171,16 +171,6 @@ scripts/           Setup, verification and operator diagnostics
 docs/              Architecture, design, evidence and project walkthrough
 ```
 
-## Status, privacy and boundaries
-
-- **Private development preview.** Loopback authentication uses one development identity. Per-owner accounting is tested, but public multi-user authentication and deployment are not shipped.
-- **No native full-mix playback yet.** Construction validity, symbolic critique, remote structural fidelity and heard musical quality are separate kinds of evidence.
-- **Selective live evidence.** Some prior model and Audiotool-copy runs are documented; they do not certify every model, instrument, source or generated arrangement. Luna xhigh has offline request/workflow coverage, not a completed live quality evaluation.
-- **Private by default.** `.env`, local audio, OAuth encryption keys, raw traces and database data stay out of Git. LangSmith is optional; trace input/output hiding defaults to enabled. See [security guidance](SECURITY.md).
-- **No public deployment or submission is performed by these scripts.** A demo video and public-release checklist are separate delivery steps.
-
-This private snapshot does not grant a project-wide open-source license. Dependency and asset provenance are recorded in [third-party notices](THIRD_PARTY_NOTICES.md). Choose an appropriate project license before any public release.
-
 ---
 
 <div align="center"><em>A little more intention. A little more room to make it yours.</em></div>
