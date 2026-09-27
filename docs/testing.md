@@ -1,5 +1,33 @@
 # Verification record
 
+## Focused finishing recovery (2026-09-27)
+
+New `packages/core/src/native/review-model.test.ts` covers JSON fences, malformed/schema-invalid responses, missing no-change reasons, invented musical IDs, truncation and semantic versus bookkeeping plan hashes. `convergence.test.ts` covers bounded complete-group compaction, exact brief/current plan/latest error/pending-call preservation and opaque message metadata. `tests/integration/native-finishing-recovery.test.ts` drives real producer tools/worker/ledger through bounded critic repair, reuse, changed-plan invalidation, late stale review rejection, input-stop continuation at unchanged caps, exhausted-review blocking, varied-inspection stagnation and interruption after settled recovery before plan attachment. That last boundary is simulated in durable state, not a separately killed process.
+
+Executed with pinned local binaries: full `vitest` unit run **33 files / 174 tests** (156.59 s), full `tests/integration` **9 files / 91 tests** (263.60 s), expanded convergence/review/native/finishing subset **4 files / 63 tests** (112.80 s), and full `playwright test --config tests/playwright.config.ts` **16 Chromium journeys** (1.9 min). Final repair-edge assertions were added afterward; their targeted results are in STATUS. `tsc -b`, `eslint . --max-warnings=0` and Vite build passed (3.23 s; existing chunk warning). No provider network generation or live Audiotool mutation was used. Database integration and E2E suites ran serially. Broader tests retain actual worker restart/contention, cancellation/unknown effects/ownership, protected immutable history and phone/reduced-motion behavior.
+
+## Model selection and shared usage
+
+`packages/core/src/providers/models.test.ts` checks fixed routes, captured models/prices, protocol/tool-context round trips and missing Gateway billing without generation replay. `tests/integration/model-selection.test.ts` drives scripted wire responses through the real worker and tools into saved canonical notes; it also covers changed-model idempotency conflicts, owner quotas, competing owners against a shared provider cap, and unknown billing holds. No test claims real-model musical quality. The normal Chromium suite verifies selection persistence and request capture on desktop/phone alongside existing create/revise/compare/restore. API/worker test fixtures clear Gateway keys in addition to OpenAI/Gemini; provider generation is blocked in fixture mode unless a scripted transport is explicitly injected.
+
+## Clarity refinement and finishing (2026-09-27)
+
+Executed from the repository with pinned local binaries (PowerShell `pnpm` is not on PATH):
+
+| Command/check | Actual result |
+| --- | --- |
+| `.\node_modules\.bin\tsc.cmd -b` and `.\node_modules\.bin\eslint.cmd . --max-warnings=0` | Passed |
+| `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts --exclude tests/integration/** --exclude tests/e2e/** --exclude tests/visual/**` | 31 files / 165 tests; 158.29 s |
+| `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts tests/integration` | 7 files / 80 tests; 178.27 s |
+| Final `vitest` subset `packages/core/src/native/convergence.test.ts tests/integration/native.test.ts` | 2 files / 53 tests; 106.51 s, after input-pressure safeguard |
+| `.\node_modules\.bin\playwright.cmd test --config tests/playwright.config.ts` | 15 Chromium journeys; final full rerun 2.6 min |
+| `.\node_modules\.bin\playwright.cmd test --config tests/visual.playwright.config.ts` | 15 fixture UI tests; 2.4 min; start/paused-recovery final subset 2/2 |
+| From `apps/web`: `.\node_modules\.bin\vite.cmd build` | Passed; 4.90 s; existing >500 kB bundle warning |
+
+New regression evidence includes 53 progressing production model turns, same-job repeated-loop pause and checkpoint guidance recovery, input-pressure eviction of optional recall only, unchanged critic limits, explicit 40→80 extension with no fresh job/copy, in-place long-message expansion, compact dialogs/focus return, aligned desktop footer, phone/reduced-motion layout and retained pending direction. Existing process restart/contending-worker, accounting/ownership/protection and microphone-cleanup checks remain in the full suites. Ordinary tests isolate the `_test` database and disable providers; the website continuation described in STATUS was separately authorized and paid. It **did not complete**; do not describe offline success as real-model convergence or listening evidence.
+
+Visually inspected `.local/evidence/clarity-start-desktop.png`, `clarity-start-phone.png`, `clarity-creating-phone.png` and `clarity-audiotool-dialog.png`. These are deterministic network-fixture screenshots, not proof of a completed live composition. Physical phones, screen readers, non-Chromium, live copy and native audio remain unverified in this pass.
+
 ## Single-workspace retirement (2026-09-27)
 
 Provider-free final verification:
