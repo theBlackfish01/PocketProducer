@@ -11,6 +11,7 @@ let ownerId = "";
 let projectId = "";
 const extraProjects: string[] = [];
 const extraPaths: string[] = [];
+const originalLeaseSeconds = getConfig().JOB_LEASE_SECONDS;
 
 it("keeps offline native construction available after Audiotool consent expires", async () => {
   const expired = await optionalNativeLibraryConnection("owner", "client", () => Promise.reject(new AudiotoolSessionExpiredError()));
@@ -19,11 +20,16 @@ it("keeps offline native construction available after Audiotool consent expires"
 });
 
 beforeAll(async () => {
+  // Large synchronous offline-SDK validation can exceed the generic 3s test
+  // lease before timers run. Use the production lease for construction tests;
+  // dedicated expiry/restart suites retain their deliberately short leases.
+  getConfig().JOB_LEASE_SECONDS = 45;
   ownerId = (await getPool().query<{ id: string }>("INSERT INTO app_user(provider_subject,display_name) VALUES($1,'Native test owner') RETURNING id", [subject])).rows[0]!.id;
   projectId = (await createProject(ownerId, "Native integration room")).id;
 });
 
 afterAll(async () => {
+  getConfig().JOB_LEASE_SECONDS = originalLeaseSeconds;
   if (!projectId) return;
   for (const id of extraProjects) {
     await getPool().query("DELETE FROM native_sample_upload WHERE project_id=$1", [id]);
@@ -1172,6 +1178,8 @@ describe("audio-independent native job lifecycle", () => {
     extraProjects.push(scratchId);
     const created = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "seed-recheck", request: { direction: "A concise editable phrase", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
     await processJob(await claim(created.id));
+    const seeded = await jobSnapshot(ownerId, created.id);
+    expect(seeded.state, `${seeded.error_code}: ${seeded.error_message}`).toBe("succeeded");
     const current = (await nativeSnapshot(ownerId, scratchId)).current!;
     const sync = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-sync", idempotencyKey: "copy-recheck", request: { baseNativeRevisionId: current.id, expectedNativeHeadId: current.id }, expectedHeadId: current.id });
     const job = await claim(sync.id);
