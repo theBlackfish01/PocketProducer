@@ -196,6 +196,19 @@ describe("semantic native readback", () => {
     expect(delay.fields.feedbackFactor.value).toBeCloseTo(0.3, 3);
   });
 
+  it("treats a reordered SDK entity enumeration as the same remote music", async () => {
+    const offline = await mapped();
+    const reordered = {
+      queryEntities: {
+        ofTypes: (...types: string[]) => {
+          const query = (offline.queryEntities.ofTypes as (...names: string[]) => { get(): unknown[]; getOne(): unknown })(...types);
+          return { get: () => [...query.get()].reverse(), getOne: () => query.getOne() };
+        }
+      }
+    } as unknown as Parameters<typeof nativeStructuralReadback>[0];
+    expect(canonicalHash(nativeStructuralReadback(reordered))).toBe(canonicalHash(nativeStructuralReadback(offline)));
+  });
+
   it("retains multi-operator, envelope and playing-mode edits at actual SDK fields", async () => {
     const base = seedNativeDocument("Shape an expressive voice");
     const settings = { playModeIndex: 2, glideMs: 175, velocityFactor: 0.62, unisonoCount: 3, unisonoDetuneSemitones: 0.14, "operatorB.gain": 0.42, "operatorB.waveformIndex": 7, "envelopeMain.releaseTimeNormalized": 0.76, "filter.resonance": 1.31 };

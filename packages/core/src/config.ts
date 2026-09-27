@@ -16,7 +16,7 @@ const configSchema = z.object({
   DATABASE_URL: z.string().min(1).default("postgresql://pocket:pocket_local_only@127.0.0.1:54329/pocket_producer"),
   OBJECT_STORAGE_LOCAL_ROOT: z.string().default(".local/audio"),
   OPENAI_API_KEY: optionalSecret,
-  OPENAI_MODEL: z.string().min(1).default("gpt-6-astra"),
+  OPENAI_MODEL: z.string().min(1).default("gpt-6-sol"),
   LANGSMITH_API_KEY: optionalSecret,
   LANGSMITH_TRACING: booleanString.default(false),
   LANGSMITH_HIDE_INPUTS: booleanString.default(true),

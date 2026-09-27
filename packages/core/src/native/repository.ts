@@ -640,6 +640,42 @@ export async function finishNativeSync(job: JobRecord, remoteProjectName: string
     await client.query("UPDATE job SET state='succeeded',stage=NULL,lease_owner=NULL,attempt_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [job.id]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence-1,'succeeded',$2 FROM job WHERE id=$1", [job.id, { nativeRevisionId: revisionId, remoteProjectName, synchronization: "verified" }]);
+    await appendPublicActivity(client, { ownerId: job.ownerId, projectId: job.projectId, jobId: job.id }, `native-sync:${job.id}:verified`, { version: 1, kind: "audiotool", text: "Editable Audiotool copy confirmed for this saved version.", revisionId });
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
+/** Finalize a fenced copy only after a fresh, authenticated, order-independent
+ * remote readback exactly matches the current accepted revision. Never writes
+ * to Audiotool or clears a conflict on a merely similar document. */
+export async function reconcileNativeSyncReadback(input: { ownerId: string; projectId: string; revisionId: string; jobId: string; remoteProjectName: string; remoteUrl: string; expectedHash: string; observedHash: string }): Promise<void> {
+  if (input.expectedHash !== input.observedHash) throw new Error("NATIVE_REMOTE_CONFLICT: fresh readback does not match the accepted structure");
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const project = await client.query("SELECT id FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [input.projectId, input.ownerId]);
+    if (project.rowCount !== 1) throw new Error("Project is no longer available");
+    if (await head(client, input.ownerId, input.projectId, true) !== input.revisionId) throw new Error("Selected native version changed during reconciliation");
+    const revision = await client.query<{ document_hash: string }>("SELECT document_hash FROM native_revision WHERE id=$1 AND project_id=$2 AND owner_id=$3", [input.revisionId, input.projectId, input.ownerId]);
+    if (revision.rows[0]?.document_hash === undefined) throw new Error("Accepted native version is unavailable");
+    const checkpoint = await client.query<{ state: string; remote_project_name: string | null; expected_document_hash: string; observed_hash: string | null; mapping_version: string | null }>("SELECT state,remote_project_name,expected_document_hash,observed_hash,mapping_version FROM native_revision_sync WHERE revision_id=$1 AND project_id=$2 AND owner_id=$3 FOR UPDATE", [input.revisionId, input.projectId, input.ownerId]);
+    const saved = checkpoint.rows[0];
+    if (!saved || saved.expected_document_hash !== revision.rows[0].document_hash || saved.remote_project_name !== input.remoteProjectName) throw new Error("Native copy identity or accepted hash changed during reconciliation");
+    const job = await client.query<{ state: string; kind: string; request: Record<string, unknown> }>("SELECT state,kind,request FROM job WHERE id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [input.jobId, input.ownerId, input.projectId]);
+    if (job.rows[0]?.kind !== "native-sync" || job.rows[0].request.baseNativeRevisionId !== input.revisionId) throw new Error("Native copy command does not match this version");
+    if (saved.state === "verified" && saved.observed_hash === input.observedHash && saved.mapping_version === NATIVE_MAPPING_VERSION && job.rows[0].state === "succeeded") {
+      await appendPublicActivity(client, { ownerId: input.ownerId, projectId: input.projectId, jobId: input.jobId }, `native-sync:${input.jobId}:verified`, { version: 1, kind: "audiotool", text: "Editable Audiotool copy confirmed for this saved version.", revisionId: input.revisionId });
+      await client.query("COMMIT");
+      return;
+    }
+    if (!["conflict", "uncertain"].includes(saved.state) || job.rows[0].state !== "needs_attention") throw new Error("Native copy is not in a reconcilable state");
+    await client.query("UPDATE native_revision_sync SET state='verified',remote_url=$4,observed_hash=$5,mapping_version=$6,verified_at=now(),error_message=NULL,updated_at=now() WHERE revision_id=$1 AND project_id=$2 AND owner_id=$3", [input.revisionId, input.projectId, input.ownerId, input.remoteUrl, input.observedHash, NATIVE_MAPPING_VERSION]);
+    const mirror = await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$7,verified_at=now(),error_message=NULL,updated_at=now() WHERE revision_id=$1 AND project_id=$2 AND owner_id=$3", [input.revisionId, input.projectId, input.ownerId, input.remoteProjectName, input.remoteUrl, input.observedHash, NATIVE_MAPPING_VERSION]);
+    if (mirror.rowCount !== 1) throw new Error("Native copy status mirror is missing");
+    await client.query("UPDATE job SET state='succeeded',stage=NULL,error_code=NULL,error_message=NULL,updated_at=now(),next_event_sequence=next_event_sequence+1 WHERE id=$1", [input.jobId]);
+    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence-1,'succeeded',$2 FROM job WHERE id=$1", [input.jobId, { nativeRevisionId: input.revisionId, remoteProjectName: input.remoteProjectName, synchronization: "verified", reconciled: true }]);
+    await appendPublicActivity(client, { ownerId: input.ownerId, projectId: input.projectId, jobId: input.jobId }, `native-sync:${input.jobId}:verified`, { version: 1, kind: "audiotool", text: "Editable Audiotool copy confirmed for this saved version.", revisionId: input.revisionId });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }

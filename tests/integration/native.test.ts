@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { unlink } from "node:fs/promises";
 import { AIMessage, createOfflineDocument, fakeModel } from "@pocket/core/test-support";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { advanceNativeSync, applyNativeOperations, AudiotoolSessionExpiredError, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, extendNativePartialJob, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, materializedNotes, nativeDraftView, nativePresetFingerprint, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type GeminiGenerateClient, type JobRecord, type NativeLibraryClient, type NativePreset } from "@pocket/core";
+import { advanceNativeSync, applyNativeOperations, AudiotoolSessionExpiredError, beginNativeSync, beginOwnedSampleUpload, canonicalHash, claimJobById, commitNativeRevision, completeProviderEffect, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, encodeWav, extendNativePartialJob, failJob, failProviderEffect, finishOwnedSampleUpload, getConfig, getPool, heartbeat, insertAsset, markEffectDispatched, markOwnedSampleUncertain, materializedNotes, nativeDraftView, nativePresetFingerprint, nativeSnapshot, needsAttentionJob, produceNative, profileOwnedSourceWav, readyOwnedSampleResources, reconcileNativeSyncReadback, recordNativeProducerCompletion, requeueJob, reserveProviderEffect, resumeNativePartialJob, selectNativeRevision, storeImmutableAudio, protectedPartHash, NativeToolSession, seedNativeDocument, fixtureConstruct, jobSnapshot, cancelJob, validateNativeOffline, type GeminiGenerateClient, type JobRecord, type NativeLibraryClient, type NativePreset } from "@pocket/core";
 import { nativeSynchronization, optionalNativeLibraryConnection, processJob } from "@pocket/worker";
 import { abandonNativePartialJob, readProjectActivity } from "@pocket/core";
 
@@ -172,7 +172,8 @@ describe("audio-independent native job lifecycle", () => {
     const direction = "Four-bar melody with bass";
     const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "financial-pause-same-job", request: { direction, profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
     const original = (await getPool().query<{ request: Record<string, unknown> }>("SELECT request FROM job WHERE id=$1", [accepted.id])).rows[0]!.request;
-    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 } })]);
+    const priceScale = ((original._nativeRun as { pricing: { outputUsdPerMillion: number } }).pricing.outputUsdPerMillion / 50);
+    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 * priceScale } })]);
     const form = { title: "Known first phrase", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
     const costlyMessage = new AIMessage({ content: "", tool_calls: [{ id: "form-first", name: "compose_native_form", args: form }] });
     Object.assign(costlyMessage, { usage_metadata: { input_tokens: 1_000, output_tokens: 10_000, total_tokens: 11_000 } });
@@ -185,7 +186,7 @@ describe("audio-independent native job lifecycle", () => {
     expect(draft.stepCount).toBe(1);
     expect(draft.canContinue).toBe(false);
     expect(draft.canExtend).toBe(true);
-    expect(draft.budget.spentUsd).toBeGreaterThan(0.5);
+    expect(draft.budget.spentUsd).toBeGreaterThan(0.5 * priceScale);
     expect((await nativeSnapshot(ownerId, scratchId)).current).toBeNull();
     await expect(resumeNativePartialJob(ownerId, scratchId, accepted.id)).rejects.toThrow(/allowance/);
     await extendNativePartialJob(ownerId, scratchId, accepted.id, { maxJobCostUsd: 2 });
@@ -199,7 +200,7 @@ describe("audio-independent native job lifecycle", () => {
     const effects = await getPool().query<{ step: string; state: string; actual_cost_microusd: string; reservation_microusd: string }>("SELECT step,state,actual_cost_microusd::text,reservation_microusd::text FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [accepted.id]);
     expect(effects.rows).toHaveLength(3);
     expect(Number(effects.rows[1]!.reservation_microusd)).toBeLessThan(Number(effects.rows[0]!.reservation_microusd));
-    expect(effects.rows.reduce((sum, row) => sum + Number(row.actual_cost_microusd), 0)).toBeGreaterThan(500_000);
+    expect(effects.rows.reduce((sum, row) => sum + Number(row.actual_cost_microusd), 0)).toBeGreaterThan(500_000 * priceScale);
     expect((await nativeDraftView(ownerId, scratchId, accepted.id)).stepCount).toBe(2);
   }, 120_000);
   it("continues a known zero-step financial pause without inventing a musical draft or replaying the first call", async () => {
@@ -208,7 +209,8 @@ describe("audio-independent native job lifecycle", () => {
     const direction = "A sparse four-bar phrase with a deliberate answer";
     const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "zero-step-financial-pause", request: { direction, profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
     const original = (await getPool().query<{ request: Record<string, unknown> }>("SELECT request FROM job WHERE id=$1", [accepted.id])).rows[0]!.request;
-    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 } })]);
+    const priceScale = ((original._nativeRun as { pricing: { outputUsdPerMillion: number } }).pricing.outputUsdPerMillion / 50);
+    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 * priceScale } })]);
     const plan = { intent: "A restrained question and answer", sections: [{ name: "Whole", purpose: "Introduce and answer one motif" }], soundGoals: ["Dry, close lead"], hardConstraints: ["Four bars"], developmentTasks: ["Write the answer"] };
     const costlyPlan = new AIMessage({ content: "", tool_calls: [{ id: "first-plan", name: "record_native_plan", args: plan }] });
     Object.assign(costlyPlan, { usage_metadata: { input_tokens: 1_000, output_tokens: 10_000, total_tokens: 11_000 } });
@@ -1000,7 +1002,7 @@ describe("audio-independent native job lifecycle", () => {
       const synchronized = await nativeSnapshot(ownerId, scratchId);
       expect(uploads).toBe(2);
       expect(opens).toBe(2);
-      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v6", revisionId: nativeRevisionId });
+      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v7", revisionId: nativeRevisionId });
       expect(synchronized.synchronization.verifiedAt).toBeTruthy();
       expect((await readyOwnedSampleResources(ownerId, scratchId, [firstId, secondId]))[firstId]?.sampleName).toBe("samples/offline-source-1");
       expect((await jobSnapshot(ownerId, syncJob.id)).state).toBe("succeeded");
@@ -1129,6 +1131,33 @@ describe("audio-independent native job lifecycle", () => {
     expect((await nativeSnapshot(ownerId, projectId)).synchronization.state).toBe("uncertain");
     await cancelJob(ownerId, created.id);
   });
+
+  it("reconciles a fenced copy only when its fresh structure and remote identity exactly match", async () => {
+    const scratchId = (await createProject(ownerId, "Recheck a native copy")).id;
+    extraProjects.push(scratchId);
+    const created = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "seed-recheck", request: { direction: "A concise editable phrase", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    await processJob(await claim(created.id));
+    const current = (await nativeSnapshot(ownerId, scratchId)).current!;
+    const sync = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-sync", idempotencyKey: "copy-recheck", request: { baseNativeRevisionId: current.id, expectedNativeHeadId: current.id }, expectedHeadId: current.id });
+    const job = await claim(sync.id);
+    await beginNativeSync(job, current.documentHash);
+    await advanceNativeSync(job, "create_in_flight", "created", { remoteProjectName: "projects/offline-recheck" });
+    await advanceNativeSync(job, "created", "apply_in_flight", { remoteUrl: "https://offline.invalid/studio" });
+    await advanceNativeSync(job, "apply_in_flight", "conflict", { observedHash: "old-order-hash", errorMessage: "Earlier readback mismatch" });
+    await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "Earlier readback mismatch");
+    const expectedHash = canonicalHash((await validateNativeOffline(current.document)).structuralReadback);
+    const details = { ownerId, projectId: scratchId, revisionId: current.id, jobId: job.id, remoteProjectName: "projects/offline-recheck", remoteUrl: "https://offline.invalid/studio", expectedHash, observedHash: expectedHash };
+    await expect(reconcileNativeSyncReadback({ ...details, observedHash: "different" })).rejects.toThrow(/readback does not match/);
+    await expect(reconcileNativeSyncReadback({ ...details, remoteProjectName: "projects/other" })).rejects.toThrow(/copy identity/);
+    expect((await nativeSnapshot(ownerId, scratchId)).synchronization.state).toBe("conflict");
+    await reconcileNativeSyncReadback(details);
+    await reconcileNativeSyncReadback(details);
+    expect((await nativeSnapshot(ownerId, scratchId)).synchronization).toMatchObject({ state: "verified", revisionId: current.id, mappingVersion: "nexus-native-v7" });
+    expect((await jobSnapshot(ownerId, job.id)).state).toBe("succeeded");
+    expect((await getPool().query("SELECT count(*)::int AS count FROM job_event WHERE job_id=$1 AND event_type='succeeded'", [job.id])).rows[0].count).toBe(1);
+    expect((await getPool().query("SELECT count(*)::int AS count FROM project_activity WHERE job_id=$1 AND origin=$2", [job.id, `native-sync:${job.id}:verified`])).rows[0].count).toBe(1);
+    await expect(reconcileNativeSyncReadback({ ...details, ownerId: randomUUID() })).rejects.toThrow(/no longer available/);
+  }, 60_000);
 
   it("rejects an objective-only revision at the immutable commit boundary", async () => {
     const before = await nativeSnapshot(ownerId, projectId);

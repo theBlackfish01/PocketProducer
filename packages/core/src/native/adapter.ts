@@ -2,10 +2,11 @@ import { createOfflineDocument } from "@audiotool/nexus/node";
 import { Ticks } from "@audiotool/nexus/utils";
 import type { SyncedDocument } from "@audiotool/nexus";
 import type { NexusEntity } from "@audiotool/nexus/document";
+import { canonicalHash } from "../domain/composition.js";
 import { nativePresetFingerprint, type LibrarySample, type NativePreset } from "./library.js";
 import { assertNativeDeviceMapping, materializedNotes, nativeDocumentSchema, type NativeDocument, type NativePart } from "./model.js";
 
-export const NATIVE_MAPPING_VERSION = "nexus-native-v6";
+export const NATIVE_MAPPING_VERSION = "nexus-native-v7";
 export const NEXUS_TICKS_PER_CANONICAL_TICK = Ticks.Beat / 960;
 export function toNexusTicks(canonicalTicks: number): number {
   const value = canonicalTicks * NEXUS_TICKS_PER_CANONICAL_TICK;
@@ -325,36 +326,36 @@ export function nativeStructuralReadback(doc: Pick<SyncedDocument, "queryEntitie
   const notes = doc.queryEntities.ofTypes("note").get().map((value) => [value.fields.positionTicks.value, value.fields.durationTicks.value, value.fields.pitch.value, value.fields.velocity.value]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const patterns = doc.queryEntities.ofTypes("beatbox8Pattern").get().map((value) => ({ length: value.fields.length.value, steps: value.fields.steps.array.map((step, index) => ({ index, bass: step.fields.bassdrumIsActive.value, snare: step.fields.snaredrumIsActive.value, closedHat: step.fields.closedHihatIsActive.value, openHat: step.fields.openHihatIsActive.value })).filter((step) => step.bass || step.snare || step.closedHat || step.openHat) })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   const automation = doc.queryEntities.ofTypes("automationEvent").get().map((value) => [value.fields.positionTicks.value, value.fields.value.value]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  // Entity IDs are allocated by Nexus and differ between equivalent documents.
-  // Map every supported entity to a stable, type-local ordinal before reading
-  // pointers. Keep actual socket field indexes: they distinguish routing ends
-  // and automation targets. UI positions, labels and colors are not music.
+  // Nexus allocates different IDs and returns a different entity enumeration
+  // order after reopening a remote project. A type-local enumeration ordinal
+  // therefore cannot identify a pointer across offline/live documents. Hash
+  // each entity's typed fields and then its referenced neighbours in bounded
+  // rounds; compare a sorted multiset of those signatures. Socket indexes are
+  // retained so routing ends and automation targets remain distinguishable.
+  // UI positions, labels and colors are not music.
   const semanticTypes = ["config", "groove", "mixerMaster", "mixerChannel", "mixerGroup", "mixerStripGrouping", "mixerReverbAux", "mixerDelayAux", "mixerAuxRoute", "mixerSideChainCable", "desktopAudioCable", "audioSplitter", "audioMerger", "heisenberg", "pulverisateur", "gakki", "beatbox8", "beatbox8Pattern", "noteTrack", "noteCollection", "noteRegion", "note", "patternTrack", "patternRegion", "stompboxDelay", "stompboxReverb", "stompboxCompressor", "stompboxParametricEqualizer", "autoFilter", "stompboxTube", "stompboxChorus", "stompboxPitchDelay", "automationTrack", "automationRegion", "automationCollection", "automationEvent", "audioDevice", "audioTrack", "audioRegion", "sample"] as const;
   const entities = doc.queryEntities.ofTypes(...semanticTypes).get();
-  const ordinals = new Map<string, string>();
-  const counts = new Map<string, number>();
-  for (const entity of entities) {
-    const type = entity.location.entityType ?? "unknown";
-    const ordinal = counts.get(type) ?? 0;
-    counts.set(type, ordinal + 1);
-    ordinals.set(entity.location.entityId, `${type}:${ordinal}`);
-  }
   const ignored = new Set(["positionX", "positionY", "colorIndex", "displayName", "orderAmongStrips"]);
-  const normalize = (value: unknown): unknown => {
+  const normalize = (value: unknown, labels: Map<string, string>): unknown => {
     if (typeof value === "bigint") return value.toString();
     if (typeof value === "number") return Math.round(value * 1_000_000) / 1_000_000;
     if (value === null || typeof value !== "object") return value;
-    if (Array.isArray(value)) return value.map(normalize);
+    if (Array.isArray(value)) return value.map((child) => normalize(child, labels));
     const record = value as Record<string, unknown>;
     if (typeof record.entityId === "string" && Array.isArray(record.fieldIndex)) {
-      return { ref: record.entityId ? ordinals.get(record.entityId) ?? `${String(record.entityType)}:outside-mapping` : null, socket: record.fieldIndex };
+      return { ref: record.entityId ? labels.get(record.entityId) ?? `${String(record.entityType)}:outside-mapping` : null, socket: record.fieldIndex };
     }
-    if ("value" in record && "location" in record) return normalize(record.value);
-    if (Array.isArray(record.array)) return record.array.map(normalize);
-    if (record.fields && typeof record.fields === "object") return normalize(record.fields);
-    return Object.fromEntries(Object.entries(record).filter(([key]) => !ignored.has(key)).map(([key, child]) => [key, normalize(child)]));
+    if ("value" in record && "location" in record) return normalize(record.value, labels);
+    if (Array.isArray(record.array)) return record.array.map((child: unknown) => normalize(child, labels));
+    if (record.fields && typeof record.fields === "object") return normalize(record.fields, labels);
+    return Object.fromEntries(Object.entries(record).filter(([key]) => !ignored.has(key)).map(([key, child]) => [key, normalize(child, labels)]));
   };
-  const semanticEntities = entities.map((entity) => ({ type: entity.location.entityType, fields: normalize(entity.fields) }));
+  let labels = new Map(entities.map((entity) => [entity.location.entityId, String(entity.location.entityType)]));
+  for (let round = 0; round < 8; round += 1) {
+    labels = new Map(entities.map((entity) => [entity.location.entityId, canonicalHash({ type: entity.location.entityType, fields: normalize(entity.fields, labels) })]));
+  }
+  const semanticEntities = entities.map((entity) => ({ type: entity.location.entityType, identity: labels.get(entity.location.entityId), fields: normalize(entity.fields, labels) }))
+    .sort((a, b) => canonicalHash(a).localeCompare(canonicalHash(b)));
   return {
     tempoBpm: config?.fields.tempoBpm.value ?? null,
     signature: config ? [config.fields.signatureNumerator.value, config.fields.signatureDenominator.value] : null,

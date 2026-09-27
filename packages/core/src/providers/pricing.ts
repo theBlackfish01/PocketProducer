@@ -25,6 +25,15 @@ const prices: Record<string, ModelPrice> = {
     source: "https://developers.openai.com/api/docs/models/gpt-6-astra",
     verifiedOn: "2026-09-27"
   },
+  "openai:gpt-6-sol": {
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.2,
+    cacheWriteUsdPerMillion: 2.5,
+    outputUsdPerMillion: 10,
+    modality: "text",
+    source: "https://developers.openai.com/api/docs/models/gpt-6-sol",
+    verifiedOn: "2026-09-27"
+  },
   "gemini:gemini-3-flash-preview": {
     inputUsdPerMillion: 1,
     outputUsdPerMillion: 3,

@@ -124,8 +124,8 @@ export async function estimateCheckpointUsage(threadId: string): Promise<{ input
   return totals;
 }
 
-export function openAiCost(usage: { inputTokens: number; outputTokens: number }): number {
-  return tokenCostUsd("openai", "gpt-6-astra", usage);
+export function openAiCost(usage: { inputTokens: number; outputTokens: number }, model: string): number {
+  return tokenCostUsd("openai", model, usage);
 }
 
 export function usageFromLlmResult(result: LLMResult): { inputTokens: number; outputTokens: number; cachedInputTokens: number; cacheWriteTokens: number } {

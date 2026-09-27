@@ -107,7 +107,7 @@ export function NativeRoom({ projectId, assets, legacyVersionCount, audiotoolCon
   const partRoles = [...new Set(current?.document.parts.map((part) => part.role) ?? [])]
   const filteredParts = current?.document.parts.filter((part) => roleFilter === "all" || part.role === roleFilter) ?? []
   const visibleParts = filteredParts.slice(0, partLimit)
-  const currentRemoteVerification = snapshot?.synchronization.state === "verified" && snapshot.synchronization.revisionId === current?.id && snapshot.synchronization.mappingVersion === "nexus-native-v6"
+  const currentRemoteVerification = snapshot?.synchronization.state === "verified" && snapshot.synchronization.revisionId === current?.id && snapshot.synchronization.mappingVersion === "nexus-native-v7"
   const receiptKey = `pocket-producer:native-receipt:${projectId}`
 
   useEffect(() => {

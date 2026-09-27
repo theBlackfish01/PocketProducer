@@ -17,7 +17,9 @@ describe("native construction contracts", () => {
     expect(verified.structuralReadback.automationTracks).toBe(1);
     const cables = verified.structuralReadback.semanticEntities.filter((entity) => entity.type === "desktopAudioCable");
     expect(cables.length).toBeGreaterThanOrEqual(6);
-    expect(JSON.stringify(cables)).toContain("mixerGroup:0");
+    const groupIdentity = verified.structuralReadback.semanticEntities.find((entity) => entity.type === "mixerGroup")?.identity;
+    expect(groupIdentity).toBeTruthy();
+    expect(JSON.stringify(cables)).toContain(groupIdentity);
     expect(JSON.stringify(verified.structuralReadback.semanticEntities)).toContain("2.4");
     expect(() => applyNativeOperations(built, [{ kind: "removeGroup", groupId: "drum-bus" }])).toThrow();
     const protectedVersion = applyNativeOperations(built, [{ kind: "protect", partIds: ["starting-voice"], motifIds: [] }]);
