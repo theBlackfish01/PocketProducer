@@ -18,7 +18,7 @@ async function assertStructure(page: Page): Promise<void> {
   assert(await page.locator("[data-stepper]").count() === 3, "Expected three process steppers");
   assert(await page.locator(".quiz-container").count() === 0, "Old required quizzes remain");
   const text = await page.locator("main").textContent() ?? "";
-  for (const topic of ["native v2", "SKIP LOCKED", "apply_native_batch", "Gemini", "nexus-native-v7", "not a recording", "immutable", "unknown liability"]) {
+  for (const topic of ["native v2", "SKIP LOCKED", "apply_native_batch", "GPT-6 Luna xhigh", "Gemini 3.7 Flash", "DeepSeek is not selectable", "nexus-native-v8", "nexus-native-v7", "not a recording", "immutable", "unknown liability"]) {
     assert(text.toLowerCase().includes(topic.toLowerCase()), `Course is missing ${topic}`);
   }
   for (const href of await page.locator('a[href]:not([href^="#"])').evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute("href")))) {

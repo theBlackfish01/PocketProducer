@@ -36,7 +36,7 @@ for (const href of matches(/<a\b[^>]*\bhref="([^"]+)"/g)) {
   const target = resolve(dirname(join(courseDirectory, "index.html")), href);
   await stat(target).catch(() => { throw new Error(`Broken local link: ${href}`); });
 }
-for (const topic of ["native v2", "SKIP LOCKED", "apply_native_batch", "nexus-native-v7", "Gemini", "unknown liability", "not a recording"]) {
+for (const topic of ["native v2", "SKIP LOCKED", "apply_native_batch", "nexus-native-v8", "nexus-native-v7", "GPT-6 Luna xhigh", "Gemini 3.7 Flash", "DeepSeek is not selectable", "unknown liability", "not a recording"]) {
   assert(generated.toLowerCase().includes(topic.toLowerCase()), `Missing key subject: ${topic}`);
 }
 assert(!generated.includes('id="mode-legacy"'), "Retired product mode returned to the course");
@@ -47,7 +47,7 @@ const walkthrough = await readFile(walkthroughPath, "utf8");
 for (const [, href] of walkthrough.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
   assert(href, "Walkthrough link has no target");
   if (/^(?:https?:|#)/.test(href)) continue;
-  await stat(resolve(dirname(walkthroughPath), href)).catch(() => { throw new Error(`Broken walkthrough link: ${href}`); });
+  await stat(resolve(dirname(walkthroughPath), href.split("#", 1)[0] ?? href)).catch(() => { throw new Error(`Broken walkthrough link: ${href}`); });
 }
 await stat(join(courseDirectory, "course.css"));
 await stat(join(courseDirectory, "course.js"));
