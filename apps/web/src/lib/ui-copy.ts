@@ -2,7 +2,6 @@ import type { Job, NativeVersion } from "./api"
 
 export function friendlyIssue(message: string | null | undefined, fallback: string) {
   if (!message) return fallback
-  if (message.startsWith("In playable audio, this change is limited")) return message
   if (/stale|head changed|version conflict|expected.*revision/i.test(message)) return "This piece changed while you were working. Reopen it before trying again."
   if (/budget|spend|allowance|limit exceeded/i.test(message)) return "This request would exceed the current usage limit. Your saved work is unchanged."
   if (/connection|network|fetch|timeout|unavailable/i.test(message)) return "The connection was interrupted. Your saved work is still here."
@@ -21,9 +20,7 @@ export function jobProgress(job: Job) {
     constructing: "Shaping your arrangement…",
     validating: "Checking your arrangement…",
     synchronizing: "Preparing your Audiotool copy…",
-    rendering: "Making playable audio…",
-    checking: "Checking the result…",
-    exporting: "Preparing your Audiotool copy…"
+    checking: "Checking the result…"
   }
   return job.stage ? labels[job.stage] ?? "Working on your piece…" : "Working on your piece…"
 }

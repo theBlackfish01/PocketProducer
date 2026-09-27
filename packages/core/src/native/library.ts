@@ -1,7 +1,7 @@
 import type { AudiotoolClient } from "@audiotool/nexus";
 import { createHash } from "node:crypto";
 import type { NativeDocument } from "./model.js";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { profileOwnedSourceWav, type NativeSourceProfile } from "./resources.js";
 
 export type NativeLibraryClient = Pick<AudiotoolClient, "samples" | "presets">;

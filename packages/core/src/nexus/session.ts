@@ -4,7 +4,6 @@ import { dirname, resolve } from "node:path";
 import { z } from "zod";
 import { REPOSITORY_ROOT } from "../config.js";
 import { getPool } from "../db/pool.js";
-import type { AudiotoolExportClient } from "./adapter.js";
 
 const tokenSchema = z.object({
   accessToken: z.string().min(16).max(16_384),
@@ -110,7 +109,7 @@ export function createAudiotoolTokenRefreshHandler(ownerId: string, userName: st
   };
 }
 
-export async function createAudiotoolServerClient(ownerId: string, clientId: string): Promise<{ client: AudiotoolExportClient; awaitTokenPersistence(): Promise<void> } | null> {
+export async function createAudiotoolServerClient(ownerId: string, clientId: string) {
   const session = await loadAudiotoolSession(ownerId);
   if (!session) return null;
   if (!session.tokens.refreshToken && session.tokens.expiresAt <= Date.now() + 60_000) {
@@ -123,6 +122,6 @@ export async function createAudiotoolServerClient(ownerId: string, clientId: str
     clientId,
     onTokenRefresh: refresh.onTokenRefresh
   });
-  const client: AudiotoolExportClient = await nexusModule.createAudiotoolClient({ auth, transport: nodeModule.createNodeTransport(), wasm: nodeModule.createDiskWasmLoader() });
+  const client = await nexusModule.createAudiotoolClient({ auth, transport: nodeModule.createNodeTransport(), wasm: nodeModule.createDiskWasmLoader() });
   return { client, awaitTokenPersistence: refresh.awaitPersistence };
 }

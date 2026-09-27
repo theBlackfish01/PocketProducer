@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { z } from "zod";
 import { getConfig } from "../config.js";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import type { JobRecord } from "../db/repository.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "./effects.js";
 import { tokenCostMicrousd } from "./pricing.js";

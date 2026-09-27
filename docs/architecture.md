@@ -1,6 +1,6 @@
 # Architecture — native construction is the current path
 
-The user deliberately deferred native rendering/playback. The current vertical slice is `Listening Room → owner-scoped API → durable native job with captured run profile → OpenAI Deep Agent with plan/inspect/discover/compose/apply tools → Zod-validated native document → pinned Nexus offline validation → immutable PostgreSQL version → explicit native synchronization`. `docs/adr/002-native-construction-first.md` records the decision; [the current capability contract](native-text-to-music.md) records the implemented scope and limits. Audio/Gemini are a future boundary for these native versions; the working legacy WAV path below is preserved separately.
+The user deliberately deferred native rendering/playback. The current vertical slice is `Listening Room → owner-scoped API → durable native job with captured run profile → OpenAI Deep Agent with plan/inspect/discover/compose/apply tools → Zod-validated native document → pinned Nexus offline validation → immutable PostgreSQL version → explicit native synchronization`. `docs/adr/002-native-construction-first.md` records the decision; [the current capability contract](native-text-to-music.md) records the implemented scope and limits. Audio/Gemini are a future boundary for these native versions; the prototype WAV workflow has been removed (see ADR 003).
 
 `native_revision`, `native_project_head` and `native_job_step` hold native state, selected head and replayable tool operations. `native_job_plan` holds a scoped plan/stage independently of graph messages; it cannot select a revision. The job request captures model, reasoning and budget/profile limits. `native_producer_completion` marks only structurally checked completed aggregates; confirmed-but-incomplete steps remain under the same resumable job and do not become a selected revision. `native_revision_sync` holds per-version remote create/apply/readback checkpoints, mapping version and verification time. `native_sample_upload` holds one fenced upload identity per owned source hash. A distinct project is made for each native version; a fresh SDK readback must match before the UI offers an Audiotool link. Source-bearing construction has owned-WAV upload/readiness and offset/loop mapping, verified against an offline worker contract double; real Audiotool synchronization remains unverified. Unknown remote/model outcomes are fenced rather than retried automatically.
 
@@ -26,38 +26,17 @@ Preservation preview and completion share actual part/phrase-name resolution, un
 
 The browser reconciles observed head/draft against canonical reads with up to three read rounds (five HTTP attempts per round), abortable backoff and manual **Refresh arrangement** after exhaustion. Read recovery never resends commands, keeps unsent text, and ignores old-room responses. The monotonic head-selection counter also prevents a delayed read from rolling back a newer explicit history selection.
 
-## Preserved legacy audio implementation
+## Single-workspace runtime
 
-## Runtime shape
+React/Vite, loopback Fastify and the PostgreSQL worker remain separate local processes. Only native-generation, native-revision and native-sync jobs can be dispatched or claimed. Unsupported retired jobs are never executed. The project bootstrap returns owned active project metadata and ready source assets; native snapshots/activity own the music lifecycle.
 
-Pocket Producer remains a modular monolith with three local processes: React/Vite Listening Room, loopback Fastify API, and a PostgreSQL-backed worker. PostgreSQL owns canonical state, jobs, outbox, ordered events, provider effects, immutable revisions, analysis associations and export checkpoints. Private audio is stored below the configured server-only asset root and is returned only through owner-scoped byte-range routes.
+Shared canonical hashing moved unchanged into `domain/hash.ts`. PostgreSQL checkpoint setup, bounded OpenAI request accounting, cached-token usage and late effect handling moved unchanged into `agent/runtime.ts`. These serve the existing native Deep Agent. The retired planner/compiler/renderer/repair and four-stem Nexus exporter were deleted, along with their HTTP commands and runtime skills.
 
-An accepted command captures stable normalized client input plus the current head once. Reusing owner/project/kind/idempotency key resolves that original command before new-work preconditions. A durable browser receipt can recover the job after an acknowledgement is lost without resubmitting.
+Sounds is one sheet with project-bound upload, recording, source selection and a single source-only HTML audio controller. Closing it pauses playback and aborts pending microphone capture; reopening refreshes source inventory after ambiguous upload acknowledgement. Owner-checked WAV routes support byte ranges for seeking. There is no whole-composition audio player.
 
-Workers claim with `SKIP LOCKED`, database time, lease generation and attempt UUID. Heartbeats distinguish cancellation, deadline expiry, lease loss and monitor failure. A stale attempt may record late provider usage but cannot append progress, select a revision or commit/export application state. Queue time counts toward the absolute job deadline. Expired queued/running jobs settle once; transient retries are capped.
+Provider effects retain attempt fencing, unknown-cost reservations and integer micro-USD accounting. No financial rows are deleted when an obsolete audio-only test room is removed: the minimal deleted project/job identity remains an audit reference, not a compatibility product. `retireAudioTestProject` requires an exact owned project and refuses any native job/version or active work. Historic migrations are retained as schema history; no old content is converted into native music.
 
-## Creative and agent boundary
-
-1. Gemini may analyze an owned source into typed, uncertain descriptors; measured audio facts remain separate.
-2. Deep Agents 1.14 on LangGraph reads a scoped virtual workspace containing the direction, supported palette skill and typed descriptor. The OpenAI model proposes only the bounded arrangement plan.
-3. A conservative message/framing token bound and model price table reserve the real request before dispatch. SDK retries are disabled. Persisted successful effect output is reusable; dispatch without persisted output is explicitly uncertain, not exactly-once billing.
-4. Deterministic application code validates and compiles the plan into canonical 960-PPQ composition data. Attached, selected, referenced and audibly used source identities are distinct.
-5. The renderer produces a 48 kHz stereo preview, four stems, waveform peaks and measured signal facts. Optional preview critique may request the one supported repair. Zero critique passes means no preview Gemini call; one original plus one repair is the maximum.
-6. Revision composition/audio/required analysis associations commit atomically. Head selection is a compare-and-swap; stale valid work remains immutable but unselected.
-
-## Revision contract
-
-The supported revision removes alternating hi-hat events only inside Groove. It hashes the protected melody structure, reuses the exact melody stem artifact, rerenders, rechecks signal/protection and commits a child revision. A failed repair preserves the prior valid candidate. Restore changes only the selected project head.
-
-## Analysis and effect history
-
-Analysis identity is `(owner, project, audio hash, provider, model, purpose, prompt version, interval, status)`. `audio_analysis_revision` provides immutable many-to-many history, so reuse never moves an old association. Measured duration/peak/RMS/non-silent ratio are never presented as model opinion.
-
-Provider effects use attempt-bound `reserved → dispatched → succeeded|failed|uncertain` transitions under an advisory budget lock and integer micro-USD accounting. Successful output cannot be overwritten; repeated finalization adds no duplicate charge; unknown post-dispatch liabilities retain reservation value. Total model calls, input bounds, repair/critique limits and job deadline are enforced.
-
-## Nexus boundary
-
-Nexus is an export SDK, not the renderer. Mapping `nexus-stem-v3` converts canonical 960-PPQ ticks to Nexus 3840 ticks, sets real Config tempo/signature/duration, maps the musical body plus one-second audio tail and inserts four routed full-length regions. Project creation, each upload, arrangement insertion and completion have durable step identity and uncertainty fences across jobs. See `docs/nexus-integration.md`.
+Native Nexus mapping/readback, immutable versions and explicit synchronization are unchanged. Opening a session, completing a revision, browsing comparisons or selecting a version never automatically copies to Audiotool. The header offers Copy/Open/Review according to current-version verification; copying remains separately fenced from production. Playback and Gemini listening for native music are deliberately deferred.
 
 ## Security and deployment boundary
 

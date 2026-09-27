@@ -12,7 +12,7 @@ describe("workspace presentation boundaries", () => {
   it("supports direct routes without treating the OAuth callback as a session", () => {
     expect(sessionFromPath("/sessions/abc/start")).toEqual({ id: "abc", view: "start" })
     expect(sessionFromPath("/sessions/abc")).toEqual({ id: "abc", view: "arrange" })
-    expect(sessionFromPath("/sessions/abc/audio")).toEqual({ id: "abc", view: "audio" })
+    expect(sessionFromPath("/sessions/abc/audio")).toBeNull()
     expect(sessionFromPath("/auth/audiotool/callback")).toBeNull()
   })
 })

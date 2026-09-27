@@ -18,7 +18,6 @@ Object.assign(process.env, {
   GEMINI_API_KEY: "",
   GOOGLE_API_KEY: "",
   JOB_LEASE_SECONDS: "3",
-  MAX_AUDIO_CRITIQUE_PASSES: "0",
   // Keys stay cleared and fixture mode remains mandatory. These ceilings only
   // let injected provider mocks exercise the real transactional ledger.
   INITIAL_BUILD_API_BUDGET_USD: "5",

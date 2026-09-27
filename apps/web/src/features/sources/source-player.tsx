@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Pause, Play, RotateCcw, Undo2, Volume2 } from "lucide-react"
-import WaveSurfer from "wavesurfer.js"
+import { Pause, Play, RotateCcw, Volume2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 
-export interface PlaybackItem {
-  kind: "source" | "revision"
+export interface SourcePlaybackItem {
   id: string
   url: string
   label: string
   durationSeconds: number
-  peaks: number[]
 }
 
 function formatTime(seconds: number) {
@@ -19,10 +16,10 @@ function formatTime(seconds: number) {
   return `${Math.floor(safe / 60)}:${Math.floor(safe % 60).toString().padStart(2, "0")}`
 }
 
-export function usePlayback() {
+export function useSourcePlayback() {
   const audioRef = useRef<HTMLAudioElement | null>(null)
-  const itemRef = useRef<PlaybackItem | null>(null)
-  const [item, setItem] = useState<PlaybackItem | null>(null)
+  const itemRef = useRef<SourcePlaybackItem | null>(null)
+  const [item, setItem] = useState<SourcePlaybackItem | null>(null)
   const [playing, setPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -67,15 +64,15 @@ export function usePlayback() {
     }
   }, [])
 
-  const load = useCallback((next: PlaybackItem) => {
+  const load = useCallback((next: SourcePlaybackItem) => {
     const audio = audioRef.current
     itemRef.current = next
     setItem(next)
     setDuration(next.durationSeconds)
     setError(null)
-    if (!audio || audio.dataset.identity === `${next.kind}:${next.id}`) return
+    if (!audio || audio.dataset.identity === next.id) return
     audio.pause()
-    audio.dataset.identity = `${next.kind}:${next.id}`
+    audio.dataset.identity = next.id
     audio.src = next.url
     audio.load()
     setCurrentTime(0)
@@ -98,7 +95,7 @@ export function usePlayback() {
     setError(null)
   }, [])
 
-  const playItem = useCallback(async (next: PlaybackItem) => {
+  const playItem = useCallback(async (next: SourcePlaybackItem) => {
     load(next)
     const audio = audioRef.current
     if (!audio) return
@@ -132,63 +129,26 @@ export function usePlayback() {
   return { audio: audioRef.current, item, playing, currentTime, duration, volume, error, load, clear, playItem, toggle, seek, setVolume }
 }
 
-interface AudioPlayerProps {
-  audio: HTMLAudioElement | null
-  item: PlaybackItem
-  playing: boolean
-  currentTime: number
-  duration: number
-  volume: number
-  error: string | null
-  onToggle(): void
-  onSeek(value: number): void
-  onVolume(value: number): void
-  onReturnToPiece?(): void
+interface SourcePlayerProps {
+  player: ReturnType<typeof useSourcePlayback>
 }
 
-export function AudioPlayer({ audio, item, playing, currentTime, duration, volume, error, onToggle, onSeek, onVolume, onReturnToPiece }: AudioPlayerProps) {
-  const waveformRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!waveformRef.current || !audio || duration <= 0 || item.peaks.length === 0) return
-    const wave = WaveSurfer.create({
-      container: waveformRef.current,
-      media: audio,
-      peaks: [item.peaks],
-      duration,
-      height: 88,
-      waveColor: "#9fa79f",
-      progressColor: "#25483b",
-      cursorColor: "#b83f19",
-      cursorWidth: 2,
-      barWidth: 2,
-      barGap: 3,
-      barRadius: 2,
-      normalize: false,
-      interact: false
-    })
-    return () => wave.destroy()
-  }, [audio, duration, item.id, item.peaks])
-
-  const itemName = item.kind === "source" ? "source" : item.label.includes("· current") ? "current version" : item.label.toLowerCase()
-  return (
-    <div className="player-card">
-      <div className="player-meta"><span>{item.label}</span><span>{formatTime(duration)} total</span></div>
-      {item.kind === "source" && onReturnToPiece ? <Button className="mb-3" size="sm" variant="outline" onClick={onReturnToPiece}><Undo2 /> Return to current piece</Button> : null}
-      <div className="waveframe" aria-hidden="true">
-        {item.peaks.length > 0 ? <div ref={waveformRef} className="wave-canvas" data-testid="waveform" /> : <div className="wave-canvas grid place-items-center text-xs text-muted-foreground">Waveform unavailable for this source</div>}
-      </div>
-      <div className="seek-row">
-        <span className="time">{formatTime(currentTime)}</span>
-        <Slider aria-label={`Seek through the ${itemName}`} min={0} max={Math.max(duration, 1)} step={0.1} value={[Math.min(currentTime, Math.max(duration, 1))]} onValueChange={(value) => onSeek(Array.isArray(value) ? value[0] ?? 0 : value)} />
-        <span className="time">-{formatTime(Math.max(0, duration - currentTime))}</span>
-      </div>
-      <div className="transport">
-        <Button className="round-play" size="icon-lg" aria-label={playing ? `Pause ${itemName}` : `Play ${itemName}`} onClick={onToggle}>{playing ? <Pause /> : <Play />}</Button>
-        <Button size="icon" variant="ghost" aria-label="Return to start" onClick={() => onSeek(0)}><RotateCcw /></Button>
-        <Volume2 aria-hidden="true" className="ml-1 size-4 text-muted-foreground" />
-        <Slider aria-label="Playback volume" className="max-w-28" min={0} max={1} step={0.05} value={[volume]} onValueChange={(value) => onVolume(Array.isArray(value) ? value[0] ?? .82 : value)} />
-      </div>
-      {error ? <p role="alert" className="mt-3 text-sm text-destructive">{error}</p> : null}
+export function SourcePlayer({ player }: SourcePlayerProps) {
+  if (!player.item) return null
+  const name = player.item.label
+  return <div className="source-transport" aria-label={`Sound preview: ${name}`}>
+    <div className="player-meta"><strong>{name}</strong><span>Source preview</span></div>
+    <div className="seek-row">
+      <span className="time">{formatTime(player.currentTime)}</span>
+      <Slider aria-label={`Seek through source ${name}`} min={0} max={Math.max(player.duration, 1)} step={0.1} value={[Math.min(player.currentTime, Math.max(player.duration, 1))]} onValueChange={(value) => player.seek(Array.isArray(value) ? value[0] ?? 0 : value)} />
+      <span className="time">{formatTime(player.duration)}</span>
     </div>
-  )
+    <div className="transport">
+      <Button size="icon" aria-label={`${player.playing ? "Pause" : "Play"} source ${name}`} onClick={() => void player.toggle()}>{player.playing ? <Pause /> : <Play />}</Button>
+      <Button size="icon" variant="ghost" aria-label="Return source to start" onClick={() => player.seek(0)}><RotateCcw /></Button>
+      <Volume2 aria-hidden="true" className="size-4 text-muted-foreground" />
+      <Slider aria-label="Source volume" className="max-w-28" min={0} max={1} step={0.05} value={[player.volume]} onValueChange={(value) => player.setVolume(Array.isArray(value) ? value[0] ?? .82 : value)} />
+    </div>
+    {player.error ? <p role="alert" className="mt-3 text-sm text-destructive">{player.error}</p> : null}
+  </div>
 }

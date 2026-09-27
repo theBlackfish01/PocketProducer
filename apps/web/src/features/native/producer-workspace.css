@@ -8,8 +8,17 @@
 .producer-workspace-header h1:focus { outline: none; }
 .producer-workspace-header p { color: var(--muted-foreground); font-size: .8rem; margin: 0; }
 .producer-workspace-header .workspace-state { text-transform: uppercase; color: var(--forest); font-weight: 650; font-size: .66rem; letter-spacing: .09em; }
-.playback-boundary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 220px; font-size: .72rem; color: var(--muted-foreground); }
 .producer-room .workspace-toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 0; }
+.workspace-toolbar > [data-slot="dropdown-menu-trigger"] { margin-left: auto; }
+.workspace-handoff { display: grid; justify-items: end; gap: 8px; }
+.workspace-handoff .text-link { font-size: .72rem; min-height: 28px; }
+.arrangement-actions, .source-add-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.source-add-actions { margin-bottom: 16px; }
+.source-transport { padding: 16px; margin-top: 16px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+.source-transport .player-meta { gap: 12px; margin-bottom: 16px; }
+.source-transport .player-meta strong { min-width: 0; overflow-wrap: anywhere; }
+.source-transport .player-meta span { white-space: nowrap; }
+[data-slot="dropdown-menu-item"] { min-height: 44px; padding-inline: 12px; }
 .workspace-view-switch { display: flex; gap: 8px; margin-bottom: 16px; }
 .producer-workspace-grid { min-width: 0; }
 .producer-canvas { min-width: 0; }
@@ -77,6 +86,8 @@
 @media (max-width: 700px) {
   .producer-workspace-header { align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px 0; }
   .producer-workspace-header h1 { font-size: 2.2rem; }
+  .workspace-handoff { justify-items: start; }
+  .arrangement-actions { justify-content: flex-start; }
   .playback-boundary { max-width: 100%; font-size: .66rem; }
   .producer-room .workspace-toolbar { gap: 4px; }
   .producer-room .workspace-toolbar button { font-size: .7rem; min-height: 40px; padding-inline: 9px; }

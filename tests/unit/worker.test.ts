@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { JobControlError, type JobRecord } from "@pocket/core";
-import { withLeaseMonitor } from "@pocket/worker";
+import { processJob, withLeaseMonitor } from "@pocket/worker";
 
 const job: JobRecord = {
   id: "00000000-0000-4000-8000-000000000001",
   ownerId: "00000000-0000-4000-8000-000000000002",
   projectId: "00000000-0000-4000-8000-000000000003",
-  kind: "generation",
+  kind: "native-generation",
   state: "running",
-  stage: "rendering",
+  stage: "constructing",
   request: {},
   baseRevisionId: null,
   expectedHeadRevisionId: null,
@@ -26,6 +26,9 @@ const waitForAbort = (signal: AbortSignal) => new Promise<void>((_resolve, rejec
 });
 
 describe("worker lease monitor", () => {
+  it("rejects retired payloads before consulting the database or a provider", async () => {
+    await expect(processJob({ ...job, kind: "generation" } as unknown as JobRecord)).rejects.toThrow("Unsupported retired job kind");
+  });
   it("turns a heartbeat database failure into a typed monitor-unavailable abort", async () => {
     await expect(withLeaseMonitor(job, waitForAbort, {
       intervalMs: 5,

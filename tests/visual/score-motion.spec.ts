@@ -53,7 +53,7 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
     else if (path.endsWith(`/projects/${projectId}`)) json = { project: { id: projectId, title: "Night Drive", currentRevisionId: null }, assets: [], revisions: [], analyses: [], latestJob: null, currentRevision: null }
     else if (path.endsWith("/activity/stream")) { await route.abort(); return }
     else if (path.endsWith("/activity")) json = { events: [], cursor: 0, nextCursor: 0, hasOlder: false, job: options.draft ? job() : null, headId: completed ? "version-3" : "version-2", draft: options.draft ? { step, hash: `draft-${step}` } : null, actions: { canSubmit: abandoned || completed || !options.draft, canStop: Boolean(options.draft && !options.paused), canAbandon: options.paused && !abandoned, issue: options.paused && !abandoned ? "paused" : null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } }
-    else if (path.endsWith("/native")) json = { currentRevisionId: completed ? "version-3" : "version-2", headVersion: completed ? 3 : 2, current: completed ? version(after, 3) : versions[0], versions: completed ? [version(after, 3), ...versions] : versions, context: null, comparisons: {}, synchronization: { state: "local_only", projectId: null, revisionId: null, url: null }, legacyAudio: "none" }
+    else if (path.endsWith("/native")) json = { currentRevisionId: completed ? "version-3" : "version-2", headVersion: completed ? 3 : 2, current: completed ? version(after, 3) : versions[0], versions: completed ? [version(after, 3), ...versions] : versions, context: null, comparisons: {}, synchronization: { state: "local_only", projectId: null, revisionId: null, url: null }, playback: "deferred" }
     else if (path.endsWith("/preservation-preview")) json = { revisionId: "version-2", sectionId: null, namedParts: [], theme: null, unresolved: [] }
     else if (path.endsWith("/capabilities")) json = { matches: [], totalEntities: 0, version: "test" }
     else if (path.endsWith("/jobs/visual-job")) json = { ...job(), events: [] }
@@ -109,11 +109,11 @@ test("leaving the room cancels exhausted-read recovery and ignores a late snapsh
   })
   room.complete()
   await expect.poll(() => reads, { timeout: 20_000 }).toBe(6)
-  // Switching to the separate audio room unmounts NativeRoom in the same app.
-  await page.getByRole("button", { name: "Playable audio", exact: true }).click()
+  // A now-unsupported route unmounts the room without a compatibility editor.
+  await page.evaluate(() => { history.pushState({}, "", "/unavailable"); window.dispatchEvent(new PopStateEvent("popstate")) })
   release()
   await expect(page.locator(".producer-workspace-header")).toHaveCount(0)
-  await expect(page.getByRole("button", { name: "Playable audio", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByRole("alert")).toContainText("This page is no longer available")
   expect(room.writes()).toBe(0)
 })
 
@@ -161,7 +161,7 @@ test("desktop and phone keep inspection, scope and comparison distinct", async (
   await expectReadableText(page.getByRole("button", { name: "Make this change", exact: true }))
   await page.evaluate(() => window.scrollTo(0, 0))
   await page.screenshot({ path: `${evidence}/polish-desktop.png`, fullPage: true })
-  await page.getByRole("button", { name: "Version history", exact: true }).click()
+  await page.getByRole("button", { name: "Versions", exact: true }).click()
   await page.getByRole("button", { name: "Compare", exact: true }).click()
   const dialog = page.getByRole("dialog", { name: "Before and after" })
   await dialog.getByRole("button", { name: "Opening", exact: true }).click()
@@ -284,7 +284,7 @@ test("128-bar 24-part score has bounded nodes and measured interaction frames", 
   await page.getByRole("group", { name: "Visible role lanes" }).getByRole("button", { name: /Drums/ }).click()
   await expect(page.locator(".score-lane")).toHaveCount(21)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(820)
-  await page.getByRole("button", { name: "Version history", exact: true }).click()
+  await page.getByRole("button", { name: "Versions", exact: true }).click()
   const comparisonMilliseconds = await page.getByRole("button", { name: "Compare", exact: true }).evaluate(async (button) => {
     const start = performance.now(); (button as HTMLButtonElement).click()
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))

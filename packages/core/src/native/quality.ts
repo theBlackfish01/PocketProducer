@@ -1,4 +1,4 @@
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { nativeDocumentSchema, type NativeDocument } from "./model.js";
 import { nativeCompletionIssues } from "./producer.js";
 import { symbolicNativeReview } from "./critique.js";

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { nativeDocumentSchema, nativeOperationSchema, type NativeDocument, type NativeOperation } from "./model.js";
 
 const formId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);

@@ -1,6 +1,6 @@
 # Pocket Producer
 
-Pocket Producer is a loopback-first Listening Room. Its current workflow constructs expressive, editable native music from a direction, protects and revises parts, compares immutable versions, and can explicitly synchronize a Nexus project. Native audio rendering/playback is deliberately deferred. The earlier real-WAV create/listen/revise/compare workflow remains available under **Legacy audio**.
+Pocket Producer is a loopback-first Listening Room. Its current workflow constructs expressive, editable native music from a direction, protects and revises parts, compares immutable versions, and can explicitly synchronize a Nexus project. Native audio rendering/playback is deliberately deferred. There is one composition workspace; the prototype four-stem audio workflow has been removed. Own recordings can still be uploaded, recorded and auditioned under **Sounds**.
 
 This first milestone is deliberately local. It does not deploy publicly and it does not represent Gemini or Audiotool as live-verified merely because credentials are configured.
 
@@ -17,7 +17,7 @@ pnpm seed:demo
 pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`, create a session, and in **Arrange** enter either a few words or a detailed production brief. Recordings are optional. Choose Standard or Extended depth, inspect the saved plan and confirmed structural draft while the job runs, then inspect sections, parts and native palette. A safely paused Standard draft can be explicitly extended and continued on the same job without resetting confirmed work or accounting. Protect a part, target another part or section, request a precise change, compare structural versions and restore explicitly. In fixture mode this is an audio-independent deterministic demonstration, not evidence of real-model artistry. For the preserved playable journey, choose **Playable audio** and follow the earlier WAV flow.
+Open `http://127.0.0.1:5173`, create a session, and enter either a few words or a detailed production brief. Recordings are optional. Choose Standard or Extended depth, inspect the saved plan and confirmed structural draft while the job runs, then inspect sections, parts and native palette. A safely paused Standard draft can be explicitly extended and continued on the same job without resetting confirmed work or accounting. Protect a part, target another part or section, request a precise change, compare structural versions and restore explicitly. In fixture mode this is an audio-independent deterministic demonstration, not evidence of real-model artistry. Use **Versions** to compare, **Sounds** for optional sources, the session menu for usage, and **Copy/Open in Audiotool** for the explicit handoff.
 
 The root `.env` is loaded only by server code and remains ignored. Do not add secrets under `VITE_*`. For a no-cost deterministic run, launch the services with `FIXTURE_MODE=true`; live OpenAI creation requires the existing `OPENAI_API_KEY` and is fenced by `INITIAL_BUILD_API_BUDGET_USD` and `MAX_JOB_COST_USD`.
 
@@ -32,33 +32,27 @@ pnpm test
 pnpm test:integration
 pnpm test:e2e
 pnpm build
-pnpm test:live
-pnpm test:gemini-live
-pnpm verify:demo
 pnpm budget:status
 ```
 
-`pnpm test:live` is the opt-in integrated source-Gemini → OpenAI Deep Agent → render → preview-Gemini verification. It sends an owned synthetic WAV and generated preview to external providers and can incur bounded usage; run it only with explicit approval. The ordinary suite clears provider keys and is fully offline.
-
-`pnpm test:gemini-live` is a separately authorized, two-call diagnostic. The retained 2026-09-21 identity is terminal after both transports failed without provider telemetry and is deliberately not replayable. Diagnose connectivity and use a genuinely new authorized identity before any future run; it does not invoke OpenAI or render again.
+Ordinary tests clear provider credentials and tracing. No automatic model call or Audiotool write occurs when navigating, comparing, or choosing a saved version.
 
 ## What is implemented
 
-- React/Vite Listening Room using owned shadcn source, Base UI, Tailwind, Lucide and one wavesurfer-backed legacy playback controller, plus native arrangement/part/protection/compare views.
+- React/Vite Listening Room using owned shadcn source, Base UI, Tailwind, Lucide and one source-audition controller, plus native arrangement/part/protection/compare views.
 - Native 960-PPQ schema v2 with reusable motifs, MIDI notes, Beatbox8 patterns, instrument/effect/automation state, source intervals and validated protected operations; immutable history and durable step replay.
 - Pinned Nexus capability discovery and offline native mapping/readback; checkpointed isolated remote sync with a strict unverified-live status. Native audio/Gemini are deferred; owned-source upload/placement has offline contract evidence, not new live verification.
 - Fastify API, PostgreSQL canonical state and outbox/lease/fencing queue, independent worker, cancellation, retry and owner checks.
 - OpenAI Deep Agent on LangGraph with PostgreSQL checkpoints, scoped runtime skills, a durable staged native plan, captured Standard/Extended limits, and validated musical construction tools. The text-only quality benchmark still needs real-model evaluation.
-- Canonical tick composition, 48 kHz deterministic WAV renderer, per-part stems, measured audio facts and private content-addressed storage.
-- Protected drum simplification, canonical melody and artifact checks, immutable history, A/B audition and explicit restore.
-- Gemini source/preview adapter with structured critique, usage capture, one-repair ceiling and an honest unavailable state.
-- Preserved Nexus v3 four-track stem mapping with explicit 960→3840 PPQ conversion, browser PKCE/callback, encrypted owner-bound worker sessions, and durable per-step recovery. Audiotool registration/consent previously succeeded; this assignment made no live Audiotool call. See [docs/USER-SETUP.md](docs/USER-SETUP.md).
+- Private content-addressed WAV sources, validation, measurement and HTTP range seeking.
+- Gemini adapter retained at the future listening/source-analysis boundary; no native full-mix playback or automatic critique loop.
+- Native Nexus mapping/readback with encrypted owner-bound OAuth, fenced uploads and durable copy recovery. Prior score-specific live evidence is in docs/STATUS.md; it does not prove heard quality.
 
 See [docs/STATUS.md](docs/STATUS.md), [docs/native-text-to-music.md](docs/native-text-to-music.md), [docs/architecture.md](docs/architecture.md), [docs/design-system.md](docs/design-system.md), and [docs/testing.md](docs/testing.md).
 
 ## Understand the architecture
 
-The interactive [Pocket Producer architecture course](docs/pocket-producer-course/index.html) walks through the Listening Room, API and PostgreSQL job system, Deep Agent producer, canonical compiler and renderer, Gemini/Nexus boundaries, and the verification strategy. It is a static artifact that can be opened directly; rebuild it on Windows with:
+The interactive [Pocket Producer architecture course](docs/pocket-producer-course/index.html) walks through the Listening Room, API and PostgreSQL job system, Deep Agent producer, canonical native score and musical tools, Gemini/Nexus boundaries, and the verification strategy. It is a static artifact that can be opened directly; rebuild it on Windows with:
 
 ```powershell
 & .\docs\pocket-producer-course\build.ps1

@@ -1,5 +1,20 @@
 # Verification record
 
+## Single-workspace retirement (2026-09-27)
+
+Provider-free final verification:
+
+| Check | Result | Maintained evidence |
+| --- | --- | --- |
+| `pnpm check` | Lint/types/build passed; **26 files / 141 unit tests**, unit duration 42.78 s | Shared canonical hash and runtime extraction, native fixtures, WAV codec/signal checks, seven byte-range cases, retired worker-kind rejection. Existing large-chunk warning remains. |
+| `pnpm test:integration` | **4 files / 68 tests**, 99.65 s | Native worker processes are actually killed/restarted and contested; cancelled jobs cannot publish; native protections/replay/recovery and late/unknown accounting remain covered. Exact-ID test cleanup retains provider ledger/identities and rejects native or active projects. Stale legacy outbox/jobs cannot dispatch or claim. |
+| `pnpm test:e2e` | **14 Chromium journeys**, 1.8 min | Real isolated API/worker native create → protect → revise → compare → select/reload; source upload, range seek, paused playback after close, retired API/page unavailable, late room responses and microphone permission cleanup. Usage/connection dialogs return focus to Session options. Final source/native subset **3/3**, 15.4 s, after the last two assertions. |
+| `pnpm test:visual` | **8/8**, 1.5 min | Read-only comparison, confirmed-only motion, reduced motion/keyboard focus, phone/tablet, 128 bars/24 parts, partial recovery, bounded long feed and pending direction preservation. Network-fixture UI evidence only. |
+
+The isolated integration and E2E processes share the configured `_test` database; run these suites **serially**, or supply different isolated database URLs. An accidental concurrent invocation allowed the E2E worker to claim an integration fixture's job. The final serial runs above passed; this was test orchestration interference, not evidence of a production recovery failure. Old four-stem-only tests were removed with that product; process/recovery/access/accounting coverage was moved to native production paths rather than skipped.
+
+Reviewed screenshots: ignored `.local/evidence/workspace-desktop.png`, `workspace-mobile.png`, plus comparison/tablet captures. No physical-phone, screen-reader, Firefox/WebKit or human audio-quality test is claimed. Source playback tests inspect a real browser media element, not whether the native score sounds good. No provider call, LangSmith upload, new live Nexus validation, render probe or remote mutation occurred. Existing local environment and provider ledger were preserved. Historical sections below document the behavior at their dates and do not imply continued support for the retired audio product.
+
 ## Reliable creative-production pass (2026-09-27)
 
 `pnpm check` passed lint, strict types, **26 unit files / 139 tests**, and production Vite/TypeScript build (the existing large lazy-chunk warning remains). `pnpm test:integration` passed **4 files / 71 tests** after the review fixes. New worker-path regressions cover a budget pause with a saved plan but zero musical steps, simulated old failed-aggregate repair and same-job continuation without duplicate first-call accounting, retained creative context in actual model input, separate focused review → score edit → second review, a measured, hash-pinned Audiotool sample sequence through offline Nexus validation, idempotent shortlisted Gemini analysis, an unknown Gemini outcome that cannot accept a score, and an atomic two-distinct-analysis cap under contention. Unit tests cover beat-tick residue versus genuinely off-grid values, cache-read/write pricing, per-authenticated-client metadata cache isolation, changed sample bytes, example validity, fixed-case evaluator objectivity, and rejected invented score evidence.

@@ -5,9 +5,10 @@ import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
 import { registerActivityRoutes } from "./activity-stream.js";
+import { byteRange } from "@pocket/core";
 import {
-  audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createJob, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot, getRevision,
-  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, listRevisions, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resolveNativePreservation, resumeNativePartialJob, saveAudiotoolSession, selectNativeRevision, selectRevision, storeImmutableAudio, type NativeLibraryClient
+  audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot,
+  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resolveNativePreservation, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, selectNativeRevision, storeImmutableAudio
 } from "@pocket/core";
 
 const config = getConfig();
@@ -44,7 +45,7 @@ app.get("/api/v1/status", async () => {
     },
     uploadFormats: ["audio/wav"],
     ffmpeg: false,
-    renderer: "deterministic-wav-v1",
+    nativePlayback: "deferred",
     nexus: {
       sdk: "0.0.17",
       liveExportVerified: false,
@@ -99,7 +100,7 @@ app.get("/api/v1/native/library/samples", async (request) => {
   if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
   const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
   if (!connection) throw Object.assign(new Error("Connect Audiotool before searching its sound library"), { statusCode: 409 });
-  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).searchSamples(query, pageToken, { kind, minBpm, maxBpm }); }
+  try { return await createNativeLibrary(connection.client).searchSamples(query, pageToken, { kind, minBpm, maxBpm }); }
   finally { await connection.awaitTokenPersistence(); }
 });
 
@@ -108,7 +109,7 @@ app.get("/api/v1/native/library/sample-analysis", async (request) => {
   if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
   const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
   if (!connection) throw Object.assign(new Error("Connect Audiotool before inspecting sample audio"), { statusCode: 409 });
-  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).inspectSampleAudio(name); }
+  try { return await createNativeLibrary(connection.client).inspectSampleAudio(name); }
   finally { await connection.awaitTokenPersistence(); }
 });
 
@@ -117,7 +118,7 @@ app.get("/api/v1/native/library/presets", async (request) => {
   if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
   const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
   if (!connection) throw Object.assign(new Error("Connect Audiotool before searching its sound library"), { statusCode: 409 });
-  try { return await createNativeLibrary(connection.client as unknown as NativeLibraryClient).searchPresets(deviceType, query); }
+  try { return await createNativeLibrary(connection.client).searchPresets(deviceType, query); }
   finally { await connection.awaitTokenPersistence(); }
 });
 
@@ -210,38 +211,20 @@ app.post("/api/v1/projects/:projectId/assets", async (request, reply) => {
 
 app.get("/api/v1/assets/:assetId/audio", async (request, reply) => {
   const { assetId } = z.object({ assetId: idSchema }).parse(request.params);
-  const result = await getPool().query<{ object_path: string }>("SELECT object_path FROM asset WHERE id=$1 AND owner_id=$2 AND readiness='ready'", [assetId, ownerId]);
-  const path = result.rows[0]?.object_path;
-  if (!path) throw Object.assign(new Error("Asset not found"), { statusCode: 404 });
+  const result = await getPool().query<{ object_path: string }>("SELECT a.object_path FROM asset a JOIN project p ON p.id=a.project_id WHERE a.id=$1 AND a.owner_id=$2 AND p.owner_id=$2 AND p.deleted_at IS NULL AND a.kind='source' AND a.readiness='ready'", [assetId, ownerId]);
+  const storedPath = result.rows[0]?.object_path;
+  if (!storedPath) throw Object.assign(new Error("Asset not found"), { statusCode: 404 });
+  const path = safeStoragePath(storedPath);
   const file = await stat(path);
-  reply.header("Accept-Ranges", "bytes").header("Content-Type", "audio/wav").header("Content-Length", file.size).header("Cache-Control", "private, max-age=60");
-  return reply.send(createReadStream(path));
-});
-
-app.post("/api/v1/projects/:projectId/generations", async (request, reply) => {
-  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  await requireProject(ownerId, projectId);
-  const body = z.object({ direction: z.string().trim().min(3).max(1_000), sourceAssetId: idSchema.optional() }).parse(request.body);
-  const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
-  const job = await createJob({ ownerId, projectId, kind: "generation", idempotencyKey, request: body });
-  return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
-});
-
-app.post("/api/v1/projects/:projectId/revisions", async (request, reply) => {
-  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  const body = z.object({
-    direction: z.string().trim().min(3).max(1_000),
-    baseRevisionId: idSchema,
-    expectedHeadRevisionId: idSchema,
-    protectedTrackIds: z.tuple([z.literal("melody")]).default(["melody"]),
-    sectionId: z.literal("groove").default("groove")
-  }).parse(request.body);
-  if (!/drum/i.test(body.direction) || !/simpl|less|space|restrain/i.test(body.direction)) {
-    throw Object.assign(new Error("This version supports only simplifying drums in Groove while protecting the melody"), { statusCode: 422 });
+  reply.header("Accept-Ranges", "bytes").header("Content-Type", "audio/wav").header("Cache-Control", "private, max-age=60");
+  const range = byteRange(request.headers.range, file.size);
+  if (range === "invalid") return reply.status(416).header("Content-Range", `bytes */${file.size}`).send();
+  if (range) {
+    reply.status(206).header("Content-Range", `bytes ${range.start}-${range.end}/${file.size}`).header("Content-Length", range.end - range.start + 1);
+    return reply.send(createReadStream(path, range));
   }
-  const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
-  const job = await createJob({ ownerId, projectId, kind: "revision", idempotencyKey, request: body, baseRevisionId: body.baseRevisionId, expectedHeadRevisionId: body.expectedHeadRevisionId });
-  return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
+  reply.header("Content-Length", file.size);
+  return reply.send(createReadStream(path));
 });
 
 app.get("/api/v1/jobs/:jobId", async (request) => {
@@ -252,21 +235,11 @@ app.get("/api/v1/jobs/:jobId", async (request) => {
 app.get("/api/v1/projects/:projectId/commands/:operation/:idempotencyKey", async (request) => {
   const params = z.object({
     projectId: idSchema,
-    operation: z.enum(["generation", "revision", "export", "native-generation", "native-revision", "native-sync"]),
+    operation: z.enum(["native-generation", "native-revision", "native-sync"]),
     idempotencyKey: z.string().min(8).max(160)
   }).parse(request.params);
   await requireProject(ownerId, params.projectId);
   return { job: await findCommandJob(ownerId, params.projectId, params.operation, params.idempotencyKey) };
-});
-
-app.post("/api/v1/jobs/:jobId/reconcile", async (request) => {
-  const { jobId } = z.object({ jobId: idSchema }).parse(request.params);
-  const job = await jobSnapshot(ownerId, jobId);
-  const result = await getPool().query(
-    "SELECT state,remote_url,error_message FROM project_export WHERE owner_id=$1 AND job_id=$2",
-    [ownerId, jobId]
-  );
-  return { job, export: result.rows[0] ?? null };
 });
 
 app.post("/api/v1/jobs/:jobId/cancel", async (request, reply) => {
@@ -274,54 +247,6 @@ app.post("/api/v1/jobs/:jobId/cancel", async (request, reply) => {
   await cancelJob(ownerId, jobId);
   const snapshot = await jobSnapshot(ownerId, jobId);
   return reply.status(snapshot.state === "cancelled" ? 200 : 202).send({ jobId, state: snapshot.state });
-});
-
-app.get("/api/v1/projects/:projectId/versions", async (request) => {
-  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  await requireProject(ownerId, projectId);
-  return { versions: await listRevisions(ownerId, projectId) };
-});
-
-app.post("/api/v1/projects/:projectId/select-version", async (request) => {
-  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  const body = z.object({ revisionId: idSchema, expectedHeadRevisionId: idSchema.nullable() }).parse(request.body);
-  await selectRevision(ownerId, projectId, body.revisionId, body.expectedHeadRevisionId);
-  return { selectedRevisionId: body.revisionId };
-});
-
-app.get("/api/v1/revisions/:revisionId/audio", async (request, reply) => {
-  const { revisionId } = z.object({ revisionId: idSchema }).parse(request.params);
-  const revision = await getRevision(ownerId, revisionId);
-  const path = String(revision.preview_path);
-  const file = await stat(path);
-  const range = request.headers.range;
-  reply.header("Accept-Ranges", "bytes").header("Content-Type", "audio/wav").header("Cache-Control", "private, max-age=60");
-  if (range) {
-    const match = /^bytes=(\d+)-(\d*)$/.exec(range);
-    if (!match) return reply.status(416).send();
-    const start = Number(match[1]);
-    const end = match[2] ? Math.min(Number(match[2]), file.size - 1) : file.size - 1;
-    if (start > end || start >= file.size) return reply.status(416).send();
-    reply.status(206).header("Content-Range", `bytes ${start}-${end}/${file.size}`).header("Content-Length", end - start + 1);
-    return reply.send(createReadStream(path, { start, end }));
-  }
-  reply.header("Content-Length", file.size);
-  return reply.send(createReadStream(path));
-});
-
-app.post("/api/v1/revisions/:revisionId/exports", async (request, reply) => {
-  const { revisionId } = z.object({ revisionId: idSchema }).parse(request.params);
-  const revision = await getRevision(ownerId, revisionId);
-  const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
-  const job = await createJob({ ownerId, projectId: String(revision.project_id), kind: "export", idempotencyKey, request: { revisionId }, baseRevisionId: revisionId, expectedHeadRevisionId: revisionId });
-  return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
-});
-
-app.get("/api/v1/exports/:revisionId", async (request) => {
-  const { revisionId } = z.object({ revisionId: idSchema }).parse(request.params);
-  await getRevision(ownerId, revisionId);
-  const result = await getPool().query("SELECT id,state,fidelity,remote_url,error_message,updated_at FROM project_export WHERE owner_id=$1 AND revision_id=$2", [ownerId, revisionId]);
-  return { export: result.rows[0] ?? null };
 });
 
 if (config.APP_ENV === "test") {

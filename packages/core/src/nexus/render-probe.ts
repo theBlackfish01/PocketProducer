@@ -96,7 +96,7 @@ async function main() {
   const session = await loadAudiotoolSession(ownerId);
   if (!session) throw new Error("Audiotool browser session disappeared");
   const authorization = `Bearer ${session.tokens.accessToken}`;
-  const client = connection.client as AudiotoolClient;
+  const client = connection.client;
   const opened = await client.projects.openSession({ projectName: checkpoint.projectName });
   if (opened instanceof Error || !opened.session?.documentServiceUrl) throw opened instanceof Error ? opened : new Error("SDK returned no DocumentService URL");
   const service = safeProviderUrl(opened.session.documentServiceUrl);

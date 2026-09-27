@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { getConfig } from "../config.js";
 import { getPool } from "../db/pool.js";
 import { JobControlError, type JobRecord } from "../db/repository.js";
@@ -252,7 +252,7 @@ export async function nativeSnapshot(ownerId: string, projectId: string) {
     comparisons: current ? Object.fromEntries(versions.rows.map((value) => [String(value.id), nativeDiff(nativeDocumentSchema.parse(current.document), nativeDocumentSchema.parse(value.document))])) : {},
     context: current ? pinnedContext(nativeDocumentSchema.parse(current.document), currentId, remote) : null,
     synchronization: remote,
-    legacyAudio: "Legacy audio, if present, belongs only to its separate four-stem version; native construction has no preview."
+    playback: "In-app listening is not available for this composition."
   };
 }
 

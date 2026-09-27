@@ -1,7 +1,7 @@
 import { AIMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
 import { describe, expect, it } from "vitest";
-import { openAiCost, usageFromLlmResult } from "../agent/producer.js";
+import { openAiCost, usageFromLlmResult } from "../agent/runtime.js";
 import { pricingEvidence, tokenCostMicrousdAtPrice } from "./pricing.js";
 
 describe("captured provider accounting", () => {

@@ -1,44 +1,17 @@
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { decodeWav, encodeWav, renderComposition, validateComposition } from "@pocket/core";
+import { decodeWav, encodeWav } from "@pocket/core";
 
-const tinyComposition = validateComposition({
-  schemaVersion: 1,
-  ppq: 960,
-  tempoBpm: 96,
-  timeSignature: { numerator: 4, denominator: 4 },
-  durationTicks: 3_840,
-  tailSeconds: 0.2,
-  seed: 19,
-  palette: "sunroom",
-  sourceAssetIds: [],
-  sections: [{ id: "intro", name: "Intro", startTick: 0, endTick: 3_840 }],
-  tracks: [
-    { id: "drums", role: "drums", gainDb: -3, pan: 0, events: [{ id: "kick", assetId: "builtin:kick", startTick: 0, durationTicks: 480, gainDb: -2 }] },
-    { id: "melody", role: "melody", gainDb: -8, pan: 0.1, events: [{ id: "note", assetId: "builtin:melody:60", startTick: 960, durationTicks: 960, gainDb: -8 }] }
-  ]
-});
-
-describe("deterministic WAV renderer", () => {
-  it("writes a playable 48 kHz stereo preview with real signal", async () => {
-    const firstDirectory = await mkdtemp(join(tmpdir(), "pocket-render-a-"));
-    const secondDirectory = await mkdtemp(join(tmpdir(), "pocket-render-b-"));
-    const first = await renderComposition(tinyComposition, firstDirectory, []);
-    const second = await renderComposition(tinyComposition, secondDirectory, []);
-    const firstBytes = await readFile(first.previewPath);
-    const secondBytes = await readFile(second.previewPath);
-    const decoded = decodeWav(firstBytes);
-
-    expect(decoded.sampleRate).toBe(48_000);
+describe("owned source WAV", () => {
+  it("roundtrips a real stereo signal deterministically", () => {
+    const left = Float32Array.from({ length: 4800 }, (_, i) => Math.sin(i * 0.04) * 0.25);
+    const right = Float32Array.from(left, (v) => -v);
+    const bytes = encodeWav(left, right, 48000);
+    expect(bytes).toEqual(encodeWav(left, right, 48000));
+    const decoded = decodeWav(bytes);
+    expect(decoded.durationSeconds).toBe(0.1);
     expect(decoded.channels).toHaveLength(2);
-    expect(decoded.durationSeconds).toBeGreaterThan(2.6);
-    expect(first.peak).toBeGreaterThan(0.01);
-    expect(first.rms).toBeGreaterThan(0.001);
-    expect(first.nonSilentRatio).toBeGreaterThan(0.01);
-    expect(createHash("sha256").update(firstBytes).digest("hex")).toBe(createHash("sha256").update(secondBytes).digest("hex"));
+    expect(decoded.channels[0]![20]).toBeCloseTo(left[20]!, 4);
+    expect(decoded.channels[1]![20]).toBeCloseTo(right[20]!, 4);
   });
 
   it("rejects malformed, unsupported and over-duration WAV input with typed client errors", () => {

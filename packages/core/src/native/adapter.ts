@@ -2,7 +2,7 @@ import { createOfflineDocument } from "@audiotool/nexus/node";
 import { Ticks } from "@audiotool/nexus/utils";
 import type { SyncedDocument } from "@audiotool/nexus";
 import type { NexusEntity } from "@audiotool/nexus/document";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { nativePresetFingerprint, type LibrarySample, type NativePreset } from "./library.js";
 import { assertNativeDeviceMapping, materializedNotes, nativeDocumentSchema, type NativeDocument, type NativePart } from "./model.js";
 

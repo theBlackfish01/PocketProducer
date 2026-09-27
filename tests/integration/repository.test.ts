@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   analyzePreview,
   audiotoolSessionStatus,
@@ -12,11 +12,8 @@ import {
   claimJobById,
   closePool,
   commitCancelled,
-  commitRevision,
-  compileArrangement,
-  createJob,
+  createNativeJob,
   createProject,
-  deterministicPlan,
   deleteAudiotoolSession,
   dispatchOutbox,
   encodeWav,
@@ -30,16 +27,12 @@ import {
   markEffectDispatched,
   reserveProviderEffect,
   requeueJob,
-  recordAudioAnalysis,
-  recordExportProgress,
-  exportResumeState,
+  retireAudioTestProject,
   settleExpiredJobs,
   jobSnapshot,
   loadAudiotoolSession,
   requireProject,
   saveAudiotoolSession,
-  selectRevision,
-  needsAttentionJob,
   type GeminiGenerateClient
 } from "@pocket/core";
 
@@ -78,7 +71,6 @@ function startWorkerProcess(label: string): ChildProcess {
       GEMINI_API_KEY: "",
       GOOGLE_API_KEY: "",
       JOB_LEASE_SECONDS: "3",
-      MAX_AUDIO_CRITIQUE_PASSES: "0"
     }
   });
 }
@@ -104,7 +96,16 @@ beforeAll(async () => {
   projectIds.push(projectId, secondProjectId);
 });
 
+beforeEach(async () => {
+  projectId = (await createProject(ownerA, "Isolated native lifecycle")).id;
+  projectIds.push(projectId);
+});
 afterAll(async () => {
+  await getPool().query("DELETE FROM native_revision_sync WHERE project_id=ANY($1::uuid[])", [projectIds]);
+  await getPool().query("DELETE FROM native_sync WHERE project_id=ANY($1::uuid[])", [projectIds]);
+  await getPool().query("DELETE FROM native_project_head WHERE project_id=ANY($1::uuid[])", [projectIds]);
+  await getPool().query("UPDATE job SET result_native_revision_id=NULL WHERE project_id=ANY($1::uuid[])", [projectIds]);
+  await getPool().query("DELETE FROM native_revision WHERE project_id=ANY($1::uuid[])", [projectIds]);
   await getPool().query("UPDATE project SET current_revision_id=NULL WHERE id=ANY($1::uuid[])", [projectIds]);
   await getPool().query("UPDATE job SET result_revision_id=NULL,base_revision_id=NULL,expected_head_revision_id=NULL WHERE project_id=ANY($1::uuid[])", [projectIds]);
   await getPool().query("DELETE FROM project_export WHERE project_id=ANY($1::uuid[])", [projectIds]);
@@ -117,6 +118,31 @@ afterAll(async () => {
 });
 
 describe("durable job repository", () => {
+  it("retires only obsolete owned test content without resetting financial effects", async () => {
+    const disposable = (await createProject(ownerA, "Disposable audio-only test")).id;
+    projectIds.push(disposable);
+    const retiredJob = (await getPool().query<{ id: string }>("INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,state) VALUES($1,$2,'generation',$3,'fixture','{}','failed') RETURNING id", [ownerA, disposable, randomUUID()])).rows[0]!.id;
+    await getPool().query("INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,reservation_microusd,actual_cost_microusd,cost_status) VALUES($1,'retirement','retirement','test','uncertain','gemini',1000,0,'unknown')", [retiredJob]);
+    const ledgerBefore = (await getPool().query("SELECT * FROM effect WHERE job_id=$1", [retiredJob])).rows;
+    await expect(retireAudioTestProject(ownerB, disposable)).rejects.toThrow("Active owned");
+    await expect(retireAudioTestProject(ownerA, disposable)).resolves.toEqual({ removedVersions: 0, removedSources: 0 });
+    expect((await getPool().query("SELECT * FROM effect WHERE job_id=$1", [retiredJob])).rows).toEqual(ledgerBefore);
+    await expect(requireProject(ownerA, disposable)).rejects.toMatchObject({ statusCode: 404 });
+    const native = await createNativeJob({ ownerId: ownerA, projectId, kind: "native-generation", expectedHeadId: null, idempotencyKey: randomUUID(), request: { direction: "Keep this unfinished composition" } });
+    await expect(retireAudioTestProject(ownerA, projectId)).rejects.toThrow("native work");
+    await cancelJob(ownerA, native.id);
+    await dispatchOutbox();
+    expect(await claimJobById(retiredJob, "retired-must-not-run")).toBeNull();
+    const unsupported = (await getPool().query<{ id: string }>("INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,state) VALUES($1,$2,'generation',$3,'retired','{}','queued') RETURNING id", [ownerA, secondProjectId, randomUUID()])).rows[0]!.id;
+    await getPool().query("INSERT INTO outbox(job_id,topic) VALUES($1,'job.generation')", [unsupported]);
+    await expect(retireAudioTestProject(ownerA, secondProjectId)).rejects.toThrow("active work");
+    await dispatchOutbox();
+    expect((await getPool().query("SELECT delivered_at FROM outbox WHERE job_id=$1", [unsupported])).rows[0]?.delivered_at).toBeNull();
+    // Even a stale delivery marker cannot make the removed worker path runnable.
+    await getPool().query("UPDATE outbox SET delivered_at=now() WHERE job_id=$1", [unsupported]);
+    expect(await claimJobById(unsupported, "legacy-message")).toBeNull();
+    await getPool().query("UPDATE job SET state='cancelled' WHERE id=$1", [unsupported]);
+  });
   it("encrypts the owner-bound Audiotool worker session and supports disconnect", async () => {
     const tokens = { accessToken: `access-${randomUUID()}`, refreshToken: `refresh-${randomUUID()}`, expiresAt: Date.now() + 3_600_000 };
     await saveAudiotoolSession(ownerA, "Local Audiotool tester", tokens);
@@ -141,11 +167,11 @@ describe("durable job repository", () => {
 
   it("deduplicates identical requests and rejects key reuse", async () => {
     const idempotencyKey = `test-${randomUUID()}`;
-    const first = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey, request: { direction: "Warm and spacious" } });
-    const duplicate = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey, request: { direction: "Warm and spacious" } });
+    const first = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey, request: { direction: "Warm and spacious" } });
+    const duplicate = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey, request: { direction: "Warm and spacious" } });
     expect(duplicate).toEqual({ id: first.id, duplicate: true });
-    await expect(createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey, request: { direction: "Entirely different" } })).rejects.toMatchObject({ statusCode: 409 });
-    const otherProject = await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey, request: { direction: "Warm and spacious" } });
+    await expect(createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey, request: { direction: "Entirely different" } })).rejects.toMatchObject({ statusCode: 409 });
+    const otherProject = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId: secondProjectId, kind: "native-generation", idempotencyKey, request: { direction: "Warm and spacious" } });
     expect(otherProject.id).not.toBe(first.id);
     await dispatchOutbox();
     for (let index = 0; index < 2; index += 1) {
@@ -155,7 +181,7 @@ describe("durable job repository", () => {
   });
 
   it("reclaims an expired lease with a new fencing generation", async () => {
-    const created = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `restart-${randomUUID()}`, request: { direction: "Lease restart fixture" } });
+    const created = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `restart-${randomUUID()}`, request: { direction: "Lease restart fixture" } });
     await dispatchOutbox();
     const firstClaim = await claimNextJob("worker-before-restart");
     expect(firstClaim?.id).toBe(created.id);
@@ -167,8 +193,8 @@ describe("durable job repository", () => {
     expect((await jobSnapshot(ownerA, secondClaim?.id ?? "")).state).toBe("failed");
   });
 
-  it("records failed and cancelled revision jobs without crossing ownership", async () => {
-    const cancelled = await createJob({ ownerId: ownerA, projectId, kind: "revision", idempotencyKey: `cancel-${randomUUID()}`, request: { direction: "Simplify drums and keep melody" } });
+  it("records failed and cancelled native jobs without crossing ownership", async () => {
+    const cancelled = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `cancel-${randomUUID()}`, request: { direction: "Simplify drums and keep melody" } });
     await cancelJob(ownerA, cancelled.id);
     await cancelJob(ownerA, cancelled.id);
     const cancelledSnapshot = await jobSnapshot(ownerA, cancelled.id);
@@ -176,7 +202,7 @@ describe("durable job repository", () => {
     const cancellationEvents = cancelledSnapshot.events as Array<{ event_type: string }>;
     expect(cancellationEvents.filter((event) => event.event_type === "cancelled")).toHaveLength(1);
 
-    const failed = await createJob({ ownerId: ownerA, projectId, kind: "revision", idempotencyKey: `fail-${randomUUID()}`, request: { direction: "Unsupported revision scope" } });
+    const failed = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `fail-${randomUUID()}`, request: { direction: "Unsupported revision scope" } });
     await dispatchOutbox();
     const claimed = await claimNextJob("revision-failure-worker");
     expect(claimed?.id).toBe(failed.id);
@@ -187,7 +213,7 @@ describe("durable job repository", () => {
   });
 
   it("settles running cancellation and fences stale progress and failure writes", async () => {
-    const created = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `running-cancel-${randomUUID()}`, request: { direction: "Warm and restrained" } });
+    const created = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `running-cancel-${randomUUID()}`, request: { direction: "Warm and restrained" } });
     await dispatchOutbox();
     let claimed = await claimNextJob("running-cancel-worker");
     while (claimed && claimed.id !== created.id) {
@@ -204,7 +230,7 @@ describe("durable job repository", () => {
   });
 
   it("renews a live lease and prevents an expired attempt from committing", async () => {
-    const created = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `lease-${randomUUID()}`, request: { direction: "Warm and restrained" } });
+    const created = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `lease-${randomUUID()}`, request: { direction: "Warm and restrained" } });
     await dispatchOutbox();
     const first = await claimNextJob("lease-worker-one");
     expect(first?.id).toBe(created.id);
@@ -219,7 +245,7 @@ describe("durable job repository", () => {
   });
 
   it("settles queued and running deadline expiry exactly once with typed control", async () => {
-    const queued = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `expired-queued-${randomUUID()}`, request: { direction: "Expired before claim" } });
+    const queued = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `expired-queued-${randomUUID()}`, request: { direction: "Expired before claim" } });
     await dispatchOutbox();
     await getPool().query("UPDATE job SET deadline_at=now()-interval '1 second' WHERE id=$1", [queued.id]);
     expect(await claimJobById(queued.id, "must-not-claim-expired")).toBeNull();
@@ -228,7 +254,7 @@ describe("durable job repository", () => {
     await settleExpiredJobs(queued.id);
     expect((queuedSnapshot.events as Array<{ event_type: string }>).filter((event) => event.event_type === "failed")).toHaveLength(1);
 
-    const running = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `expired-running-${randomUUID()}`, request: { direction: "Expire during stage" } });
+    const running = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `expired-running-${randomUUID()}`, request: { direction: "Expire during stage" } });
     await dispatchOutbox();
     const attempt = await claimJobById(running.id, "deadline-stage-worker");
     if (!attempt) throw new Error("Expected running deadline attempt");
@@ -240,7 +266,7 @@ describe("durable job repository", () => {
   });
 
   it("bounds transient retry to one requeue and then settles the second attempt", async () => {
-    const created = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `retry-bound-${randomUUID()}`, request: { direction: "Retry boundary" } });
+    const created = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `retry-bound-${randomUUID()}`, request: { direction: "Retry boundary" } });
     await dispatchOutbox();
     const first = await claimJobById(created.id, "retry-worker-one");
     if (!first) throw new Error("Expected first retry attempt");
@@ -256,7 +282,7 @@ describe("durable job repository", () => {
   });
 
   it("finalizes provider effects once and retains late/unknown usage liability", async () => {
-    const created = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `effect-finalize-${randomUUID()}`, request: { direction: "Accounting fixture" } });
+    const created = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `effect-finalize-${randomUUID()}`, request: { direction: "Accounting fixture" } });
     await dispatchOutbox();
     const attempt = await claimJobById(created.id, "effect-finalizer");
     if (!attempt) throw new Error("Expected accounting attempt");
@@ -290,7 +316,7 @@ describe("durable job repository", () => {
   });
 
   it("serializes concurrent provider reservations against one job allowance", async () => {
-    const created = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `concurrent-budget-${randomUUID()}`, request: { direction: "Concurrent accounting fixture" } });
+    const created = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `concurrent-budget-${randomUUID()}`, request: { direction: "Concurrent accounting fixture" } });
     await dispatchOutbox();
     const attempt = await claimJobById(created.id, "concurrent-budget-worker");
     if (!attempt) throw new Error("Expected concurrent budget attempt");
@@ -309,137 +335,11 @@ describe("durable job repository", () => {
     await failJob(attempt, "TEST_COMPLETE", "Concurrent budget admission verified");
   });
 
-  it("fences a concurrent and then stale Nexus export across distinct jobs", async () => {
-    const exportProjectId = (await createProject(ownerA, "Nexus recovery evidence")).id;
-    projectIds.push(exportProjectId);
-    const generation = await createJob({ ownerId: ownerA, projectId: exportProjectId, kind: "generation", idempotencyKey: `export-base-${randomUUID()}`, request: { direction: "Export base" } });
-    await dispatchOutbox();
-    const generationAttempt = await claimJobById(generation.id, "export-base-worker");
-    if (!generationAttempt) throw new Error("Expected export base attempt");
-    const base = await commitRevision(generationAttempt, {
-      composition: compileArrangement(deterministicPlan("Warm export base", false), undefined, 17),
-      previewPath: "C:/test/export-base.wav", stems: { drums: "C:/test/export-drums.wav" }, waveformPeaks: [0.2], durationSeconds: 10,
-      peak: 0.2, rms: 0.1, nonSilentRatio: 0.5, title: "Export base", summary: "Export fixture", protectedTrackHashes: {}, producer: { provider: "fixture" }
-    });
-    const baseRevisionId = base.revisionId;
-    const first = await createJob({ ownerId: ownerA, projectId: exportProjectId, kind: "export", idempotencyKey: `export-a-${randomUUID()}`, request: {}, baseRevisionId, expectedHeadRevisionId: baseRevisionId });
-    const second = await createJob({ ownerId: ownerA, projectId: exportProjectId, kind: "export", idempotencyKey: `export-b-${randomUUID()}`, request: {}, baseRevisionId, expectedHeadRevisionId: baseRevisionId });
-    await dispatchOutbox();
-    const firstAttempt = await claimJobById(first.id, "export-worker-a");
-    const secondAttempt = await claimJobById(second.id, "export-worker-b");
-    if (!firstAttempt || !secondAttempt) throw new Error("Expected both independent export jobs to be claimable");
-    const checkpoint = {
-      remoteProjectId: "projects/durable-test",
-      uploadedSamples: {},
-      project: { state: "succeeded" as const, remoteId: "projects/durable-test" },
-      uploads: {},
-      arrangement: { state: "in_flight" as const }
-    };
-    const progress = { fidelity: { level: "editable-stem" }, manifestPath: "C:/test/nexus.json", checkpoint };
-    await recordExportProgress(firstAttempt, progress);
-    await expect(recordExportProgress(secondAttempt, progress)).rejects.toThrow("EXPORT_OPERATION_IN_PROGRESS");
-    await failJob(firstAttempt, "TEST_WORKER_LOST", "Simulated export worker ended");
-    await expect(recordExportProgress(secondAttempt, progress)).rejects.toThrow("EXPORT_OUTCOME_UNCERTAIN");
-    expect(await exportResumeState(ownerA, baseRevisionId)).toMatchObject({ state: "uncertain", remoteProjectId: "projects/durable-test" });
-    expect((await getPool().query("SELECT pes.state FROM project_export_step pes JOIN project_export pe ON pe.id=pes.export_id WHERE pe.revision_id=$1 AND step_key='arrangement:insert'", [baseRevisionId])).rows[0]?.state).toBe("uncertain");
-    await needsAttentionJob(secondAttempt, "EXPORT_OUTCOME_UNCERTAIN", "Durable export reconciliation required");
-  });
-
-  it("stores stale generation work without selecting it and reuses identical compositions", async () => {
-    const firstCreated = await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey: `head-a-${randomUUID()}`, request: { direction: "Warm and restrained" } });
-    const secondCreated = await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey: `head-b-${randomUUID()}`, request: { direction: "Brighter and rising" } });
-    await dispatchOutbox();
-    const first = await claimNextJob("head-worker-a");
-    const second = await claimNextJob("head-worker-b");
-    expect(new Set([first?.id, second?.id])).toEqual(new Set([firstCreated.id, secondCreated.id]));
-    if (!first || !second) throw new Error("Expected two claimed generation jobs");
-    const compositionA = compileArrangement(deterministicPlan("Warm and restrained", false), undefined, 1);
-    const compositionB = compileArrangement(deterministicPlan("Brighter energetic rising", false), undefined, 2);
-    const artifact = (suffix: string) => ({
-      previewPath: `C:/test/${suffix}.wav`, stems: { drums: `C:/test/${suffix}-drums.wav` }, waveformPeaks: [0.2], durationSeconds: 10,
-      peak: 0.2, rms: 0.1, nonSilentRatio: 0.5, title: suffix, summary: suffix, protectedTrackHashes: {}, producer: { provider: "fixture" }
-    });
-    const committedA = await commitRevision(first, { composition: first.id === firstCreated.id ? compositionA : compositionB, ...artifact("a") });
-    const committedB = await commitRevision(second, { composition: second.id === secondCreated.id ? compositionB : compositionA, ...artifact("b") });
-    expect([committedA.selected, committedB.selected].sort()).toEqual([false, true]);
-
-    const accepted = committedA.selected ? committedA : committedB;
-    const acceptedComposition = committedA.selected ? (first.id === firstCreated.id ? compositionA : compositionB) : (second.id === secondCreated.id ? compositionB : compositionA);
-    const duplicate = await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey: `identical-${randomUUID()}`, request: { direction: "Repeat exactly" } });
-    await dispatchOutbox();
-    const duplicateClaim = await claimNextJob("identical-worker");
-    expect(duplicateClaim?.id).toBe(duplicate.id);
-    if (!duplicateClaim) throw new Error("Expected duplicate composition job");
-    const reused = await commitRevision(duplicateClaim, { composition: acceptedComposition, ...artifact("identical") });
-    expect(reused).toMatchObject({ revisionId: accepted.revisionId, selected: true, reused: true });
-  });
-
-  it("replays a completed command before changed-head preconditions and preserves effect counts", async () => {
-    const idempotencyKey = `completed-replay-${randomUUID()}`;
-    const request = { direction: "Replay this accepted command exactly" };
-    const firstCreated = await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey, request });
-    await dispatchOutbox();
-    const firstAttempt = await claimJobById(firstCreated.id, "completed-replay-first");
-    if (!firstAttempt) throw new Error("Expected first replay attempt");
-    const artifact = (name: string) => ({
-      previewPath: `C:/test/${name}.wav`, stems: { drums: `C:/test/${name}-drums.wav` }, waveformPeaks: [0.2], durationSeconds: 10,
-      peak: 0.2, rms: 0.1, nonSilentRatio: 0.5, title: name, summary: name, protectedTrackHashes: {}, producer: { provider: "fixture" }
-    });
-    const firstRevision = await commitRevision(firstAttempt, { composition: compileArrangement(deterministicPlan("Warm replay", false), undefined, 91_001), ...artifact("replay-first") });
-
-    const newer = await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey: `newer-head-${randomUUID()}`, request: { direction: "Move the project head" } });
-    await dispatchOutbox();
-    const newerAttempt = await claimJobById(newer.id, "completed-replay-newer");
-    if (!newerAttempt) throw new Error("Expected newer head attempt");
-    const newerRevision = await commitRevision(newerAttempt, { composition: compileArrangement(deterministicPlan("Energetic rising", false), undefined, 91_002), ...artifact("replay-newer") });
-    expect(newerRevision.selected).toBe(true);
-
-    const effectsBefore = await getPool().query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1", [firstCreated.id]);
-    expect(await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey, request })).toEqual({ id: firstCreated.id, duplicate: true });
-    await selectRevision(ownerA, secondProjectId, firstRevision.revisionId, newerRevision.revisionId);
-    expect(await createJob({ ownerId: ownerA, projectId: secondProjectId, kind: "generation", idempotencyKey, request })).toEqual({ id: firstCreated.id, duplicate: true });
-    const effectsAfter = await getPool().query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1", [firstCreated.id]);
-    expect(effectsAfter.rows[0]?.count).toBe(effectsBefore.rows[0]?.count);
-  });
-
-  it("associates one immutable source analysis with multiple revisions without moving history", async () => {
-    const revisions = await getPool().query<{ id: string }>("SELECT id FROM revision WHERE project_id=$1 ORDER BY ordinal DESC LIMIT 2", [secondProjectId]);
-    const revisionA = revisions.rows[0]?.id;
-    const revisionB = revisions.rows[1]?.id;
-    if (!revisionA || !revisionB) throw new Error("Expected two revisions for analysis association");
-    const analysis = {
-      status: "available" as const,
-      assetHash: `shared-source-${randomUUID()}`,
-      model: "gemini-3-flash-preview",
-      promptVersion: "audio-analysis-v2" as const,
-      purpose: "source-analysis" as const,
-      inspectedInterval: { start: 0, end: 1 },
-      measured: { durationSeconds: 1, peak: 0.2, rms: 0.1, nonSilentRatio: 0.6 },
-      observations: ["A restrained texture"],
-      uncertainty: "Subjective fixture observation",
-      suggestedActions: ["use-as-texture"],
-      suggestedSourceRole: "texture" as const,
-      repairAction: "none" as const,
-      usage: { promptTokens: 10, candidateTokens: 2, thoughtsTokens: 1, totalTokens: 13 },
-      costMicrousd: 12
-    };
-    await recordAudioAnalysis({ ownerId: ownerA, projectId: secondProjectId, revisionId: revisionA, analysis });
-    await recordAudioAnalysis({ ownerId: ownerA, projectId: secondProjectId, revisionId: revisionB, analysis });
-    const stored = await getPool().query(
-      `SELECT aa.revision_id,array_agg(aar.revision_id ORDER BY aar.revision_id) AS linked
-       FROM audio_analysis aa JOIN audio_analysis_revision aar ON aar.analysis_id=aa.id
-       WHERE aa.owner_id=$1 AND aa.asset_hash=$2 GROUP BY aa.id`,
-      [ownerA, analysis.assetHash]
-    );
-    expect(stored.rows[0]?.revision_id).toBe(revisionA);
-    expect(new Set((stored.rows[0]?.linked as string[]) ?? [])).toEqual(new Set([revisionA, revisionB]));
-  });
-
   it("recovers after an actual worker process kill and admits one of two contending workers", async () => {
     const restartProjectId = (await createProject(ownerA, "Process restart evidence")).id;
     const contentionProjectId = (await createProject(ownerA, "Contending worker evidence")).id;
     projectIds.push(restartProjectId, contentionProjectId);
-    const restart = await createJob({ ownerId: ownerA, projectId: restartProjectId, kind: "generation", idempotencyKey: `process-restart-${randomUUID()}`, request: { direction: "Warm sparse restart evidence" } });
+    const restart = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId: restartProjectId, kind: "native-generation", idempotencyKey: `process-restart-${randomUUID()}`, request: { direction: "Warm sparse restart evidence" } });
     await dispatchOutbox();
     const firstWorker = startWorkerProcess("killed");
     try {
@@ -455,11 +355,11 @@ describe("durable job repository", () => {
     } finally {
       await stopWorkerProcess(firstWorker, true);
     }
-    const restartEvidence = await getPool().query("SELECT attempts,lease_generation,(SELECT count(*) FROM revision WHERE creator_job_id=job.id) AS revisions FROM job WHERE id=$1", [restart.id]);
+    const restartEvidence = await getPool().query("SELECT attempts,lease_generation,(SELECT count(*) FROM native_revision WHERE creator_job_id=job.id) AS revisions FROM job WHERE id=$1", [restart.id]);
     expect(restartEvidence.rows[0]).toMatchObject({ attempts: 2, lease_generation: 2 });
     expect(Number(restartEvidence.rows[0]?.revisions)).toBe(1);
 
-    const contention = await createJob({ ownerId: ownerA, projectId: contentionProjectId, kind: "generation", idempotencyKey: `process-contention-${randomUUID()}`, request: { direction: "Warm restrained contention evidence" } });
+    const contention = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId: contentionProjectId, kind: "native-generation", idempotencyKey: `process-contention-${randomUUID()}`, request: { direction: "Warm restrained contention evidence" } });
     await dispatchOutbox();
     const workerA = startWorkerProcess("contender-a");
     const workerB = startWorkerProcess("contender-b");
@@ -468,13 +368,13 @@ describe("durable job repository", () => {
     } finally {
       await Promise.all([stopWorkerProcess(workerA), stopWorkerProcess(workerB)]);
     }
-    const contentionEvidence = await getPool().query("SELECT attempts,lease_generation,(SELECT count(*) FROM revision WHERE creator_job_id=job.id) AS revisions FROM job WHERE id=$1", [contention.id]);
+    const contentionEvidence = await getPool().query("SELECT attempts,lease_generation,(SELECT count(*) FROM native_revision WHERE creator_job_id=job.id) AS revisions FROM job WHERE id=$1", [contention.id]);
     expect(contentionEvidence.rows[0]).toMatchObject({ attempts: 1, lease_generation: 1 });
     expect(Number(contentionEvidence.rows[0]?.revisions)).toBe(1);
 
     const cancelProjectId = (await createProject(ownerA, "Cancellation death recovery evidence")).id;
     projectIds.push(cancelProjectId);
-    const cancelled = await createJob({ ownerId: ownerA, projectId: cancelProjectId, kind: "generation", idempotencyKey: `process-cancel-${randomUUID()}`, request: { direction: "Cancellation death evidence" } });
+    const cancelled = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId: cancelProjectId, kind: "native-generation", idempotencyKey: `process-cancel-${randomUUID()}`, request: { direction: "Cancellation death evidence" } });
     await dispatchOutbox();
     const doomedWorker = startWorkerProcess("cancelled");
     try {
@@ -491,7 +391,7 @@ describe("durable job repository", () => {
     } finally {
       await stopWorkerProcess(doomedWorker, true);
     }
-    const cancellationEvidence = await getPool().query("SELECT attempts,lease_generation,(SELECT count(*) FROM revision WHERE creator_job_id=job.id) AS revisions FROM job WHERE id=$1", [cancelled.id]);
+    const cancellationEvidence = await getPool().query("SELECT attempts,lease_generation,(SELECT count(*) FROM native_revision WHERE creator_job_id=job.id) AS revisions FROM job WHERE id=$1", [cancelled.id]);
     expect(cancellationEvidence.rows[0]).toMatchObject({ attempts: 2, lease_generation: 2 });
     expect(Number(cancellationEvidence.rows[0]?.revisions)).toBe(0);
   }, 120_000);
@@ -501,7 +401,7 @@ describe("durable job repository", () => {
     const path = join(directory, "owned-source.wav");
     await writeFile(path, encodeWav(new Float32Array(4_800), new Float32Array(4_800), 48_000));
 
-    const successJob = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `gemini-success-${randomUUID()}`, request: { direction: "Use the source as texture" } });
+    const successJob = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `gemini-success-${randomUUID()}`, request: { direction: "Use the source as texture" } });
     await dispatchOutbox();
     const successClaim = await claimNextJob("gemini-mock-success");
     expect(successClaim?.id).toBe(successJob.id);
@@ -530,7 +430,7 @@ describe("durable job repository", () => {
     expect(Number(ledger.rows[0]?.actual_cost_microusd)).toBeGreaterThan(0);
     await failJob(successClaim, "TEST_COMPLETE", "Provider mock verified");
 
-    const uncertainJob = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `gemini-uncertain-${randomUUID()}`, request: { direction: "Mock a timeout" } });
+    const uncertainJob = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `gemini-uncertain-${randomUUID()}`, request: { direction: "Mock a timeout" } });
     await dispatchOutbox();
     const uncertainClaim = await claimNextJob("gemini-mock-timeout");
     expect(uncertainClaim?.id).toBe(uncertainJob.id);
@@ -548,7 +448,11 @@ describe("durable job repository", () => {
     expect((await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1", [uncertainClaim.id])).rows[0]).toMatchObject({ state: "uncertain", cost_status: "unknown" });
     await failJob(uncertainClaim, "TEST_COMPLETE", "Uncertain provider mock verified");
 
-    const malformedJob = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `gemini-malformed-${randomUUID()}`, request: { direction: "Mock invalid structured output" } });
+    // A genuinely unknown call correctly fences new commands in that room.
+    projectId = (await createProject(ownerA, "Independent malformed provider test")).id;
+    projectIds.push(projectId);
+
+    const malformedJob = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `gemini-malformed-${randomUUID()}`, request: { direction: "Mock invalid structured output" } });
     await dispatchOutbox();
     const malformedClaim = await claimNextJob("gemini-mock-malformed");
     expect(malformedClaim?.id).toBe(malformedJob.id);
@@ -567,7 +471,7 @@ describe("durable job repository", () => {
     expect(malformedCalls).toBe(1);
     await failJob(malformedClaim, "TEST_COMPLETE", "Malformed provider mock verified");
 
-    const budgetJob = await createJob({ ownerId: ownerA, projectId, kind: "generation", idempotencyKey: `gemini-budget-${randomUUID()}`, request: { direction: "Mock exhausted budget" } });
+    const budgetJob = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId, kind: "native-generation", idempotencyKey: `gemini-budget-${randomUUID()}`, request: { direction: "Mock exhausted budget" } });
     await dispatchOutbox();
     const budgetClaim = await claimNextJob("gemini-mock-budget");
     expect(budgetClaim?.id).toBe(budgetJob.id);
@@ -586,56 +490,5 @@ describe("durable job repository", () => {
     await failJob(budgetClaim, "TEST_COMPLETE", "Budget provider mock verified");
   });
 
-  it("upgrades a populated prior schema idempotently without rewriting history", async () => {
-    const schema = `repair_upgrade_${randomUUID().replaceAll("-", "")}`;
-    const client = await getPool().connect();
-    try {
-      await client.query(`CREATE SCHEMA "${schema}"`);
-      await client.query(`SET search_path TO "${schema}",public`);
-      for (const name of ["001_initial.sql", "002_provider_usage.sql", "003_repair_invariants.sql", "004_audiotool_session.sql"]) {
-        await client.query(await readFile(resolve("packages/core/src/db/migrations", name), "utf8"));
-      }
-      const owner = (await client.query<{ id: string }>("SELECT id FROM app_user WHERE provider_subject='dev-loopback'")).rows[0]!.id;
-      const project = (await client.query<{ id: string }>("INSERT INTO project(owner_id,title) VALUES($1,'Upgrade fixture') RETURNING id", [owner])).rows[0]!.id;
-      const job = (await client.query<{ id: string }>(
-        "INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,state,deadline_at) VALUES($1,$2,'generation','upgrade-key','hash','{}','succeeded',now()+interval '1 minute') RETURNING id",
-        [owner, project]
-      )).rows[0]!.id;
-      const revision = (await client.query<{ id: string }>(
-        `INSERT INTO revision(owner_id,project_id,creator_job_id,ordinal,title,composition,composition_hash,preview_path,stems,waveform_peaks,duration_seconds,peak,rms,non_silent_ratio,change_summary,producer)
-         VALUES($1,$2,$3,1,'Immutable prior revision','{}','immutable-hash','C:/prior.wav','{}','[]',1,0.2,0.1,0.5,'prior','{}') RETURNING id`,
-        [owner, project, job]
-      )).rows[0]!.id;
-      await client.query("UPDATE project SET current_revision_id=$2 WHERE id=$1", [project, revision]);
-      await client.query(
-        `INSERT INTO audio_analysis(owner_id,project_id,revision_id,asset_hash,provider,model,purpose,prompt_version,interval_start,interval_end,measured,observations,uncertainty,status)
-         VALUES($1,$2,$3,'asset-hash','gemini','gemini-3-flash-preview','source-analysis','audio-analysis-v2',0,1,'{}','[]','prior observation','available')`,
-        [owner, project, revision]
-      );
-      await client.query(
-        `INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,dispatched_at)
-         VALUES($1,'source-analysis','prior-effect','prior-input','failed','gemini','gemini-3-flash-preview','audio-analysis-v2',now())`,
-        [job]
-      );
-      await client.query(
-        `INSERT INTO project_export(owner_id,project_id,revision_id,job_id,provider,state,fidelity,remote_project_id,remote_effects)
-         VALUES($1,$2,$3,$4,'audiotool','completed','{}','projects/prior','{"uploadedSamples":{"drums":"samples/prior"}}')`,
-        [owner, project, revision, job]
-      );
-      const repairMigration = await readFile(resolve("packages/core/src/db/migrations/005_repair_recovery.sql"), "utf8");
-      await client.query(repairMigration);
-      await client.query(repairMigration);
-      const uncertaintyMigration = await readFile(resolve("packages/core/src/db/migrations/006_transport_uncertainty.sql"), "utf8");
-      await client.query(uncertaintyMigration);
-      await client.query(uncertaintyMigration);
-      expect((await client.query("SELECT cost_status,actual_cost_microusd FROM effect WHERE job_id=$1", [job])).rows[0]).toMatchObject({ cost_status: "unknown", actual_cost_microusd: "0" });
-      expect(Number((await client.query("SELECT count(*)::text AS count FROM audio_analysis_revision WHERE revision_id=$1", [revision])).rows[0]?.count)).toBe(1);
-      expect((await client.query("SELECT operation_key,mapping_version,remote_effects FROM project_export WHERE revision_id=$1", [revision])).rows[0]).toMatchObject({ mapping_version: "nexus-stem-v3", remote_effects: { uploadedSamples: { drums: "samples/prior" } } });
-      expect((await client.query("SELECT composition_hash,preview_path FROM revision WHERE id=$1", [revision])).rows[0]).toMatchObject({ composition_hash: "immutable-hash", preview_path: "C:/prior.wav" });
-    } finally {
-      await client.query("RESET search_path").catch(() => undefined);
-      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => undefined);
-      client.release();
-    }
-  });
+
 });

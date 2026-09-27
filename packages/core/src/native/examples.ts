@@ -1,4 +1,4 @@
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { applyNativeOperations, nativeDocumentSchema } from "./model.js";
 import { nativeFormOperations, nativeFormSchema } from "./form.js";
 

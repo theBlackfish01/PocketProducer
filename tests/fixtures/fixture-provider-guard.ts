@@ -1,7 +1,7 @@
 import { writeFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { analyzePreview, encodeWav, produceArrangement } from "@pocket/core";
+import { analyzePreview, encodeWav, produceNative, NativeToolSession, seedNativeDocument } from "@pocket/core";
 
 let dispatches = 0;
 globalThis.fetch = (() => {
@@ -17,7 +17,7 @@ const job = {
   id: "00000000-0000-4000-8000-000000000001",
   ownerId: "00000000-0000-4000-8000-000000000002",
   projectId: "00000000-0000-4000-8000-000000000003",
-  kind: "generation" as const,
+  kind: "native-generation" as const,
   state: "running",
   stage: "analyzing",
   request: {},
@@ -41,9 +41,9 @@ const analysis = await analyzePreview({
   rms: 0,
   nonSilentRatio: 0
 });
-const production = await produceArrangement({ job, direction: "Warm and sparse" });
+const production = await produceNative({ session: new NativeToolSession(job, seedNativeDocument("Fixture"), false), direction: "Warm and sparse", mode: "generation", sources: [] });
 
-if (analysis.status !== "unavailable" || production.provider !== "deterministic-fallback" || dispatches !== 0) {
+if (analysis.status !== "unavailable" || production.provider !== "deterministic-fixture" || dispatches !== 0) {
   throw new Error(JSON.stringify({ analysis: analysis.status, producer: production.provider, dispatches }));
 }
 process.stdout.write("fixture-provider-guard:ok\n");

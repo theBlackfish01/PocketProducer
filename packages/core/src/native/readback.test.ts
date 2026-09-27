@@ -1,6 +1,6 @@
 import { createOfflineDocument } from "@audiotool/nexus/node";
 import { describe, expect, it } from "vitest";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { applyNativeSnapshot, nativeStructuralReadback, toNexusTicks } from "./adapter.js";
 import { nativePresetFingerprint, type NativePreset } from "./library.js";
 import { applyNativeOperations } from "./model.js";

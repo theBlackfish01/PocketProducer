@@ -1,5 +1,16 @@
 # Listening Room design system
 
+## Single composition workspace (2026-09-27; supersedes earlier dual-history entries)
+
+There is no Arrange/Playable audio product switch. The retained score, section inspection, confirmed motion and comparison geometry are unchanged. The compact editorial header now owns the explicit Audiotool handoff; Sounds and Versions remain visible, Usage and connection details move to the session menu, and Manage parts is grouped with arrangement actions.
+
+Sounds combines upload, record, source selection and a compact source-only transport with labeled seek/volume. No empty waveform or whole-song controls ship; wavesurfer was removed because no remaining view supplied real waveform peaks. Source preview stops when its sheet or session closes. Uploaded sounds refresh on reopen; late permission resolves to stopped tracks.
+
+Owned shadcn source still uses Base UI consistently; no new UI framework/kit. The React review checklist informed late-response guards and cleanup. The original logo, ivory/forest/orange tokens, serif headings, Motion/SVG/CSS score remain. Upgrade through the pinned workspace lockfile, inspect generated Base UI changes, and rerun unit/integration/browser/visual checks including menu/dialog focus and source lifecycle.
+
+Earlier dated entries below describe historical passes, not supported audio compatibility. Current UI contract: Start → workspace → scoped change → read-only comparison → explicit version choice; successful revisions still become current automatically. Physical keyboard/screen-reader and non-Chromium checks remain separate gates.
+
+
 ## Current: Start and Producer workspace — 2026-09-26
 
 Keep the existing logo, ivory/forest/burnt-orange palette, editorial typography and score geometry. Start asks for one idea with optional sounds and collapsed creation settings. Acceptance opens a compact working room: the score is primary, Producer contains persisted directions and confirmed updates, and Sounds, Parts, Versions, Usage and Audiotool open only when requested. The existing score, inspector and Before/After/Changes components are unchanged; the surrounding layout is not a replacement DAW.

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { analyzeNativeSection, type NativeDocument } from "./model.js";
 import type { NativePlan } from "./plan.js";
 

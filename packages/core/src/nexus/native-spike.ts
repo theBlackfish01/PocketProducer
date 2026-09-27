@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { AudiotoolClient, SyncedDocument } from "@audiotool/nexus";
+import type { SyncedDocument } from "@audiotool/nexus";
 import { createOfflineDocument } from "@audiotool/nexus/node";
 import { Ticks } from "@audiotool/nexus/utils";
 import { getConfig } from "../config.js";
@@ -88,7 +88,7 @@ async function main() {
   if (!config.AUDIOTOOL_CLIENT_ID) throw new Error("Audiotool client ID is not configured");
   const connection = await createAudiotoolServerClient(await devOwnerId(), config.AUDIOTOOL_CLIENT_ID);
   if (!connection) throw new Error("Audiotool browser consent has not been saved");
-  const client = connection.client as AudiotoolClient;
+  const client = connection.client;
   const listed = await client.projects.listProjects({});
   if (listed instanceof Error) throw listed;
   console.log(JSON.stringify({ mode, readOnlyProjectList: "ok", supportedRenderOnClient: "renderAudio" in client }));

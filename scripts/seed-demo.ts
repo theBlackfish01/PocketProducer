@@ -3,8 +3,8 @@ import { resolve } from "node:path";
 import { createProject, decodeWav, devOwnerId, getPool, insertAsset, storeImmutableAudio, closePool } from "@pocket/core";
 
 const ownerId = await devOwnerId();
-const existing = await getPool().query<{ id: string }>("SELECT id FROM project WHERE owner_id=$1 AND title='Sunroom demo' AND deleted_at IS NULL LIMIT 1", [ownerId]);
-const project = existing.rows[0] ? { id: existing.rows[0].id } : await createProject(ownerId, "Sunroom demo");
+const existing = await getPool().query<{ id: string }>("SELECT id FROM project WHERE owner_id=$1 AND title='Composition starter' AND deleted_at IS NULL LIMIT 1", [ownerId]);
+const project = existing.rows[0] ? { id: existing.rows[0].id } : await createProject(ownerId, "Composition starter");
 const fixturePath = resolve(process.cwd(), ".local", "fixtures", "owned-percussion.wav");
 const bytes = await readFile(fixturePath);
 const decoded = decodeWav(bytes);

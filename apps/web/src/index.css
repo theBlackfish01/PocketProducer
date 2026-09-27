@@ -85,29 +85,14 @@ button:disabled { cursor: not-allowed; }
 .session-title { margin: 8px 0 10px; font-family: Georgia, serif; font-size: clamp(3rem, 6vw, 5.2rem); font-weight: 400; line-height: .96; letter-spacing: -.045em; }
 .session-deck { max-width: 680px; color: var(--muted-foreground); font-size: 1.05rem; line-height: 1.55; }
 .provider-status { margin: 12px 0 0; color: var(--muted-foreground); font-size: .78rem; }
-.listening-grid { display: grid; grid-template-columns: minmax(230px, 310px) minmax(0, 1fr); gap: clamp(30px, 5vw, 76px); align-items: center; margin-top: 48px; }
-.cover-art { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 18px; background: #25483b; isolation: isolate; }
-.cover-art::before { content: ""; position: absolute; width: 75%; height: 75%; border-radius: 46% 54% 62% 38%; background: #e65e2e; transform: translate(-16%, 50%) rotate(-14deg); }
-.cover-art::after { content: ""; position: absolute; width: 54%; height: 76%; right: -14%; top: -18%; border-radius: 50%; background: #f0a13d; transform: rotate(20deg); mix-blend-mode: screen; opacity: .9; }
-.cover-grain { position: absolute; inset: 0; z-index: 2; background-image: radial-gradient(rgba(255,255,255,.26) .65px, transparent .65px); background-size: 5px 5px; opacity: .34; }
-.cover-label { position: absolute; inset: auto 20px 20px; z-index: 3; color: white; font-family: Georgia, serif; font-size: 1.1rem; }
-.player-card { min-width: 0; }
 .player-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; font-size: .84rem; }
-.waveframe { position: relative; min-height: 132px; border-block: 1px solid var(--border); display: flex; align-items: center; }
-.wave-canvas { width: 100%; min-width: 0; opacity: .9; }
 .seek-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; margin-top: 20px; }
 .time { min-width: 42px; color: var(--muted-foreground); font-size: .78rem; font-variant-numeric: tabular-nums; }
 .transport { display: flex; align-items: center; gap: 10px; margin-top: 22px; }
-.round-play { border-radius: 999px !important; }
-.section-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 28px; }
-.section-button { min-height: 44px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: transparent; color: var(--muted-foreground); text-align: left; }
-.section-button:hover, .section-button[aria-pressed="true"] { border-color: var(--forest); background: var(--accent); color: var(--foreground); }
-.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 48px; }
 .quiet-section { padding-top: 20px; border-top: 1px solid var(--border); }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .section-heading h2 { margin: 0; font-family: Georgia, serif; font-size: 1.45rem; font-weight: 400; }
 .source-list { display: flex; flex-wrap: wrap; gap: 10px; }
-.source-pill { min-height: 44px; display: inline-flex; align-items: center; gap: 9px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); }
 .mini-wave { display: flex; align-items: center; gap: 2px; height: 18px; }
 .mini-wave i { width: 2px; border-radius: 2px; background: var(--forest); }
 .empty-surface { margin-top: 44px; padding: clamp(30px, 6vw, 72px); border: 1px solid var(--border); border-radius: 20px; background: var(--card); text-align: center; }
@@ -132,7 +117,6 @@ button:disabled { cursor: not-allowed; }
 .version-title { display: flex; justify-content: space-between; gap: 14px; font-weight: 650; }
 .version-option p { margin: 5px 0 0; color: var(--muted-foreground); font-size: .82rem; line-height: 1.4; }
 .provider-note { color: var(--muted-foreground); font-size: .8rem; }
-.mode-switch { display: flex; flex-wrap: wrap; gap: 6px; }
 .native-room { padding-bottom: max(44px, env(safe-area-inset-bottom)); }
 .native-sync-control { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
 .native-sync-control .provider-note { max-width: 58ch; }
@@ -201,22 +185,14 @@ button:disabled { cursor: not-allowed; }
   .topline > span:first-child { display: none; }
   .session-header { margin-top: 28px; }
   .session-title { font-size: clamp(2.35rem, 11vw, 3.45rem); overflow-wrap: anywhere; }
-  .listening-grid { grid-template-columns: 1fr; gap: 26px; margin-top: 32px; }
-  .player-card { grid-row: 1; }
-  .cover-art { grid-row: 2; width: min(54vw, 230px); justify-self: center; }
-  .waveframe { min-height: 100px; }
-  .detail-grid { grid-template-columns: 1fr; }
-  .section-strip { overflow-x: auto; grid-template-columns: repeat(4, minmax(112px, 1fr)); padding-bottom: 4px; }
   .composer-shell { margin-top: 28px; }
   .composer-actions .chips .chip:nth-child(n+2) { display: none; }
   .topline { flex-wrap: wrap; }
-  .mode-switch { width: 100%; }
-  .mode-switch button { flex: 1; min-width: 0; }
   .native-section { margin-top: 30px; }
   .native-part-grid { grid-template-columns: 1fr; }
 }
 
-/* Listening Room: a guided music workspace, with one visual language for both histories. */
+/* Listening Room: a guided music workspace, with one composition workspace. */
 .app-shell { grid-template-columns: 202px minmax(0, 1fr); }
 .session-rail { gap: 0; padding: 26px 20px 18px; background: #fffcf6; }
 .session-rail .brand-lockup { margin-bottom: 30px; }
@@ -230,8 +206,6 @@ button:disabled { cursor: not-allowed; }
 .main-inner { width: min(100%, 1500px); }
 .topline { min-height: 38px; font-size: .82rem; }
 .topline strong { color: var(--foreground); font-weight: 560; }
-.topline .mode-switch { padding: 3px; border: 1px solid var(--border); border-radius: 13px; background: var(--card); }
-.topline .mode-switch button { min-height: 40px; border-radius: 10px; }
 .room-hero { position: relative; display: flex; align-items: end; min-height: 224px; max-width: none; margin: 18px 0 24px; padding: 28px 30px; overflow: hidden; isolation: isolate; border-radius: 19px; background: #fffdf8; }
 .room-hero-content { position: relative; z-index: 2; max-width: 62%; }
 .room-hero .session-title { margin: 9px 0 7px; font-size: clamp(3.15rem, 5.4vw, 5.3rem); overflow-wrap: anywhere; }
@@ -263,7 +237,6 @@ button:disabled { cursor: not-allowed; }
 .native-draft-preview > .section-footnote { color: var(--muted-foreground); }
 .native-section + .native-section, .direction-section, .versions-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid #e7e3da; }
 .section-heading { align-items: start; margin-bottom: 12px; }
-.section-heading h2, .side-section h2, .audio-direction-section h2 { margin: 0; font-family: Georgia, serif; font-size: 1.65rem; font-weight: 400; line-height: 1.1; letter-spacing: -.025em; }
 .section-heading p { margin: 4px 0 0; color: var(--muted-foreground); font-size: .79rem; line-height: 1.4; }
 .section-heading > button { flex: none; }
 .native-section-grid { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(176px, 1fr); grid-template-columns: none; gap: 9px; overflow-x: auto; padding: 2px 1px 8px; scroll-snap-type: x proximity; }
@@ -307,12 +280,6 @@ button:disabled { cursor: not-allowed; }
 .source-select { margin-left: auto; padding: 5px; }
 .source-select input { width: 17px; height: 17px; accent-color: var(--primary); }
 .side-empty { margin: 0; color: var(--muted-foreground); font-size: .78rem; line-height: 1.45; }
-.source-mini-player { margin-top: 10px; padding: 9px; border: 1px solid var(--border); border-radius: 12px; }
-.source-mini-player .waveframe { min-height: 40px; }
-.source-mini-player .seek-row { gap: 5px; margin-top: 8px; }
-.source-mini-player .transport { margin-top: 7px; }
-.source-mini-player .player-meta { gap: 5px; font-size: .7rem; }
-.source-mini-player .player-meta span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sound-family-list { display: grid; gap: 9px; margin-top: 12px; }
 .sound-family-list > div { display: flex; align-items: center; gap: 11px; }
 .sound-family-list > div > span:last-child { display: grid; gap: 1px; }
@@ -334,16 +301,6 @@ button:disabled { cursor: not-allowed; }
 .part-detail { display: grid; gap: 7px; margin: 16px 0; font-size: .85rem; }
 .part-detail p { margin: 0; }
 .native-diff p { line-height: 1.45; }
-.audio-room-panel { margin-top: 18px; padding: 23px 26px 28px; border: 1px solid var(--border); border-radius: 19px; background: var(--card); }
-.audio-room-panel .listening-grid { margin-top: 0; }
-.audio-room-panel .cover-art { max-width: 260px; }
-.audio-room-panel .section-strip { margin-top: 23px; }
-.audio-room-panel .audio-direction-section { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--border); }
-.audio-direction-section .section-heading p { margin-top: 5px; }
-.audio-room-panel .composer-shell { margin-top: 0; }
-.audio-room-panel .composer { width: 100%; }
-.audio-room-panel .composer textarea { min-height: 68px; }
-.audio-room-panel .detail-grid { margin-top: 28px; }
 .audio-empty { display: grid; justify-items: center; gap: 8px; padding: 34px 18px; text-align: center; }
 .audio-empty h2 { margin: 0; font-family: Georgia, serif; font-size: 2rem; font-weight: 400; }
 .audio-empty p { max-width: 44ch; margin: 0; color: var(--muted-foreground); font-size: .87rem; }
@@ -412,7 +369,6 @@ button:disabled { cursor: not-allowed; }
 @media (max-width: 700px) {
   .main-area { padding-inline: 14px; }
   .topline { align-items: start; }
-  .topline .mode-switch { width: 100%; }
   .room-hero { display: block; min-height: 0; margin-top: 13px; margin-bottom: 14px; padding: 84px 19px 20px; }
   .room-hero-long { min-height: 0; }
   .room-hero-art { inset: 0 0 auto; width: 100%; height: 69px; border-radius: 0; }
@@ -436,11 +392,6 @@ button:disabled { cursor: not-allowed; }
   .composer-actions button { width: 100%; justify-content: center; }
   .native-audio-boundary { font-size: .75rem; }
   .native-draft-preview { margin: 12px 0 16px; padding: 15px; }
-  .audio-room-panel { margin-top: 14px; padding: 16px 14px 23px; }
-  .audio-room-panel .cover-art { display: none; }
-  .audio-room-panel .listening-grid { grid-template-columns: 1fr; }
-  .audio-room-panel .player-card { grid-row: auto; }
-  .audio-room-panel .detail-grid { margin-top: 23px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

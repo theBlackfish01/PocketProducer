@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { applyNativeOperations, materializedNotes } from "./model.js";
 import { nativeFormOperations, nativeFormSchema } from "./form.js";
 import { seedNativeDocument } from "./producer.js";

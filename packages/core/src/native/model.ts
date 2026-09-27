@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { canonicalHash } from "../domain/composition.js";
+import { canonicalHash } from "../domain/hash.js";
 import { spliceSectionAutomation } from "./section.js";
 
 export const NATIVE_PPQ = 960;
