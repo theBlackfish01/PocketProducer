@@ -55,7 +55,7 @@ async function waitForState(jobId: string, wanted: (state: string) => boolean, t
   throw new Error(`Timed out waiting for job ${jobId}`);
 }
 
-function startWorkerProcess(label: string): ChildProcess {
+function startWorkerProcess(label: string, leaseSeconds = 3): ChildProcess {
   const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
   return spawn(process.execPath, ["--import", "tsx", resolve("apps/worker/src/worker.ts")], {
     cwd: process.cwd(),
@@ -70,7 +70,7 @@ function startWorkerProcess(label: string): ChildProcess {
       OPENAI_API_KEY: "",
       GEMINI_API_KEY: "",
       GOOGLE_API_KEY: "",
-      JOB_LEASE_SECONDS: "3",
+      JOB_LEASE_SECONDS: String(leaseSeconds),
     }
   });
 }
@@ -346,7 +346,7 @@ describe("durable job repository", () => {
       await waitForState(restart.id, (state) => state === "running", 15_000);
       await stopWorkerProcess(firstWorker, true);
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 3_400));
-      const restartedWorker = startWorkerProcess("restarted");
+      const restartedWorker = startWorkerProcess("restarted", 45);
       try {
         expect(await waitForState(restart.id, (state) => ["succeeded", "failed"].includes(state), 45_000)).toBe("succeeded");
       } finally {
@@ -361,8 +361,10 @@ describe("durable job repository", () => {
 
     const contention = await createNativeJob({ expectedHeadId: null,  ownerId: ownerA, projectId: contentionProjectId, kind: "native-generation", idempotencyKey: `process-contention-${randomUUID()}`, request: { direction: "Warm restrained contention evidence" } });
     await dispatchOutbox();
-    const workerA = startWorkerProcess("contender-a");
-    const workerB = startWorkerProcess("contender-b");
+    // This checks competing claims, not artificial expiry during synchronous
+    // SDK construction. Killed workers above/below retain the short lease.
+    const workerA = startWorkerProcess("contender-a", 45);
+    const workerB = startWorkerProcess("contender-b", 45);
     try {
       expect(await waitForState(contention.id, (state) => ["succeeded", "failed"].includes(state), 45_000)).toBe("succeeded");
     } finally {
