@@ -1,24 +1,34 @@
-# Remaining user setup
+# Local setup and optional integrations
 
-Producer selection and shared/provider/per-owner lifetime caps are described in [model selection](model-selection.md). Apply migration 023, restart API/worker and refresh the browser to use the chooser. The existing Gateway key alias is supported; no credentials need to be pasted into the browser. The supplied Gateway key's read-only balance check returned $0, so verify its Vercel team/credit allocation before attempting DeepSeek. Local dev authentication is still one shared identity, not separate visitor accounts.
+Start with the [README quick start](../README.md#try-it-locally). Copy `.env.example` only when you do not already have `.env`; the example enables deterministic fixture mode and sets all spending caps to zero. Preserve existing environment values, accepted music, source assets and accumulated spend when updating a checkout. Run `pnpm db:migrate` after pulling changes; it applies outstanding additive migrations, including 024, without resetting data.
 
-The app now has one composition workspace. Optional recordings and source audition are in **Sounds**, history in **Versions**, and Audiotool connection details in **Session options**. Budget/runtime controls are no longer in the consumer interface; server enforcement and operator diagnostics remain. There is no legacy audio view or data conversion.
+## Provider-free local demonstration
 
-In **Sounds**, expand **Explore our sound ideas** to ask the producer for an editable parameter recipe; those recipes have not been listened to. With an authorized Audiotool connection, search the sound library, choose **Inspect slices** on a short sample, and use its original-sample player. After playback, a fit choice and optional note can be saved for this session. This is not playback of the composition, does not approve sample rights, and does not automatically place or copy anything. Your next text direction can refer to the chosen sound; the producer still validates the exact resource before use.
+No provider key or Audiotool registration is needed. With PostgreSQL running:
 
-For the current construction pass, run `pnpm db:up`, `pnpm db:migrate` (adds migrations through 022 without rewriting prior music), then `pnpm dev`. Open `http://127.0.0.1:5173`, create a session, attach only sources you own, describe the arrangement and submit. Use part/section scope and **Keep unchanged** for a precise follow-up, inspect the factual version comparison, and restore explicitly if desired. An unfinished job displays its confirmed tentative structure separately from the selected version. **Continue saved draft** is available only with a safe remaining call allowance and unchanged head; otherwise the room explains why. Connected Audiotool search is metadata-only; selection still needs trusted producer resolution. Historical presets without a content fingerprint require deliberate reselection in a new version before synchronization. No native play button exists because native audio retrieval is deferred. See [current coverage and limits](native-construction-followup.md).
+```sh
+pnpm db:migrate
+pnpm generate:fixtures
+pnpm seed:demo
+pnpm dev
+```
 
-No user action is needed for offline native construction. OpenAI and Gemini credentials are already present; do not create, paste, or rotate them for ordinary tests. Those tests force fixture mode, clear provider credentials in child processes, and have zero provider access. Audiotool registration and browser consent were completed on 2026-09-23; see [historical native render probe results](../spikes/nexus-audio/RESULTS-2026-09-23.md). The current native assignment explicitly defers rendering and did not contact Audiotool.
+Open `http://127.0.0.1:5173`. New session → describe an idea → Create arrangement → inspect → change a section → compare versions. Fixture output is deterministic and does not establish live-model creative quality. Source recording/upload/audition remains under Sounds; there is no native full-mix player.
 
-LangSmith tracing uses the existing ignored root `.env`. Its key, tracing switch, endpoint and project are already configured locally; no additional credential is needed for the current setup. Restart the worker, then find a future producer job in the configured LangSmith project's **Tracing** view by its job ID. Inputs and outputs are hidden by default; [observability details](observability.md) explain the privacy switches and the distinction from durable billing.
+## Enable paid production deliberately
 
-Native synchronization is an explicit opt-in action in the Listening Room. Source-free and owned-WAV source-bearing versions are eligible when saved consent is present; source upload/readiness and interval mapping have passed an offline contract test, **not** live Studio verification. If the non-refreshable session has expired, choose **Connect Audiotool** again in the regular signed-in browser. Do not treat a local draft or old verification timestamp as current remote agreement. Midnight Escalator has prior live structural copy/readback evidence (see STATUS); that is score-specific and not heard audio. This retirement pass did not contact Audiotool. Never retry an uncertain remote create/upload/write under a new key without reconciliation.
+1. Add `OPENAI_API_KEY` for Sol/Luna, or `GEMINI_API_KEY` for Gemini Flash, to the server-only root `.env`.
+2. Set `FIXTURE_MODE=false`.
+3. Set an intentional `INITIAL_BUILD_API_BUDGET_USD` and `MAX_JOB_COST_USD`, plus the relevant provider cap and `DEFAULT_USER_BUDGET_USD`. All limits apply together. A zero cap blocks paid work.
+4. Restart the API and worker. Choose the producer when submitting a new direction or revision.
 
-Separate optional live-verification actions remain. The next construction check would be a specifically authorized disposable native Studio sync/readback, first source-free and then with an owned WAV; it must not render or publish. The old stem-export product has been removed. Native render result retrieval remains deliberately deferred. Gemini connectivity must be diagnosed before authorizing a new live verification identity: the retained 2026-09-21 two-call identity is terminal after transport failures with no provider telemetry and must not be replayed.
+Luna captures xhigh producer reasoning. Rewrite/Inspire uses a separate low-effort Luna request; each explicit helper click is accounted for. The small symbolic critic has its own bounded low-effort role. DeepSeek is no longer a new-request choice; its existing jobs and ledger remain readable. See [model selection](model-selection.md) for limits and historical provider observations. Configured keys do not prove model access or remaining provider credit.
+
+`pnpm budget:status` reads the local ledger. Usage is cumulative, not reset by a new session. Never clear the ledger or repeat an uncertain external request to make a paused job proceed. Saved drafts can continue only when ownership, version head, effect state and remaining limits permit it.
 
 ## Audiotool application registration
 
-Create one development application at `https://developer.audiotool.com/applications`, then use this exact local registration block:
+Register a development application at `https://developer.audiotool.com/applications`:
 
 ```text
 Application purpose: Pocket Producer local development
@@ -26,7 +36,7 @@ Redirect URL: http://127.0.0.1:5173/auth/audiotool/callback
 Requested scopes: user:read project:write project:read sample:write sample:read preset:read preset:write
 ```
 
-Add the issued public client identifier to the existing ignored root `.env` without changing the provider keys:
+Merge the issued public client identifier into the existing ignored `.env`:
 
 ```dotenv
 AUDIOTOOL_CLIENT_ID=<issued public client id>
@@ -34,18 +44,16 @@ AUDIOTOOL_REDIRECT_URL=http://127.0.0.1:5173/auth/audiotool/callback
 AUDIOTOOL_SCOPES=user:read project:write project:read sample:write sample:read preset:read preset:write
 ```
 
-Restart `pnpm dev`, open the Listening Room in the regular browser profile used for Audiotool sign-in, and choose **Connect Audiotool**. The SDK validates its PKCE state and callback; Pocket Producer hands the resulting session directly to the loopback API, encrypts it with an automatically generated ignored local key, and binds it to the local app owner. The live grant did not include a usable refresh token, so reconnect after the access token expires. Do not paste access or refresh tokens into chat or `.env`.
+Use the regular browser profile already signed in to Audiotool. Open Pocket Producer, choose **Connect Audiotool**, and complete browser consent. The PKCE callback transfers the session to the loopback API, which encrypts it under `.local/secrets/audiotool-session.key` and binds it to the app owner. Do not paste OAuth tokens into chat, source or `.env`. Existing grants may not include a refresh token; reconnect when access expires.
 
-The installed Nexus 0.0.17 types and official examples document `project:write` for project creation/editing, but do not publish a separate operation-to-scope declaration for sample upload. The first authorized test must therefore confirm that the registered grant also permits `samples.upload`; if Audiotool returns a scope error, preserve that exact sanitized error and adjust the registered scope only from Audiotool’s own response/documentation.
+Copying a saved arrangement is explicit. Native notes, sound state and supported routing/automation are mapped and read back; source upload and interval placement are separate contracts. A prior verification timestamp is not a guarantee that a later version is copied. Preserve any uncertain create/upload/write receipt and reconcile it before trying again. The SDK's `unlisted` visibility is not the same as a private project; inspect the account's project visibility before sharing. Prior live-copy evidence and limits are recorded in [STATUS](STATUS.md), not claimed for every new installation or sound resource.
 
-For a later stem-export check, explicitly authorize one export from a disposable test revision. The installed Nexus SDK offers `unlisted`, not a private project-creation option, so confirm account visibility before proceeding. Success means Studio opens with four separately editable audio stems aligned at tick 0, the project tempo and time signature match the canonical composition, and the musical body plus explicit tail have the expected duration. It does not imply note-level editability. Native note editability in the separate scratch project has now been verified, while native render-result retrieval remains blocked at the public OperationService permission boundary.
+## Optional diagnostics
 
-## Prompt help and clearer navigation (September 27)
+LangSmith is optional. Set its key/project and `LANGSMITH_TRACING=true` only when wanted. `LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true` are privacy defaults; disabling them sends directions and tool data into private tracing. Normal fixture tests disable tracing regardless of local settings. See [observability](observability.md).
 
-Apply `pnpm db:migrate` (migration 022) and restart `pnpm dev`. The logo returns to Home without cancelling a running arrangement. New session → Inspire me or type → Rewrite prompt → edit/Undo → Create arrangement. In a saved session, select a section and choose Change; rewriting keeps the chosen scope and named protections, and only Make this change starts production. The overview scrolls horizontally and vertically as needed; About this view explains the visual encoding.
+The separate Gemini source-analysis adapter does not enable native composition listening. Native rendering, full-mix playback and Gemini listening remain deferred. Do not rerun old render probes as a setup step.
 
-Prompt assistance uses the existing server-side OpenAI key with **gpt-6-luna**, independently of the Sol producer setting. No new key or frontend secret is needed. Each explicit helper click is a separate bounded request recorded in the shared ledger; removing consumer budget UI does not increase any limit. Network ambiguity retains its reservation and is not automatically retried. Fixture mode returns explicitly labelled test suggestions with no provider access. Account access and useful live Luna prose still require separately authorized verification. The Audiotool profile is optional: an existing valid connection can supply display name/avatar; missing/expired consent falls back safely.
+## Before sharing an installation
 
-## Optional Gemini diagnosis (retained)
-
-Do not rerun the retained live verifier. First confirm that this host can reach the configured Gemini endpoint without changing the key or consuming another application identity. If a new bounded verification is desired afterward, authorize a new identity explicitly. The verifier makes at most one source-analysis call and one preview-critique call, never calls OpenAI, and never renders again; the shared US$5 ledger still applies.
+The current loopback session uses one development owner. Per-owner limits are implemented, but independent public user sign-in is not. Do not expose this server publicly. Keep `.env`, the database, local audio, OAuth keys and raw traces private. Repository sharing is separate from deployment; see [security guidance](../SECURITY.md).

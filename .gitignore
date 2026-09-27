@@ -12,3 +12,12 @@ test-results/
 *.tsbuildinfo
 apps/web/public/generated/
 
+# Local credentials, raw provider traces and database exports never belong in Git.
+*.pem
+*.key
+*.dump
+*.sqlite
+*.sqlite3
+trace-*.json
+.DS_Store
+Thumbs.db

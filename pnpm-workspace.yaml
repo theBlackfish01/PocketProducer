@@ -12,8 +12,10 @@ minimumReleaseAgeExclude:
 
 supportedArchitectures:
   os:
+    - current
     - win32
   cpu:
+    - current
     - x64
   libc:
     - current

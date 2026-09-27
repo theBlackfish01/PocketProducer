@@ -1,5 +1,12 @@
 name: ci
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
   push:
@@ -8,6 +15,7 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17.6-alpine
@@ -18,7 +26,7 @@ jobs:
         ports:
           - 54329:5432
         options: >-
-          --health-cmd "pg_isready -U pocket -d pocket_producer"
+          --health-cmd "pg_isready -U pocket -d postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -32,6 +40,13 @@ jobs:
       DEV_LOCAL_AUTH: true
       INITIAL_BUILD_API_BUDGET_USD: 0
       MAX_JOB_COST_USD: 0
+      OPENAI_API_KEY: ""
+      GEMINI_API_KEY: ""
+      GOOGLE_API_KEY: ""
+      AI_GATEWAY_API_KEY: ""
+      VERCEL_AI_GATEWAY_API_KEY: ""
+      LANGSMITH_API_KEY: ""
+      LANGSMITH_TRACING: false
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -51,3 +66,4 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
       - run: pnpm test:visual
+      - run: pnpm test:course:static
