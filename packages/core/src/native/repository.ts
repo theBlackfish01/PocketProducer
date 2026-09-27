@@ -11,11 +11,17 @@ import { jobNativeRunLimits, minimumNextNativeReservationUsd, nativeProfileSchem
 import { nativeCreativeStateSchema, nativePlanSchema, nativeStageSchema, type NativeCreativeState, type NativePlan, type NativeStage } from "./plan.js";
 import { nativeReviewSchema, type NativeReview } from "./critique.js";
 import { appendPublicActivity } from "./activity.js";
-import { producerModelSchema } from "../providers/models.js";
+import { modelProvider, producerModelSchema } from "../providers/models.js";
+import { sharedUsageBlock } from "../providers/limits.js";
 import { nativeReviewPlanHash, nativeReviewContextHash } from "./plan.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
+
+function sharedAllowanceReason(block: "SITE" | "PROVIDER" | "USER"): string {
+  const scope = block === "SITE" ? "installation-wide API" : block === "PROVIDER" ? "selected provider's shared" : "per-user";
+  return `The ${scope} allowance cannot reserve another call; increasing this request alone will not help.`;
+}
 
 async function head(client: pg.PoolClient, ownerId: string, projectId: string, lock = false): Promise<string | null> {
   const result = await client.query<HeadRow>(`SELECT revision_id FROM native_project_head WHERE owner_id=$1 AND project_id=$2${lock ? " FOR UPDATE" : ""}`, [ownerId, projectId]);
@@ -169,6 +175,10 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
         COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS site_committed FROM effect`, [jobId]);
       const hasMusic = await client.query("SELECT 1 FROM native_job_step WHERE job_id=$1 LIMIT 1", [jobId]);
       const minimum = minimumNextNativeReservationUsd(limits, Boolean(hasMusic.rowCount));
+      // Advisory check only: reservations retain their budget-before-job lock order
+      // and recheck atomically before dispatch, including any concurrent spending.
+      const sharedBlock = await sharedUsageBlock(client, ownerId, modelProvider(limits.model), Math.ceil(minimum * 1e6));
+      if (sharedBlock) throw Object.assign(new Error(sharedAllowanceReason(sharedBlock)), { statusCode: 409 });
       if (limits.maxJobCostUsd - Number(amounts.rows[0]!.job_committed) / 1_000_000 < minimum || getConfig().INITIAL_BUILD_API_BUDGET_USD - Number(amounts.rows[0]!.site_committed) / 1_000_000 < minimum) throw Object.assign(new Error("A next model call cannot fit the current request or installation allowance; increase the applicable limit before continuing"), { statusCode: 409 });
     }
     const aggregate = effects.rows.find((effect) => effect.step === "native-producer-result");
@@ -314,7 +324,8 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const aggregateRecoverable = aggregateRow?.state === "dispatched" || legacyZeroStepPause;
   const minimumNextCallUsd = runLimits ? minimumNextNativeReservationUsd(runLimits, session.applied.length > 0) : 0;
   const siteBudgetBlocked = siteRemainingUsd < minimumNextCallUsd;
-  const budgetBlocked = siteBudgetBlocked || (runLimits?.maxJobCostUsd ?? 0) - spentUsd - reservedUsd < minimumNextCallUsd;
+  const sharedBlock = await sharedUsageBlock(getPool(), ownerId, modelProvider(runLimits?.model ?? getConfig().OPENAI_MODEL), Math.ceil(minimumNextCallUsd * 1e6));
+  const budgetBlocked = Boolean(sharedBlock) || siteBudgetBlocked || (runLimits?.maxJobCostUsd ?? 0) - spentUsd - reservedUsd < minimumNextCallUsd;
   const outputBlocked = /OPENAI_INCOMPLETE_RESPONSE/.test(stopped) && (runLimits?.maxOutputTokens ?? 0) <= (jobNativeRunLimits(originalNativeRequest(request))?.maxOutputTokens ?? 0);
   const savedPlan = await loadNativePlan(jobId);
   const validReview = savedPlan?.review?.modelUsed && savedPlan.review.documentHash === canonicalHash(session.document) && savedPlan.review.contextHash === nativeReviewContextHash(direction, savedPlan.plan);
@@ -328,8 +339,8 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const config = getConfig();
   const target = runLimits?.profile === "standard" ? nativeRunLimits("extended") : null;
   const maximum = { maxCalls: config.MAX_MODEL_CALLS_PER_JOB, maxInputTokens: config.MAX_OPENAI_INPUT_TOKENS, maxOutputTokens: config.NATIVE_MODEL_OUTPUT_TOKENS, deadlineSeconds: config.MAX_JOB_SECONDS, maxJobCostUsd: config.MAX_JOB_COST_USD };
-  const canExtend = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && aggregateRecoverable && effectsKnown && !siteBudgetBlocked && !!runLimits && (Object.keys(maximum) as Array<keyof typeof maximum>).some((field) => maximum[field] > runLimits[field]);
-  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : !aggregateRecoverable ? "This request has no safely resumable producer state; its original stop reason remains available." : siteBudgetBlocked ? "The installation-wide API allowance cannot reserve another call; increasing this request alone will not help." : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance; increase it before continuing." : budgetBlocked ? "This request's own cost allowance is exhausted; increase it explicitly before continuing." : reviewBlocked ? "The final review could not finish within its review allowance. The draft is saved; another continuation would not resolve this limit." : outputBlocked ? "This request needs a higher output allowance before continuing." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
+  const canExtend = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && aggregateRecoverable && effectsKnown && !siteBudgetBlocked && !sharedBlock && !!runLimits && (Object.keys(maximum) as Array<keyof typeof maximum>).some((field) => maximum[field] > runLimits[field]);
+  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : !aggregateRecoverable ? "This request has no safely resumable producer state; its original stop reason remains available." : sharedBlock || siteBudgetBlocked ? sharedAllowanceReason(sharedBlock ?? "SITE") : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance; increase it before continuing." : budgetBlocked ? "This request's own cost allowance is exhausted; increase it explicitly before continuing." : reviewBlocked ? "The final review could not finish within its review allowance. The draft is saved; another continuation would not resolve this limit." : outputBlocked ? "This request needs a higher output allowance before continuing." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
   return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, plan: await loadNativePlan(jobId), runLimits, budget: { spentUsd, reservedUsd, unknownUsd: Number(budget.job_unknown) / 1_000_000, siteRemainingUsd, minimumNextCallUsd, modelCalls: effects.rows.length }, extensionCeiling: maximum, suggestedProfileExtension: target, canContinue, canExtend, continuationReason, stopReason: stopped };
 }
 

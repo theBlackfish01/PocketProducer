@@ -1,11 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { getConfig } from "@pocket/core";
 import { AIMessage, fakeModel, focusedNativeReview, nativeFormatRecoveryAvailable } from "@pocket/core/test-support";
 import { canonicalHash, claimJobById, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, getPool, jobSnapshot, loadNativePlan, nativeDraftView, nativeSnapshot, nativePlanSchema, nativeCreativeStateSchema, nativeReviewContextHash, NativeToolSession, seedNativeDocument, nativeFormOperations, saveNativePlan, saveNativeCreativeState, saveNativeReview, advanceNativePlan, reserveProviderEffect, markEffectDispatched, needsAttentionJob, resumeNativePartialJob, type JobRecord } from "@pocket/core";
 import { processJob } from "@pocket/worker";
 import { nativeFormSchema } from "@pocket/core";
 
 let owner = "";
+const config = getConfig(), originalConfig = { ...config };
+afterEach(async () => {
+  Object.assign(config, originalConfig);
+  await getPool().query("DELETE FROM owner_usage_limit WHERE owner_id=$1", [owner]);
+});
 const direction = "A four-bar melody";
 const plan = nativePlanSchema.parse({ intent: "A warm melodic phrase", sections: [{ name: "Whole", purpose: "A short musical statement" }], soundGoals: ["Soft lead"], hardConstraints: ["Four bars"], developmentTasks: ["A deliberate pause"], creativeState: { identity: "Quiet", unfinishedTasks: ["Check the phrase"] } });
 const form = { title: "Recovery phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
@@ -21,14 +27,14 @@ afterAll(async () => {
   await getPool().query("DELETE FROM project WHERE owner_id=$1", [owner]);
   await getPool().query("DELETE FROM app_user WHERE id=$1", [owner]);
 });
-async function create(): Promise<JobRecord> {
+async function create(profile: "standard" | "extended" = "standard", model = "gpt-6-sol"): Promise<JobRecord> {
   const project = await createProject(owner, "Finishing recovery test");
-  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), request: { direction }, expectedHeadId: null });
+  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), request: { direction, profile, model }, expectedHeadId: null });
   await dispatchOutbox();
   return (await claimJobById(made.id, "finishing-test"))!;
 }
-async function prepared() {
-  const job = await create();
+async function prepared(profile: "standard" | "extended" = "standard", model = "gpt-6-sol") {
+  const job = await create(profile, model);
   const session = new NativeToolSession(job, seedNativeDocument(direction), true, createNativeLibrary(null));
   await saveNativePlan(job, plan);
   await session.apply("initial", nativeFormOperations(nativeFormSchema.parse(form), []));
@@ -104,14 +110,19 @@ it("retains failed recovery diagnostics, never grants another recovery, and repl
   expect(reviewer.callCount).toBe(2);
 });
 
-it("reattaches a settled recovery after interruption without another critic call", async () => {
-  const { job, session } = await prepared();
+it.each(["standard", "extended"] as const)("reattaches a settled %s recovery after interruption without another critic call", async (profile) => {
+  const { job, session } = await prepared(profile);
+  const reviewLimit = profile === "extended" ? 6 : 4;
   const operationHash = canonicalHash({ version: "native-producer-v2", jobId: job.id, request: job.request, model: "gpt-6-sol" });
   const aggregate = await reserveProviderEffect({ job, provider: "openai", step: "native-producer-result", idempotencyKey: `native-producer:${operationHash}`, inputHash: operationHash, model: "gpt-6-sol", promptVersion: "native-producer-v2", reservationMicrousd: 0 });
   await markEffectDispatched(aggregate.id, job);
   const unusable = { documentHash: canonicalHash(session.document), verdict: "Unusable review", findings: [], noChangeReason: "Missing review", modelUsed: false };
-  await getPool().query("UPDATE native_job_plan SET creative_review_count=4,creative_review_history=$2::jsonb,creative_review=NULL WHERE job_id=$1", [job.id, JSON.stringify([unusable])]);
-  await focusedNativeReview({ job, direction, document: session.document, plan, attempt: 4, recovery: { diagnostic: { code: "historical_unusable", paths: [], finishReason: null } }, scriptedReviewer: fakeModel().respond(good()) });
+  await getPool().query("UPDATE native_job_plan SET creative_review_count=$3,creative_review_history=$2::jsonb,creative_review=NULL WHERE job_id=$1", [job.id, JSON.stringify([unusable]), reviewLimit]);
+  // Raising DB capacity must not allow another ordinary review or an unbacked repair.
+  const candidate = { ...unusable, modelUsed: true, contextHash: nativeReviewContextHash(direction, plan) };
+  await expect(saveNativeReview(job, candidate)).rejects.toThrow(/exhausted/);
+  await expect(saveNativeReview(job, { ...candidate, formatRecovery: true })).rejects.toThrow(/exhausted/);
+  await focusedNativeReview({ job, direction, document: session.document, plan, attempt: reviewLimit, recovery: { diagnostic: { code: "historical_unusable", paths: [], finishReason: null } }, scriptedReviewer: fakeModel().respond(good()) });
   // Simulate interruption between durable provider settlement and plan save.
   await needsAttentionJob(job, "NATIVE_PARTIAL", "Interrupted after review settlement");
   expect((await nativeDraftView(owner, job.projectId, job.id)).canContinue).toBe(true);
@@ -122,9 +133,40 @@ it("reattaches a settled recovery after interruption without another critic call
   await processJob(resumed, { scriptedModel: fakeModel().respondWithTools([{ name: "review_native_score", args: {} }]).respond(new AIMessage("Finished")), scriptedReviewer: reviewer, library: createNativeLibrary(null) });
   expect((await jobSnapshot(owner, job.id)).state).toBe("succeeded");
   expect(reviewer.callCount).toBe(0);
-  expect(await loadNativePlan(job.id)).toMatchObject({ reviewCount: 5, review: { modelUsed: true, formatRecovery: true } });
+  expect(await loadNativePlan(job.id)).toMatchObject({ reviewCount: reviewLimit + 1, review: { modelUsed: true, formatRecovery: true } });
   expect((await getPool().query("SELECT id FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1'", [job.id])).rowCount).toBe(1);
+  expect(await nativeFormatRecoveryAvailable(job.id)).toBe(false);
 }, 30_000);
+
+it.each([
+  ["user", "gpt-6-sol", "openai"],
+  ["provider", "gpt-6-sol", "openai"],
+  ["provider", "gemini-3.7-flash", "gemini"],
+  ["provider", "deepseek/deepseek-v4-pro-0813", "gateway"],
+] as const)("blocks continuation for exhausted %s allowance on %s without changing the saved job", async (scope, model, provider) => {
+  const { job } = await prepared("standard", model);
+  const aggregate = await reserveProviderEffect({ job, provider, step: "native-producer-result", idempotencyKey: `paused:${job.id}`, inputHash: job.id, model, promptVersion: "native-producer-v2", reservationMicrousd: 0 });
+  await markEffectDispatched(aggregate.id, job);
+  await needsAttentionJob(job, "NATIVE_PARTIAL", "Waiting for allowance");
+  expect((await nativeDraftView(owner, job.projectId, job.id)).canContinue).toBe(true);
+  const effectsBefore = (await getPool().query("SELECT * FROM effect WHERE job_id=$1", [job.id])).rows;
+  const poolKey = provider === "openai" ? "OPENAI_POOL_BUDGET_USD" : provider === "gemini" ? "GEMINI_POOL_BUDGET_USD" : "GATEWAY_POOL_BUDGET_USD";
+  if (scope === "user") await getPool().query("INSERT INTO owner_usage_limit(owner_id,limit_microusd) VALUES($1,0)", [owner]);
+  else config[poolKey] = 0;
+  const reason = scope === "user" ? /user allowance/ : /provider's shared allowance/;
+  const draft = await nativeDraftView(owner, job.projectId, job.id);
+  expect(draft).toMatchObject({ canContinue: false, canExtend: false, stepCount: 1 });
+  expect(draft.continuationReason).toMatch(reason);
+  await expect(resumeNativePartialJob(owner, job.projectId, job.id)).rejects.toThrow(reason);
+  expect((await jobSnapshot(owner, job.id)).state).toBe("needs_attention");
+  expect((await getPool().query("SELECT * FROM effect WHERE job_id=$1", [job.id])).rows).toEqual(effectsBefore);
+  Object.assign(config, originalConfig);
+  await getPool().query("DELETE FROM owner_usage_limit WHERE owner_id=$1", [owner]);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).canContinue).toBe(true);
+  await resumeNativePartialJob(owner, job.projectId, job.id);
+  expect((await jobSnapshot(owner, job.id)).state).toBe("queued");
+  expect((await getPool().query("SELECT * FROM effect WHERE job_id=$1", [job.id])).rows).toEqual(effectsBefore);
+});
 
 it("pauses exhausted substantive reviews immediately and rejects a doomed continuation", async () => {
   const { job, session } = await prepared();

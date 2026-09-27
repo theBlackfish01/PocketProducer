@@ -6,7 +6,9 @@ Reviewed recent history through `991f894`, with emphasis on `31ac4bc` (accountin
 
 The pending work shares core orchestration/API/export files. Commit groups therefore keep the coupled backend together, followed by the UI and its browser checks, then current documentation. No credentials, local databases, private traces or generated evidence belong in these commits. A scan of 96 candidate files found no configured secret values or matching credential patterns; `.env` is ignored and untracked. No push or paid/remote action was performed.
 
-## Unresolved findings
+## Findings at review time
+
+**Follow-up:** R1/R2 are now repaired by migration 024 and shared recovery/reservation allowance checks. Regression evidence: 174 unit and 98 integration tests passed, including Standard/Extended interrupted review attachment, ordinary/unbacked-review rejection, and blocked/restored owner and all-provider allowances. No new actionable finding in the scoped follow-up diff/lock-order review. R3 remains open and outside this minimal assignment. Original reproduction notes below are retained as historical evidence.
 
 ### R1 — High: Extended review recovery cannot attach the seventh result
 

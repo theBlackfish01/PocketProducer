@@ -31,4 +31,8 @@ Read-only inspection of Lantern (`27a88030-d12b-4d82-b29d-38b5d5ee105c`) found s
 3. The producer receives the current plan, unresolved valid findings and condensed recent history. A usable recovered review must still match the final score and requirements before completion.
 4. Only a completed accepted version becomes copy-ready. Copy to Audiotool remains explicit and independent of this repair.
 
-No new schema migration, provider key, UI primitive or dependency is needed. Native full-mix playback, Gemini listening and live Nexus verification remain deferred.
+Migration **024** aligns database capacity with Extended's six ordinary reviews plus the existing single format-recovery result. Ordinary profile limits and settled-effect validation still apply. Tests cover both Standard and Extended recovery after interruption, with no additional critic call during reattachment.
+
+Continue eligibility and submission now read the same shared ledger as reservations: installation, selected provider and owner allowances include prompt assistance and unresolved holds. An exhausted shared/user allowance also suppresses a misleading per-job extension offer. These reads are advisory, not a reservation or a promise that a larger real input will fit; the next dispatch still enforces all caps atomically. Recovery does not acquire the budget lock after the job lock, preserving the existing reservation lock order. No balances or limits are reset.
+
+No provider key, UI primitive or dependency is needed. Native full-mix playback, Gemini listening and live Nexus verification remain deferred.

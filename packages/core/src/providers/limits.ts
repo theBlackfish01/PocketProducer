@@ -7,8 +7,8 @@ export function providerPoolLimit(provider: ModelProvider): number {
   return provider === "gateway" ? c.GATEWAY_POOL_BUDGET_USD : provider === "gemini" ? c.GEMINI_POOL_BUDGET_USD : c.OPENAI_POOL_BUDGET_USD ?? c.INITIAL_BUILD_API_BUDGET_USD;
 }
 
-// Caller holds the shared budget advisory lock. No remote request inside this transaction.
-export async function assertSharedUsage(client: pg.PoolClient, ownerId: string, provider: ModelProvider, reserve: number): Promise<void> {
+// Eligibility reads are advisory. Reservations call this under the shared budget lock.
+export async function sharedUsageBlock(client: pg.PoolClient | pg.Pool, ownerId: string, provider: ModelProvider, reserve: number): Promise<"SITE" | "PROVIDER" | "USER" | null> {
   if (!Number.isSafeInteger(reserve) || reserve < 0) throw new Error("Invalid model reservation");
   const config = getConfig();
   const result = await client.query<{ total: string; pool: string; owner: string; owner_limit: string | null }>(`
@@ -21,7 +21,14 @@ export async function assertSharedUsage(client: pg.PoolClient, ownerId: string, 
       COALESCE(sum(amount) FILTER (WHERE owner_id=$1),0)::text AS owner,
       (SELECT limit_microusd::text FROM owner_usage_limit WHERE owner_id=$1) AS owner_limit FROM charges`, [ownerId, provider]);
   const row = result.rows[0]!;
-  if (Number(row.total) + reserve > config.INITIAL_BUILD_API_BUDGET_USD * 1e6) throw new Error("MODEL_BUDGET_EXCEEDED:SITE");
-  if (Number(row.pool) + reserve > providerPoolLimit(provider) * 1e6) throw new Error(`MODEL_BUDGET_EXCEEDED:PROVIDER:${provider}`);
-  if (Number(row.owner) + reserve > Number(row.owner_limit ?? config.DEFAULT_USER_BUDGET_USD * 1e6)) throw new Error("MODEL_BUDGET_EXCEEDED:USER");
+  if (Number(row.total) + reserve > config.INITIAL_BUILD_API_BUDGET_USD * 1e6) return "SITE";
+  if (Number(row.pool) + reserve > providerPoolLimit(provider) * 1e6) return "PROVIDER";
+  if (Number(row.owner) + reserve > Number(row.owner_limit ?? config.DEFAULT_USER_BUDGET_USD * 1e6)) return "USER";
+  return null;
+}
+
+// Caller holds the shared budget advisory lock. No remote request inside this transaction.
+export async function assertSharedUsage(client: pg.PoolClient, ownerId: string, provider: ModelProvider, reserve: number): Promise<void> {
+  const blocked = await sharedUsageBlock(client, ownerId, provider, reserve);
+  if (blocked) throw new Error(`MODEL_BUDGET_EXCEEDED:${blocked}${blocked === "PROVIDER" ? `:${provider}` : ""}`);
 }
