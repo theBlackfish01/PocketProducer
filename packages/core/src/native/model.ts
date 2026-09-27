@@ -14,7 +14,7 @@ export const nativeParameterRanges = {
     "operatorA.modulationFactorB": [0, 1], "operatorA.modulationFactorC": [0, 1], "operatorA.modulationFactorD": [0, 1], "operatorB.modulationFactorA": [0, 1], "operatorB.modulationFactorC": [0, 1], "operatorB.modulationFactorD": [0, 1], "operatorC.modulationFactorA": [0, 1], "operatorC.modulationFactorB": [0, 1], "operatorC.modulationFactorD": [0, 1], "operatorD.modulationFactorA": [0, 1], "operatorD.modulationFactorB": [0, 1], "operatorD.modulationFactorC": [0, 1],
     "operatorA.envelope2AmplitudeModulationDepth": [0, 1], "operatorB.envelope2AmplitudeModulationDepth": [0, 1], "operatorC.envelope2AmplitudeModulationDepth": [0, 1], "operatorD.envelope2AmplitudeModulationDepth": [0, 1], "lfo1.rateNormalized": [0, 1], "lfo2.rateNormalized": [0, 1],
     "filter.cutoffFrequencyHz": [33, 22050], "filter.resonance": [0.70710677, 60], "filter.keyboardTrackingAmount": [-1, 1],
-    "envelopeMain.attackTimeNormalized": [0, 1], "envelopeMain.decayTimeNormalized": [0, 1], "envelopeMain.sustainRangeFactor": [-1, 1], "envelopeMain.releaseTimeNormalized": [0, 1] },
+    "envelopeMain.attackTimeNormalized": [0, 1], "envelopeMain.decayTimeNormalized": [0, 1], "envelopeMain.sustainFactor": [0, 1], "envelopeMain.releaseTimeNormalized": [0, 1] },
   pulverisateur: { gain: [0, 1], tuneSemitones: [-12, 12], playModeIndex: [1, 2], glideTimeMs: [0, 10000], "audio.drive": [0, 1],
     "filter.cutoffFrequencyHz": [18, 15500], "filter.resonance": [0, 1], "filter.filterSpacing": [-1, 1], "filter.modeIndex": [1, 2] },
   gakki: { gain: [0, 1] },
@@ -80,7 +80,7 @@ const motif = z.object({ id, partId: id, name: z.string().min(1).max(80), length
 const section = z.object({ id, name: z.string().min(1).max(80), startBar: z.number().int().min(0), endBar: z.number().int().positive(), intent: z.string().max(240).default("") });
 
 export const nativeDocumentSchema = z.object({
-  schemaVersion: z.literal(2), ppq: z.literal(NATIVE_PPQ), title: z.string().min(1).max(120), direction: z.string().min(1).max(32_768), currentObjective: z.string().min(1).max(32_768),
+  schemaVersion: z.literal(2), ppq: z.literal(NATIVE_PPQ), mixSemantics: z.literal("channel-gain-v1").optional(), title: z.string().min(1).max(120), direction: z.string().min(1).max(32_768), currentObjective: z.string().min(1).max(32_768),
   assumptions: z.array(z.string().max(240)).max(16), tempoBpm: z.number().int().min(40).max(220),
   meter: z.object({ numerator: z.number().int().min(2).max(12), denominator: z.union([z.literal(4), z.literal(8)]) }),
   bars: z.number().int().min(4).max(128), sections: z.array(section).min(1).max(24), parts: z.array(part).min(1).max(24),
@@ -96,6 +96,9 @@ export const nativeDocumentSchema = z.object({
   const totalTicks = document.bars * document.meter.numerator * NATIVE_PPQ * 4 / document.meter.denominator;
   if (document.reverbBus && document.delayBus && document.reverbBus.id === document.delayBus.id) context.addIssue({ code: "custom", path: ["delayBus"], message: "Shared returns need distinct identities" });
   const parts = new Set(document.parts.map((value) => value.id));
+  if (document.mixSemantics === "channel-gain-v1") for (const item of document.parts) {
+    if (item.device.type === "gakki" && !item.device.preset) context.addIssue({ code: "custom", path: ["parts", document.parts.indexOf(item), "device"], message: "Gakki needs a pinned sound or drum-kit preset; a bare device does not identify a usable timbre" });
+  }
   const groups = new Map((document.groups ?? []).map((value) => [value.id, value]));
   unique([...groups.keys()], "groups");
   for (const group of groups.values()) {
@@ -293,6 +296,7 @@ export function setNativeProtections(base: NativeDocument, expectedPartIds: stri
 
 export function nativeMusicHash(document: NativeDocument): string {
   return canonicalHash({
+    mixSemantics: document.mixSemantics,
     tempoBpm: document.tempoBpm, meter: document.meter, bars: document.bars,
     sections: document.sections.map(({ startBar, endBar }) => ({ startBar, endBar })),
     groups: document.groups, reverbBus: document.reverbBus, delayBus: document.delayBus, master: document.master,
@@ -308,6 +312,9 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
   const before = new Map([...locked].map((partId) => [partId, protectedPartHash(base, partId)]));
   for (const raw of operations) {
     const op = nativeOperationSchema.parse(raw);
+    // Historical bare Gakki parts remain readable, but no new edit may
+    // introduce another unidentifiable sampler/kit sound.
+    if ((op.kind === "addPart" && op.part.device.type === "gakki" && !op.part.device.preset) || (op.kind === "setDevice" && op.device.type === "gakki" && !op.device.preset)) throw new Error("Gakki needs an inspected, pinned preset before construction");
   const findPart = (partId: string) => { const item = next.parts.find((value) => value.id === partId); if (!item) throw new Error(`Unknown part ${partId}`); return item; };
   const findGroup = (groupId: string) => { const item = next.groups?.find((value) => value.id === groupId); if (!item) throw new Error(`Unknown group ${groupId}`); return item; };
     switch (op.kind) {

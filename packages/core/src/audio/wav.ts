@@ -26,6 +26,8 @@ export function decodeWav(buffer: Buffer, limits: { maxDurationSeconds?: number;
   let format = 0;
   let channels = 0;
   let sampleRate = 0;
+  let declaredByteRate = 0;
+  let declaredBlockAlign = 0;
   let bits = 0;
   let dataOffset = -1;
   let dataLength = 0;
@@ -39,6 +41,8 @@ export function decodeWav(buffer: Buffer, limits: { maxDurationSeconds?: number;
       format = buffer.readUInt16LE(body);
       channels = buffer.readUInt16LE(body + 2);
       sampleRate = buffer.readUInt32LE(body + 4);
+      declaredByteRate = buffer.readUInt32LE(body + 8);
+      declaredBlockAlign = buffer.readUInt16LE(body + 12);
       bits = buffer.readUInt16LE(body + 14);
     } else if (id === "data") {
       dataOffset = body;
@@ -48,11 +52,12 @@ export function decodeWav(buffer: Buffer, limits: { maxDurationSeconds?: number;
     offset = body + size + (size % 2);
   }
   if (![1, 3].includes(format) || ![1, 2].includes(channels) || sampleRate < 8_000 || sampleRate > (limits.maxSampleRate ?? 192_000) || dataOffset < 0) {
-    throw Object.assign(new Error("Unsupported WAV format; use mono/stereo PCM16 or Float32 WAV at 8–192 kHz"), { statusCode: 415, code: "UNSUPPORTED_WAV_ENCODING" });
+    throw Object.assign(new Error("Unsupported WAV format; use mono/stereo PCM16, PCM24 or Float32 WAV at 8–192 kHz"), { statusCode: 415, code: "UNSUPPORTED_WAV_ENCODING" });
   }
-  if ((format === 1 && bits !== 16) || (format === 3 && bits !== 32)) throw Object.assign(new Error("Unsupported WAV bit depth"), { statusCode: 415, code: "UNSUPPORTED_WAV_ENCODING" });
+  if ((format === 1 && bits !== 16 && bits !== 24) || (format === 3 && bits !== 32)) throw Object.assign(new Error("Unsupported WAV bit depth"), { statusCode: 415, code: "UNSUPPORTED_WAV_ENCODING" });
   const bytesPerSample = bits / 8;
   const blockAlign = bytesPerSample * channels;
+  if (declaredBlockAlign !== blockAlign || declaredByteRate !== sampleRate * blockAlign) throw Object.assign(new Error("WAV format rate or frame alignment disagrees with its PCM encoding"), { statusCode: 422, code: "MALFORMED_WAV" });
   if (dataLength % blockAlign !== 0) throw Object.assign(new Error("WAV data is not aligned to complete sample frames"), { statusCode: 422, code: "MALFORMED_WAV" });
   const frames = Math.floor(dataLength / (bytesPerSample * channels));
   const maxDurationSeconds = limits.maxDurationSeconds ?? 300;
@@ -61,7 +66,7 @@ export function decodeWav(buffer: Buffer, limits: { maxDurationSeconds?: number;
   for (let frame = 0; frame < frames; frame += 1) {
     for (let channel = 0; channel < channels; channel += 1) {
       const position = dataOffset + (frame * channels + channel) * bytesPerSample;
-      const value = format === 1 ? buffer.readInt16LE(position) / 32_768 : buffer.readFloatLE(position);
+      const value = format === 3 ? buffer.readFloatLE(position) : bits === 16 ? buffer.readInt16LE(position) / 32_768 : buffer.readIntLE(position, 3) / 8_388_608;
       if (!Number.isFinite(value)) throw Object.assign(new Error("Float32 WAV contains a non-finite sample"), { statusCode: 422, code: "NON_FINITE_WAV_SAMPLE" });
       result[channel]![frame] = value;
     }

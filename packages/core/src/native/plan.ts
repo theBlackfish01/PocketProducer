@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { canonicalHash } from "../domain/hash.js";
 
 export const nativeCreativeStateSchema = z.object({
   identity: z.string().max(300).default(""),
   densityIntent: z.string().max(240).default(""),
-  palette: z.array(z.object({ role: z.string().max(80), resourceKind: z.enum(["local-recipe", "owned-source", "audiotool-preset", "audiotool-sample", "synthesis"]), resourceId: z.string().max(160), reason: z.string().max(240) })).max(24).default([]),
+  palette: z.array(z.object({ role: z.string().max(80), resourceKind: z.enum(["local-recipe", "owned-source", "audiotool-preset", "audiotool-sample", "synthesis"]), resourceId: z.string().max(160), resourceHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), reason: z.string().max(240) })).max(24).default([]),
   guidanceRefs: z.array(z.string().max(120)).max(12).default([]),
   decisions: z.array(z.string().max(240)).max(20).default([]),
   definiteFailures: z.array(z.string().max(240)).max(12).default([]),
@@ -21,5 +22,15 @@ export const nativePlanSchema = z.object({
   creativeState: nativeCreativeStateSchema.optional()
 });
 export type NativePlan = z.infer<typeof nativePlanSchema>;
+// Discovery indexes, task checkboxes and evidence links are bookkeeping, not
+// new musical requirements. Sound decisions and goals remain review-relevant.
+export function nativeReviewPlanHash(plan: NativePlan): string {
+  const { creativeState, ...goals } = plan;
+  const state = creativeState ?? nativeCreativeStateSchema.parse({});
+  return canonicalHash({ ...goals, creative: { identity: state.identity, densityIntent: state.densityIntent, palette: state.palette, decisions: state.decisions } });
+}
+export function nativeReviewContextHash(direction: string, plan: NativePlan): string {
+  return canonicalHash({ direction, plan: nativeReviewPlanHash(plan) });
+}
 export const nativeStageSchema = z.enum(["planned", "building", "refining", "reviewed"]);
 export type NativeStage = z.infer<typeof nativeStageSchema>;

@@ -10,8 +10,8 @@ describe("fixed native quality-evaluation harness", () => {
     expect(new Set(nativeQualityCases.map((item) => item.id)).size).toBe(7);
     expect(nativeQualityCases.map((item) => item.category)).toEqual(expect.arrayContaining(["sparse", "vague-with-arc", "sample-led", "detailed", "revision", "resource-constraint", "resource-fallback"]));
     const selected = nativeQualityCases.find((item) => item.id === "sparse-baseline")!;
-    const example = readNativeExample("spare-answer");
-    const document = applyNativeOperations(seedNativeDocument(selected.brief), nativeFormOperations(example.form, []));
+    const example = readNativeExample("sparse-motif-handoff");
+    const document = applyNativeOperations(seedNativeDocument(selected.brief), [...nativeFormOperations(example.form, []), ...example.extraOperations]);
     const report = evaluateNativeQuality({ caseId: selected.id, direction: selected.brief, document });
     expect(report.caseMatch).toBe(true);
     expect(report.documentHash).toMatch(/^[a-f0-9]{64}$/);

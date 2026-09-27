@@ -31,6 +31,8 @@
     "reconcile:native-sync": "tsx scripts/reconcile-native-sync.ts",
     "budget:status": "tsx scripts/check-provider-budget.ts",
     "eval:native": "tsx scripts/evaluate-native-quality.ts",
+    "eval:sound-craft": "tsx scripts/export-sound-craft-benchmark.ts",
+    "verify:sample-wavs": "tsx scripts/verify-sample-wavs.ts",
     "spike:nexus-native": "tsx packages/core/src/nexus/native-spike.ts",
     "spike:nexus-render": "tsx packages/core/src/nexus/render-probe.ts",
     "build": "pnpm --filter @pocket/web build && tsc -b",

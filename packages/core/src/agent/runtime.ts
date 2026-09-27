@@ -10,6 +10,8 @@ import type { JobRecord } from "../db/repository.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "../providers/effects.js";
 import { tokenCostMicrousd, tokenCostMicrousdAtPrice, tokenCostUsd } from "../providers/pricing.js";
 import { jobNativeRunLimits } from "../native/profile.js";
+import { modelProvider } from "../providers/models.js";
+import { reportedGatewayCost } from "../providers/compatible-model.js";
 
 let checkpointReady: Promise<PostgresSaver> | undefined;
 
@@ -100,7 +102,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
     const messageHash = canonicalHash(request.normalizedMessages);
     const reservation = await reserveProviderEffect({
       job: this.job,
-      provider: "openai",
+      provider: modelProvider(this.model),
       step: "producer-model-call",
       idempotencyKey: `producer:${this.operationHash}:call:${messageHash}`,
       inputHash: canonicalHash({ operationHash: this.operationHash, messageHash, inputTokenBound: request.inputTokenBound, outputTokenBound: request.outputTokenBound }),
@@ -119,8 +121,16 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
     const effectId = this.effects.get(runId);
     if (!effectId) return;
     const usage = usageFromLlmResult(output);
-    const actualCostMicrousd = this.cost(usage);
-    const state = await completeProviderEffect({ effectId, job: this.job, output: { usage }, actualCostMicrousd });
+    const gatewayCost = reportedGatewayCost(output);
+    const returned = output.generations[0]?.[0] as { message?: BaseMessage } | undefined;
+    const requestId = returned?.message?.response_metadata.providerRequestId;
+    const providerRequestId = typeof requestId === "string" ? requestId : "";
+    if (!getConfig().FIXTURE_MODE && (usage.inputTokens <= 0 || usage.outputTokens <= 0 || (modelProvider(this.model) === "gateway" && gatewayCost === undefined))) {
+      await failProviderEffect({ effectId, job: this.job, errorClass: "ProviderUsageUnknown", uncertain: true, safeDetails: { providerRequestId } });
+      throw new Error("PROVIDER_USAGE_UNKNOWN: reconcile the observed response before continuing");
+    }
+    const actualCostMicrousd = gatewayCost ?? this.cost(usage);
+    const state = await completeProviderEffect({ effectId, job: this.job, output: { usage }, actualCostMicrousd, ...(providerRequestId ? { providerRequestId } : {}) });
     if (state !== "succeeded") throw new Error("OPENAI_EFFECT_OUTCOME_UNCERTAIN");
     this.usage.inputTokens += usage.inputTokens;
     this.usage.outputTokens += usage.outputTokens;
@@ -134,7 +144,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
       effectId,
       job: this.job,
       errorClass: error.name,
-      uncertain: /timeout|abort|network|ECONN|socket/i.test(`${error.name} ${error.message}`)
+      uncertain: /timeout|abort|network|uncertain|ECONN|socket/i.test(`${error.name} ${error.message}`)
     });
   }
 }

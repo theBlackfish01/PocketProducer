@@ -7,10 +7,12 @@ import { JobControlError, type JobRecord } from "../db/repository.js";
 import { nativeDiff, nativeDocumentSchema, nativeMusicHash, pinnedContext, type NativeDocument, type NativeOperation } from "./model.js";
 import { NATIVE_MAPPING_VERSION } from "./adapter.js";
 import type { NativeSampleResources } from "./adapter.js";
-import { jobNativeRunLimits, minimumNextNativeReservationUsd, nativeProfileSchema, nativeRunLimits, nativeRunLimitsSchema, originalNativeRequest } from "./profile.js";
+import { jobNativeRunLimits, minimumNextNativeReservationUsd, nativeProfileSchema, nativeReviewLimit, nativeRunLimits, nativeRunLimitsSchema, originalNativeRequest } from "./profile.js";
 import { nativeCreativeStateSchema, nativePlanSchema, nativeStageSchema, type NativeCreativeState, type NativePlan, type NativeStage } from "./plan.js";
 import { nativeReviewSchema, type NativeReview } from "./critique.js";
 import { appendPublicActivity } from "./activity.js";
+import { producerModelSchema } from "../providers/models.js";
+import { nativeReviewPlanHash, nativeReviewContextHash } from "./plan.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
@@ -21,7 +23,7 @@ async function head(client: pg.PoolClient, ownerId: string, projectId: string, l
 }
 
 export async function createNativeJob(input: { ownerId: string; projectId: string; kind: "native-generation" | "native-revision" | "native-sync"; idempotencyKey: string; request: Record<string, unknown>; expectedHeadId: string | null }): Promise<{ id: string; duplicate: boolean }> {
-  const requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard")) };
+  const requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard"), input.request.model === undefined ? undefined : producerModelSchema.parse(input.request.model)) };
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
@@ -149,6 +151,17 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     if (effects.rows.some((effect) => effect.step !== "native-producer-result" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A provider outcome still needs reconciliation"), { statusCode: 409 });
     const callCount = effects.rows.filter((effect) => effect.step === "producer-model-call").length;
     const limits = jobNativeRunLimits(job.request);
+    const reviewState = (await client.query<{ plan: unknown; creative_review: unknown; creative_review_count: number; creative_review_history: unknown }>("SELECT plan,creative_review,creative_review_count,creative_review_history FROM native_job_plan WHERE job_id=$1 FOR UPDATE", [jobId])).rows[0];
+    if (reviewState && reviewState.creative_review_count >= nativeReviewLimit(limits)) {
+      const review = reviewState.creative_review ? nativeReviewSchema.parse(reviewState.creative_review) : null;
+      const latest = (await client.query<{ result_hash: string }>("SELECT result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal DESC LIMIT 1", [jobId])).rows[0];
+      const valid = review?.modelUsed && review.documentHash === latest?.result_hash && review.contextHash === nativeReviewContextHash(typeof job.request.direction === "string" ? job.request.direction : "", nativePlanSchema.parse(reviewState.plan));
+      const last = nativeReviewSchema.array().parse(reviewState.creative_review_history).at(-1);
+      const contextHash = nativeReviewContextHash(typeof job.request.direction === "string" ? job.request.direction : "", nativePlanSchema.parse(reviewState.plan));
+      const used = await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1' LIMIT 1", [jobId]);
+      const settled = await settledNativeReviewRecovery(jobId, latest?.result_hash ?? "", contextHash, client);
+      if (!valid && !settled && (last?.modelUsed !== false || used.rowCount)) throw Object.assign(new Error("The final review allowance and applicable recovery are exhausted; another continuation cannot resolve this limit"), { statusCode: 409 });
+    }
     if (callCount >= (limits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB)) throw Object.assign(new Error("The request has reached its configured model-call limit; continuation needs an explicitly approved limit change"), { statusCode: 409 });
     if (limits) {
       const amounts = await client.query<{ job_committed: string; site_committed: string }>(`SELECT
@@ -302,21 +315,36 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const minimumNextCallUsd = runLimits ? minimumNextNativeReservationUsd(runLimits, session.applied.length > 0) : 0;
   const siteBudgetBlocked = siteRemainingUsd < minimumNextCallUsd;
   const budgetBlocked = siteBudgetBlocked || (runLimits?.maxJobCostUsd ?? 0) - spentUsd - reservedUsd < minimumNextCallUsd;
-  const inputBlocked = /OPENAI_INPUT_LIMIT_EXCEEDED/.test(stopped) && (runLimits?.maxInputTokens ?? 0) <= (jobNativeRunLimits(originalNativeRequest(request))?.maxInputTokens ?? 0);
   const outputBlocked = /OPENAI_INCOMPLETE_RESPONSE/.test(stopped) && (runLimits?.maxOutputTokens ?? 0) <= (jobNativeRunLimits(originalNativeRequest(request))?.maxOutputTokens ?? 0);
-  const canContinue = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && aggregateRecoverable && effects.rows.length < callLimit && effectsKnown && !budgetBlocked && !inputBlocked && !outputBlocked;
+  const savedPlan = await loadNativePlan(jobId);
+  const validReview = savedPlan?.review?.modelUsed && savedPlan.review.documentHash === canonicalHash(session.document) && savedPlan.review.contextHash === nativeReviewContextHash(direction, savedPlan.plan);
+  const reviewExhausted = savedPlan && savedPlan.reviewCount >= nativeReviewLimit(runLimits) && !validReview;
+  const usedRecovery = reviewExhausted ? await getPool().query("SELECT 1 FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1' LIMIT 1", [jobId]) : null;
+  const settledRecovery = reviewExhausted && savedPlan ? await settledNativeReviewRecovery(jobId, canonicalHash(session.document), nativeReviewContextHash(direction, savedPlan.plan)) : null;
+  const reviewBlocked = Boolean(reviewExhausted && !settledRecovery && (savedPlan?.reviewHistory.at(-1)?.modelUsed !== false || usedRecovery?.rowCount));
+  // Input is rebuilt from confirmed state on continuation and checked before
+  // dispatch. A historical estimate must not require raising the captured cap.
+  const canContinue = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && aggregateRecoverable && effects.rows.length < callLimit && effectsKnown && !budgetBlocked && !outputBlocked && !reviewBlocked;
   const config = getConfig();
   const target = runLimits?.profile === "standard" ? nativeRunLimits("extended") : null;
   const maximum = { maxCalls: config.MAX_MODEL_CALLS_PER_JOB, maxInputTokens: config.MAX_OPENAI_INPUT_TOKENS, maxOutputTokens: config.NATIVE_MODEL_OUTPUT_TOKENS, deadlineSeconds: config.MAX_JOB_SECONDS, maxJobCostUsd: config.MAX_JOB_COST_USD };
   const canExtend = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && aggregateRecoverable && effectsKnown && !siteBudgetBlocked && !!runLimits && (Object.keys(maximum) as Array<keyof typeof maximum>).some((field) => maximum[field] > runLimits[field]);
-  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : !aggregateRecoverable ? "This request has no safely resumable producer state; its original stop reason remains available." : siteBudgetBlocked ? "The installation-wide API allowance cannot reserve another call; increasing this request alone will not help." : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance; increase it before continuing." : budgetBlocked ? "This request's own cost allowance is exhausted; increase it explicitly before continuing." : inputBlocked || outputBlocked ? "This request needs a higher input or output allowance before continuing." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
+  const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : !aggregateRecoverable ? "This request has no safely resumable producer state; its original stop reason remains available." : siteBudgetBlocked ? "The installation-wide API allowance cannot reserve another call; increasing this request alone will not help." : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance; increase it before continuing." : budgetBlocked ? "This request's own cost allowance is exhausted; increase it explicitly before continuing." : reviewBlocked ? "The final review could not finish within its review allowance. The draft is saved; another continuation would not resolve this limit." : outputBlocked ? "This request needs a higher output allowance before continuing." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
   return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, plan: await loadNativePlan(jobId), runLimits, budget: { spentUsd, reservedUsd, unknownUsd: Number(budget.job_unknown) / 1_000_000, siteRemainingUsd, minimumNextCallUsd, modelCalls: effects.rows.length }, extensionCeiling: maximum, suggestedProfileExtension: target, canContinue, canExtend, continuationReason, stopReason: stopped };
 }
 
-export async function loadNativePlan(jobId: string): Promise<{ plan: NativePlan; stage: NativeStage; inspectedDocumentHash: string | null; review: NativeReview | null; reviewCount: number } | null> {
-  const result = await getPool().query<{ plan: unknown; stage: string; inspected_document_hash: string | null; creative_review: unknown; creative_review_count: number }>("SELECT plan,stage,inspected_document_hash,creative_review,creative_review_count FROM native_job_plan WHERE job_id=$1", [jobId]);
+// A crash after effect settlement but before plan attachment must not consume
+// the only recovery slot without making its confirmed result recoverable.
+export async function settledNativeReviewRecovery(jobId: string, documentHash: string, contextHash: string, client: pg.PoolClient | pg.Pool = getPool()): Promise<NativeReview | null> {
+  const result = await client.query<{ output: { review?: unknown } }>("SELECT output FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1' AND state='succeeded' AND cost_status='observed' LIMIT 1", [jobId]);
+  const parsed = nativeReviewSchema.safeParse(result.rows[0]?.output.review);
+  return parsed.success && parsed.data.modelUsed && parsed.data.documentHash === documentHash && parsed.data.contextHash === contextHash ? parsed.data : null;
+}
+
+export async function loadNativePlan(jobId: string): Promise<{ plan: NativePlan; stage: NativeStage; inspectedDocumentHash: string | null; review: NativeReview | null; reviewHistory: NativeReview[]; reviewCount: number } | null> {
+  const result = await getPool().query<{ plan: unknown; stage: string; inspected_document_hash: string | null; creative_review: unknown; creative_review_history: unknown; creative_review_count: number }>("SELECT plan,stage,inspected_document_hash,creative_review,creative_review_history,creative_review_count FROM native_job_plan WHERE job_id=$1", [jobId]);
   const row = result.rows[0];
-  return row ? { plan: nativePlanSchema.parse(row.plan), stage: nativeStageSchema.parse(row.stage), inspectedDocumentHash: row.inspected_document_hash, review: row.creative_review ? nativeReviewSchema.parse(row.creative_review) : null, reviewCount: row.creative_review_count } : null;
+  return row ? { plan: nativePlanSchema.parse(row.plan), stage: nativeStageSchema.parse(row.stage), inspectedDocumentHash: row.inspected_document_hash, review: row.creative_review ? nativeReviewSchema.parse(row.creative_review) : null, reviewHistory: nativeReviewSchema.array().parse(row.creative_review_history), reviewCount: row.creative_review_count } : null;
 }
 
 export async function saveNativePlan(job: JobRecord, raw: NativePlan): Promise<void> {
@@ -325,7 +353,11 @@ export async function saveNativePlan(job: JobRecord, raw: NativePlan): Promise<v
   try {
     await client.query("BEGIN");
     await assertSyncLease(client, job);
-    await client.query("INSERT INTO native_job_plan(job_id,plan,stage) VALUES($1,$2,'planned') ON CONFLICT(job_id) DO UPDATE SET plan=CASE WHEN EXCLUDED.plan ? 'creativeState' OR NOT (native_job_plan.plan ? 'creativeState') THEN EXCLUDED.plan ELSE jsonb_set(EXCLUDED.plan,'{creativeState}',native_job_plan.plan->'creativeState',true) END,stage='planned',inspected_document_hash=NULL,creative_review=NULL,updated_at=now()", [job.id, JSON.stringify(plan)]);
+    const prior = await client.query<{ plan: unknown }>("SELECT plan FROM native_job_plan WHERE job_id=$1 FOR UPDATE", [job.id]);
+    const old = prior.rows[0] ? nativePlanSchema.parse(prior.rows[0].plan) : null;
+    const next = { ...plan, ...(plan.creativeState === undefined && old?.creativeState ? { creativeState: old.creativeState } : {}) };
+    const changed = !old || nativeReviewPlanHash(old) !== nativeReviewPlanHash(next);
+    await client.query("INSERT INTO native_job_plan(job_id,plan,stage) VALUES($1,$2,'planned') ON CONFLICT(job_id) DO UPDATE SET plan=EXCLUDED.plan,stage=CASE WHEN $3 THEN 'planned' ELSE native_job_plan.stage END,inspected_document_hash=CASE WHEN $3 THEN NULL ELSE native_job_plan.inspected_document_hash END,creative_review=CASE WHEN $3 THEN NULL ELSE native_job_plan.creative_review END,updated_at=now()", [job.id, JSON.stringify(next), changed]);
     await appendPublicActivity(client, { ...job, jobId: job.id }, `plan:${job.id}:${canonicalHash(plan)}`, { version: 1, kind: "approach", text: plan.intent.slice(0, 1_200) });
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -338,14 +370,18 @@ export async function saveNativeCreativeState(job: JobRecord, raw: NativeCreativ
   try {
     await client.query("BEGIN");
     await assertSyncLease(client, job);
-    const updated = await client.query("UPDATE native_job_plan SET plan=jsonb_set(plan,'{creativeState}',$2::jsonb,true),creative_review=NULL,updated_at=now() WHERE job_id=$1", [job.id, JSON.stringify(state)]);
+    const prior = await client.query<{ plan: unknown }>("SELECT plan FROM native_job_plan WHERE job_id=$1 FOR UPDATE", [job.id]);
+    if (!prior.rows[0]) throw new Error("Record the durable production plan before saving creative decisions");
+    const old = nativePlanSchema.parse(prior.rows[0].plan);
+    const changed = nativeReviewPlanHash(old) !== nativeReviewPlanHash({ ...old, creativeState: state });
+    const updated = await client.query("UPDATE native_job_plan SET plan=jsonb_set(plan,'{creativeState}',$2::jsonb,true),creative_review=CASE WHEN $3 THEN NULL ELSE creative_review END,stage=CASE WHEN $3 THEN 'refining' ELSE stage END,updated_at=now() WHERE job_id=$1", [job.id, JSON.stringify(state), changed]);
     if (!updated.rowCount) throw new Error("Record the durable production plan before saving creative decisions");
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
 }
 
-export async function saveNativeReview(job: JobRecord, review: NativeReview): Promise<void> {
+export async function saveNativeReview(job: JobRecord, review: NativeReview, attemptedModel = review.modelUsed): Promise<void> {
   const checked = nativeReviewSchema.parse(review);
   const client = await getPool().connect();
   try {
@@ -353,10 +389,14 @@ export async function saveNativeReview(job: JobRecord, review: NativeReview): Pr
     await assertSyncLease(client, job);
     const latest = await client.query<{ result_hash: string }>("SELECT result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal DESC LIMIT 1", [job.id]);
     if (latest.rows[0]?.result_hash !== checked.documentHash) throw new Error("Focused review is stale against confirmed music");
-    const plan = await client.query<{ creative_review_count: number }>("SELECT creative_review_count FROM native_job_plan WHERE job_id=$1 FOR UPDATE", [job.id]);
+    const plan = await client.query<{ creative_review_count: number; plan: unknown }>("SELECT creative_review_count,plan FROM native_job_plan WHERE job_id=$1 FOR UPDATE", [job.id]);
     if (!plan.rows[0]) throw new Error("Record a production plan before reviewing");
-    if (checked.modelUsed && plan.rows[0].creative_review_count >= 2) throw new Error("Focused review allowance for this request is exhausted");
-    await client.query("UPDATE native_job_plan SET creative_review=$2::jsonb,creative_review_count=creative_review_count+$3,updated_at=now() WHERE job_id=$1", [job.id, JSON.stringify(checked), checked.modelUsed ? 1 : 0]);
+    if (checked.contextHash && checked.contextHash !== nativeReviewContextHash(typeof job.request.direction === "string" ? job.request.direction : "", nativePlanSchema.parse(plan.rows[0].plan))) throw new Error("Focused review is stale against current requirements");
+    if (attemptedModel && plan.rows[0].creative_review_count >= nativeReviewLimit(jobNativeRunLimits(job.request))) {
+      const recovery = checked.formatRecovery && await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1' AND state='succeeded' AND cost_status='observed' AND output->'review'=$2::jsonb", [job.id, JSON.stringify(checked)]);
+      if (!recovery || !recovery.rowCount) throw new Error("Focused review allowance for this request is exhausted");
+    }
+    await client.query("UPDATE native_job_plan SET creative_review=$2::jsonb,creative_review_history=creative_review_history || jsonb_build_array($2::jsonb),creative_review_count=creative_review_count+$3,updated_at=now() WHERE job_id=$1", [job.id, JSON.stringify(checked), attemptedModel ? 1 : 0]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }

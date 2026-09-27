@@ -3,8 +3,9 @@ import { getConfig } from "../config.js";
 import type { JobRecord } from "../db/repository.js";
 import { getPool } from "../db/pool.js";
 import { jobNativeRunLimits } from "../native/profile.js";
+import { assertSharedUsage } from "./limits.js";
 
-export type ProviderName = "openai" | "gemini" | "audiotool";
+export type ProviderName = "openai" | "gemini" | "gateway" | "audiotool";
 export type EffectState = "reserved" | "dispatched" | "succeeded" | "failed" | "uncertain";
 
 export interface EffectReservation {
@@ -41,6 +42,7 @@ export async function reserveProviderEffect(input: {
   promptVersion: string;
   reservationMicrousd: number;
   maxDistinctEffectsForStep?: number;
+  maxDistinctEffectsForPromptVersion?: number;
 }): Promise<EffectReservation> {
   const config = getConfig();
   const client = await getPool().connect();
@@ -71,6 +73,11 @@ export async function reserveProviderEffect(input: {
       const count = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND step=$2", [input.job.id, input.step]);
       if (Number(count.rows[0]?.count ?? 0) >= input.maxDistinctEffectsForStep) throw new Error("MODEL_STEP_EFFECT_LIMIT_EXCEEDED");
     }
+    if (input.maxDistinctEffectsForPromptVersion !== undefined) {
+      if (!Number.isSafeInteger(input.maxDistinctEffectsForPromptVersion) || input.maxDistinctEffectsForPromptVersion < 1) throw new Error("Invalid prompt-effect limit");
+      const count = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND prompt_version=$2", [input.job.id, input.promptVersion]);
+      if (Number(count.rows[0]?.count ?? 0) >= input.maxDistinctEffectsForPromptVersion) throw new Error("MODEL_FORMAT_RECOVERY_EXHAUSTED");
+    }
     const callCount = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND reservation_microusd>0",
       [input.job.id]
@@ -91,6 +98,7 @@ export async function reserveProviderEffect(input: {
     if (input.reservationMicrousd < 0) throw new Error("Invalid model reservation");
     if (overall + input.reservationMicrousd > overallLimit) throw new Error("MODEL_BUDGET_EXCEEDED:SITE");
     if (job + input.reservationMicrousd > jobLimit) throw new Error("MODEL_BUDGET_EXCEEDED:JOB");
+    if (input.provider !== "audiotool") await assertSharedUsage(client, input.job.ownerId, input.provider, input.reservationMicrousd);
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd,attempt_id,lease_generation)
        VALUES($1,$2,$3,$4,'reserved',$5,$6,$7,$8,$9,$10) RETURNING id`,

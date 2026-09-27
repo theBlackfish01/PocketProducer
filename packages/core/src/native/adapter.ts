@@ -6,7 +6,7 @@ import { canonicalHash } from "../domain/hash.js";
 import { nativePresetFingerprint, type LibrarySample, type NativePreset } from "./library.js";
 import { assertNativeDeviceMapping, materializedNotes, nativeDocumentSchema, type NativeDocument, type NativePart } from "./model.js";
 
-export const NATIVE_MAPPING_VERSION = "nexus-native-v7";
+export const NATIVE_MAPPING_VERSION = "nexus-native-v8";
 export const NEXUS_TICKS_PER_CANONICAL_TICK = Ticks.Beat / 960;
 export function toNexusTicks(canonicalTicks: number): number {
   const value = canonicalTicks * NEXUS_TICKS_PER_CANONICAL_TICK;
@@ -84,11 +84,15 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
       const position = { displayName: part.name, positionX: 100 + (index % 4) * 240, positionY: 100 + Math.floor(index / 4) * 220 };
       const parameters = part.device.parameters;
       const deviceFields = nestedDeviceParameters(part.device.type, parameters);
+      // Older immutable scores intentionally retain their v7 gain mapping.
+      // New scores use the part fader once; instrument gain is a separate
+      // sound-design control, defaulting to unity rather than squaring gain.
+      const instrumentGain = parameters.gain ?? (document.mixSemantics === "channel-gain-v1" ? 1 : part.gain);
       const instrument = part.device.type === "audio" ? t.create("audioDevice", { ...position, gain: 1, panning: 0 })
-        : part.device.type === "heisenberg" ? t.create("heisenberg", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields })
-        : part.device.type === "pulverisateur" ? t.create("pulverisateur", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields })
-        : part.device.type === "gakki" ? t.create("gakki", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields })
-        : t.create("beatbox8", { ...position, gain: parameters.gain ?? part.gain, ...deviceFields });
+        : part.device.type === "heisenberg" ? t.create("heisenberg", { ...position, gain: instrumentGain, ...deviceFields })
+        : part.device.type === "pulverisateur" ? t.create("pulverisateur", { ...position, gain: instrumentGain, ...deviceFields })
+        : part.device.type === "gakki" ? t.create("gakki", { ...position, gain: instrumentGain, ...deviceFields })
+        : t.create("beatbox8", { ...position, gain: instrumentGain, ...deviceFields });
       if (part.device.preset) {
         const preset = presets[part.device.preset.name];
         if (!preset || preset.entityType !== part.device.type || preset.meta.name !== part.device.preset.name || preset.meta.ownerName !== part.device.preset.ownerName || !part.device.preset.contentHash || nativePresetFingerprint(preset) !== part.device.preset.contentHash) throw new Error(`Preset ${part.device.preset.name} is unresolved, unpinned or its configuration has drifted`);

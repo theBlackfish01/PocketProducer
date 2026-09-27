@@ -5,10 +5,10 @@ import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
 import { registerActivityRoutes } from "./activity-stream.js";
-import { byteRange } from "@pocket/core";
+import { assistMusicalPrompt, byteRange, clearConnectedProfile, connectedAudiotoolProfile, producerModels, producerModelSchema } from "@pocket/core";
 import {
-  audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createNativeLibrary, createProject, decodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot,
-  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listProjects, nativeDraftView, nativeSnapshot, providerAvailability, requireProject, resolveNativePreservation, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, selectNativeRevision, storeImmutableAudio
+  audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createNativeLibrary, createProject, decodeWav, encodeWav, deleteAudiotoolSession, devOwnerId, getConfig, getPool, getProjectSnapshot,
+  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listNativeSoundFeedback, listProjects, nativeDraftView, nativePresetRecipes, nativeSnapshot, providerAvailability, readNativeRecipe, requireProject, resolveNativePreservation, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, saveNativeSoundFeedback, selectNativeRevision, storeImmutableAudio
 } from "@pocket/core";
 
 const config = getConfig();
@@ -64,16 +64,27 @@ app.post("/api/v1/integrations/audiotool/session", async (request, reply) => {
     tokens: z.object({ accessToken: z.string().min(16).max(16_384), refreshToken: z.string().max(16_384).refine((value) => value === "" || value.length >= 16), expiresAt: z.number().int().positive() })
   }).parse(request.body);
   await saveAudiotoolSession(ownerId, body.userName, body.tokens);
+  clearConnectedProfile(ownerId);
   return reply.status(204).send();
 });
 
 app.delete("/api/v1/integrations/audiotool/session", async (request, reply) => {
   if (request.headers.origin !== config.APP_ORIGIN) throw Object.assign(new Error("Audiotool disconnect requires the configured loopback origin"), { statusCode: 403 });
   await deleteAudiotoolSession(ownerId);
+  clearConnectedProfile(ownerId);
   return reply.status(204).send();
 });
 
 app.get("/api/v1/projects", async () => ({ projects: await listProjects(ownerId) }));
+app.get("/api/v1/producer-models", () => Promise.resolve({ models: producerModels() }));
+app.get("/api/v1/integrations/audiotool/profile", async () => ({ profile: await connectedAudiotoolProfile(ownerId) }));
+
+app.post("/api/v1/projects/:projectId/prompt-assistance", async (request) => {
+  if (request.headers.origin !== config.APP_ORIGIN) throw Object.assign(new Error("Prompt assistance requires the configured origin"), { statusCode: 403 });
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  const key = idSchema.parse(request.headers["idempotency-key"]);
+  return assistMusicalPrompt(ownerId, projectId, key, request.body);
+});
 
 app.post("/api/v1/projects", async (request, reply) => {
   const body = z.object({ title: z.string().trim().min(1).max(120).default("Untitled session") }).parse(request.body ?? {});
@@ -95,6 +106,8 @@ app.get("/api/v1/native/capability", async (request) => {
   return inspectNativeCapability(path);
 });
 
+app.get("/api/v1/native/sound-recipes", () => ({ version: "local-palette-v2", recipes: nativePresetRecipes.map((recipe) => readNativeRecipe(recipe.id)) }));
+
 app.get("/api/v1/native/library/samples", async (request) => {
   const { query, pageToken, kind, minBpm, maxBpm } = z.object({ query: z.string().trim().min(1).max(80), pageToken: z.string().max(500).optional(), kind: z.enum(["one-shot", "loop"]).optional(), minBpm: z.coerce.number().min(0).max(400).optional(), maxBpm: z.coerce.number().min(0).max(400).optional() }).parse(request.query);
   if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
@@ -111,6 +124,32 @@ app.get("/api/v1/native/library/sample-analysis", async (request) => {
   if (!connection) throw Object.assign(new Error("Connect Audiotool before inspecting sample audio"), { statusCode: 409 });
   try { return await createNativeLibrary(connection.client).inspectSampleAudio(name); }
   finally { await connection.awaitTokenPersistence(); }
+});
+
+app.get("/api/v1/native/library/sample-audio", async (request, reply) => {
+  const { name, expectedHash } = z.object({ name: z.string().regex(/^samples\/[a-zA-Z0-9-]{1,120}$/), expectedHash: z.string().regex(/^[a-f0-9]{64}$/) }).parse(request.query);
+  if (!providerAvailability(config).audiotool || !config.AUDIOTOOL_CLIENT_ID) throw Object.assign(new Error("Audiotool library is unavailable in this local mode"), { statusCode: 409 });
+  const connection = await createAudiotoolServerClient(ownerId, config.AUDIOTOOL_CLIENT_ID);
+  if (!connection) throw Object.assign(new Error("Connect Audiotool before auditioning a sample"), { statusCode: 409 });
+  try {
+    const selected = await createNativeLibrary(connection.client).readSampleAudio(name);
+    if (selected.contentHash !== expectedHash) throw Object.assign(new Error("The sample changed since inspection. Inspect it again before listening."), { statusCode: 409 });
+    const decoded = decodeWav(selected.bytes, { maxDurationSeconds: 30 });
+    const left = decoded.channels[0]!;
+    const playable = encodeWav(left, decoded.channels[1] ?? left, decoded.sampleRate);
+    return await reply.header("Content-Type", "audio/wav").header("Content-Length", playable.length).header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").send(playable);
+  } finally { await connection.awaitTokenPersistence(); }
+});
+
+app.get("/api/v1/projects/:projectId/native/sound-feedback", async (request) => {
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  await requireProject(ownerId, projectId);
+  return { feedback: await listNativeSoundFeedback(ownerId, projectId) };
+});
+
+app.post("/api/v1/projects/:projectId/native/sound-feedback", async (request, reply) => {
+  const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
+  return reply.status(201).send({ feedback: await saveNativeSoundFeedback(ownerId, projectId, request.body) });
 });
 
 app.get("/api/v1/native/library/presets", async (request) => {
@@ -143,7 +182,7 @@ app.get("/api/v1/projects/:projectId/native/requests/:jobId/draft", async (reque
 
 app.post("/api/v1/projects/:projectId/native/constructions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  const body = z.object({ direction: z.string().trim().min(3).max(32_768), profile: z.enum(["standard", "extended"]).default("standard"), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null() }).parse(request.body);
+  const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null() }).parse(request.body);
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey, request: body, expectedHeadId: null });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
@@ -152,7 +191,7 @@ app.post("/api/v1/projects/:projectId/native/constructions", async (request, rep
 app.post("/api/v1/projects/:projectId/native/revisions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   const partId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
-  const body = z.object({ direction: z.string().trim().min(3).max(32_768), profile: z.enum(["standard", "extended"]).default("standard"), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: partId.optional(), targetSectionId: partId.optional(), protectedPartIds: z.array(partId).max(24).optional(), protectionChange: z.object({ expectedPartIds: z.array(partId).max(24), desiredPartIds: z.array(partId).max(24) }).optional(), sourceAssetIds: z.array(idSchema).max(24).default([]) }).parse(request.body);
+  const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: partId.optional(), targetSectionId: partId.optional(), protectedPartIds: z.array(partId).max(24).optional(), protectionChange: z.object({ expectedPartIds: z.array(partId).max(24), desiredPartIds: z.array(partId).max(24) }).optional(), sourceAssetIds: z.array(idSchema).max(24).default([]) }).parse(request.body);
   if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("Revise the currently selected native version; restore an older one first"), { statusCode: 409 });
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId, projectId, kind: "native-revision", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId });

@@ -16,6 +16,25 @@ export interface ModelPrice {
 }
 
 const prices: Record<string, ModelPrice> = {
+  "gemini:gemini-3.7-flash": {
+    inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75, cachedInputUsdPerMillion: 0.075,
+    modality: "text", source: "https://ai.google.dev/gemini-api/docs/pricing", verifiedOn: "2026-09-27"
+  },
+  "gateway:deepseek/deepseek-v4-pro-0813": {
+    // Conservative envelope: regional rate × peak multiplier, without cache discount.
+    // Gateway settlement uses reported cost, not this reservation estimate.
+    inputUsdPerMillion: 2.64, outputUsdPerMillion: 7.92,
+    modality: "text", source: "https://ai-gateway.vercel.sh/v1/models", verifiedOn: "2026-09-27"
+  },
+  "openai:gpt-6-luna": {
+    inputUsdPerMillion: 0.1,
+    cachedInputUsdPerMillion: 0.01,
+    cacheWriteUsdPerMillion: 0.125,
+    outputUsdPerMillion: 0.5,
+    modality: "text",
+    source: "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    verifiedOn: "2026-09-27"
+  },
   "openai:gpt-6-astra": {
     inputUsdPerMillion: 10,
     cachedInputUsdPerMillion: 1,
@@ -43,13 +62,13 @@ const prices: Record<string, ModelPrice> = {
   }
 };
 
-export function requireModelPrice(provider: "openai" | "gemini", model: string): ModelPrice {
+export function requireModelPrice(provider: "openai" | "gemini" | "gateway", model: string): ModelPrice {
   const price = prices[`${provider}:${model}`];
   if (!price) throw new Error(`No verified pricing is configured for ${provider} model ${model}`);
   return price;
 }
 
-export function tokenCostMicrousd(provider: "openai" | "gemini", model: string, usage: TokenUsage): number {
+export function tokenCostMicrousd(provider: "openai" | "gemini" | "gateway", model: string, usage: TokenUsage): number {
   return tokenCostMicrousdAtPrice(requireModelPrice(provider, model), usage);
 }
 
@@ -68,6 +87,6 @@ export function tokenCostUsd(provider: "openai" | "gemini", model: string, usage
   return tokenCostMicrousd(provider, model, usage) / 1_000_000;
 }
 
-export function pricingEvidence(provider: "openai" | "gemini", model: string): ModelPrice {
+export function pricingEvidence(provider: "openai" | "gemini" | "gateway", model: string): ModelPrice {
   return requireModelPrice(provider, model);
 }

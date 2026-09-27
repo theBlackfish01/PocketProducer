@@ -21,7 +21,7 @@ describe("owned source WAV", () => {
     expect(() => decodeWav(truncated)).toThrow(expect.objectContaining({ code: "MALFORMED_WAV", statusCode: 422 }));
 
     const unsupported = Buffer.from(valid);
-    unsupported.writeUInt16LE(24, 34);
+    unsupported.writeUInt16LE(20, 34);
     expect(() => decodeWav(unsupported)).toThrow(expect.objectContaining({ code: "UNSUPPORTED_WAV_ENCODING", statusCode: 415 }));
 
     expect(() => decodeWav(valid, { maxDurationSeconds: 0.05 })).toThrow(expect.objectContaining({ code: "WAV_DURATION_OUT_OF_RANGE", statusCode: 422 }));

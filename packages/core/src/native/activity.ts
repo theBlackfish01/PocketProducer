@@ -44,6 +44,15 @@ export async function appendPublicJobEvent(client: pg.PoolClient, jobId: string,
     retrying: ["working", "Resuming the saved work after an interruption."],
   };
   const stage = row.stage;
+  if (event === "capabilities" && row.kind !== "native-sync") {
+    const library = payload.library === "connected" || payload.library === "injected-test-client";
+    const sourceAnalysis = payload.sourceAnalysis === true;
+    const text = library
+      ? sourceAnalysis ? "Sound-library ideas are available, and this request can try optional source-sample listening. The arrangement itself cannot be played here yet." : "Sound-library ideas are available; source-sample listening is unavailable for this request. The arrangement itself cannot be played here yet."
+      : "The connected sound library is unavailable for this request. The producer can use local sound ideas; the arrangement itself cannot be played here yet.";
+    await appendPublicActivity(client, { ownerId: row.owner_id, projectId: row.project_id, jobId }, `job:${jobId}:${sequence}`, { version: 1, kind: "working", text });
+    return;
+  }
   const message = messages[event] ?? (event === "stage" ? stage === "validating" ? ["checking", "Checking the arrangement and the material you asked to keep."] as const : stage === "constructing" ? ["working", "Shaping your arrangement. Confirmed changes will appear here."] as const : stage === "discovering" ? ["working", "Preparing the sounds and musical approach."] as const : null : null);
   if (!message) return;
   const syncText = event === "cancel_requested" ? "Stopping the Audiotool copy request…" : event === "cancelled" ? "Audiotool copy request stopped. Your local arrangement remains available." : event === "retrying" ? "Checking the saved Audiotool copy request." : "The Audiotool copy needs attention. Your local arrangement remains available.";

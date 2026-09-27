@@ -20,6 +20,19 @@ async function mapped(automationTarget: "gain" | "pan" = "gain") {
 }
 
 describe("semantic native readback", () => {
+  it("maps audible envelope sustain and applies a new score's part gain only at the channel", async () => {
+    const base = seedNativeDocument("An expressive held note");
+    const scored = applyNativeOperations(base, [{ kind: "setDevice", partId: "starting-voice", device: { type: "heisenberg", parameters: { "envelopeMain.sustainFactor": 0.73 } } }]);
+    const offline = await createOfflineDocument({ validated: true });
+    await applyNativeSnapshot(offline, scored);
+    expect(offline.queryEntities.ofTypes("heisenberg").getOne()!.fields.envelopeMain.fields.sustainFactor.value).toBeCloseTo(0.73);
+    expect(offline.queryEntities.ofTypes("heisenberg").getOne()!.fields.gain.value).toBe(1);
+    expect(offline.queryEntities.ofTypes("mixerChannel").getOne()!.fields.preGain.value).toBeCloseTo(0.7);
+    const old = { ...scored, mixSemantics: undefined };
+    const legacy = await createOfflineDocument({ validated: true });
+    await applyNativeSnapshot(legacy, old);
+    expect(legacy.queryEntities.ofTypes("heisenberg").getOne()!.fields.gain.value).toBeCloseTo(0.7);
+  });
   it("refuses to write over an externally added mixer group", async () => {
     const offline = await createOfflineDocument({ validated: true });
     await offline.modify((t) => { t.create("mixerGroup", { displayParameters: { displayName: "Studio edit" } }); });

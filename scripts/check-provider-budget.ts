@@ -17,6 +17,8 @@ const unknown = await getPool().query<{ provider: string; effects: string; held:
 );
 process.stdout.write(`${JSON.stringify({
   overallLimitUsd: config.INITIAL_BUILD_API_BUDGET_USD,
+  providerPoolLimitsUsd: { openai: config.OPENAI_POOL_BUDGET_USD ?? config.INITIAL_BUILD_API_BUDGET_USD, gemini: config.GEMINI_POOL_BUDGET_USD, gateway: config.GATEWAY_POOL_BUDGET_USD },
+  defaultUserLifetimeLimitUsd: config.DEFAULT_USER_BUDGET_USD,
   jobLimitUsd: config.MAX_JOB_COST_USD,
   maxCalls: config.MAX_MODEL_CALLS_PER_JOB,
   geminiModel: config.GEMINI_MODEL,

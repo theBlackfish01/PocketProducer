@@ -43,6 +43,7 @@ afterAll(async () => {
   await getPool().query("DELETE FROM native_revision WHERE project_id=$1", [projectId]);
   await getPool().query("DELETE FROM job WHERE project_id=$1", [projectId]);
   await getPool().query("DELETE FROM project WHERE id=$1", [projectId]);
+  await getPool().query("DELETE FROM native_sample_analysis_cache WHERE owner_id=$1", [ownerId]);
   await getPool().query("DELETE FROM app_user WHERE id=$1", [ownerId]);
   for (const path of extraPaths) await unlink(path).catch(() => undefined);
 });
@@ -55,6 +56,40 @@ async function claim(id: string, worker = "native-test"): Promise<JobRecord> {
 }
 
 describe("audio-independent native job lifecycle", () => {
+  it("pauses unchanged tool loops and restores previously read guidance on the same job", async () => {
+    const scratchId = (await createProject(ownerId, "Retained guidance recovery")).id;
+    extraProjects.push(scratchId);
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "read-recovery", request: { direction: "A four-bar lead phrase", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const model = fakeModel().respondWithTools([{ name: "read_native_recipe", args: { id: "rubber-pulse" } }]).respondWithTools([{ name: "compose_native_form", args: { title: "Retained phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] } }]);
+    for (let i = 0; i < 20; i++) model.respondWithTools([{ name: "inspect_native_section", args: { sectionId: "whole" } }]);
+    await processJob(await claim(accepted.id, "read-recovery-before"), { scriptedModel: model, library: createNativeLibrary(null) });
+    const paused = await jobSnapshot(ownerId, accepted.id);
+    expect(paused.state).toBe("needs_attention");
+    expect(paused.error_message).toContain("REPEATED_NO_PROGRESS");
+    expect(model.callCount).toBeLessThan(20);
+    expect((await nativeDraftView(ownerId, scratchId, accepted.id)).canContinue).toBe(true);
+    await resumeNativePartialJob(ownerId, scratchId, accepted.id);
+    const continued = fakeModel().respondWithTools([{ name: "apply_native_batch", args: { stepKey: "finish", operations: [{ kind: "setMix", partId: "lead", gain: 0.65 }] } }]).respond(new AIMessage("Finished."));
+    await processJob(await claim(accepted.id, "read-recovery-after"), { scriptedModel: continued, library: createNativeLibrary(null) });
+    expect(JSON.stringify(continued.calls[0]!.messages)).toContain("rubber-pulse");
+    expect(JSON.stringify(continued.calls[0]!.messages)).toContain("priorGuidance");
+    expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("succeeded");
+  }, 120_000);
+  it("keeps making checked progress past 50 turns with the finishing checklist in real model inputs", async () => {
+    const scratchId = (await createProject(ownerId, "Finishing with headroom")).id;
+    extraProjects.push(scratchId);
+    const direction = "A four-bar lead phrase";
+    const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "past-fifty", request: { direction, sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: { title: "Evolving phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] } }]);
+    for (let i = 1; i <= 51; i++) model.respondWithTools([{ name: "apply_native_batch", args: { stepKey: `phrase-detail-${i}`, operations: [{ kind: "addNotes", partId: "lead", notes: [{ id: `detail-${i}`, startTick: i * 240, durationTicks: 120, pitch: 60 + i % 8, velocity: 0.5 }] }] } }]);
+    model.respond(new AIMessage("The phrase is developed."));
+    await processJob(await claim(accepted.id, "finishing-worker"), { scriptedModel: model, library: createNativeLibrary(null) });
+    expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("succeeded");
+    expect(model.callCount).toBe(53);
+    expect(JSON.stringify(model.calls[0]!.messages)).toContain("outstandingRequirements");
+    expect(JSON.stringify(model.calls[45]!.messages)).toContain("Do not add optional features");
+    expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts[0]?.notes).toHaveLength(52);
+  }, 120_000);
   it("keeps an explicit chord sequence unfinished until the worker constructs the requested pitches", async () => {
     const scratchId = (await createProject(ownerId, "Grounded chord progression")).id;
     extraProjects.push(scratchId);
@@ -378,13 +413,13 @@ describe("audio-independent native job lifecycle", () => {
     const direction = "Write 8 bars in total at 128 BPM in D minor. No drums in intro; bring expressive ghost-note drums in chorus. Give the chorus voiced Dm9 and Bbmaj7 chords and an FM pluck with gentle saturation.";
     const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "text-only-staged-song", request: { direction, profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
     const job = await claim(accepted.id, "text-only-staged-worker");
-    expect((job.request._nativeRun as { maxCalls: number }).maxCalls).toBe(40);
+    expect((job.request._nativeRun as { maxCalls: number }).maxCalls).toBe(80);
     const session = new NativeToolSession(job, seedNativeDocument(direction));
     const plan = { intent: "Dark minor introduction opens into a rhythmically active chorus", sections: [{ name: "Intro", purpose: "Establish the FM pluck without percussion" }, { name: "Chorus", purpose: "Develop harmony and bring in ghost-note drums" }], soundGoals: ["An FM pluck with restrained tube warmth"], hardConstraints: ["No intro percussion", "Eight bars at 128 BPM"], developmentTasks: ["Voice Dm9 and Bbmaj7", "Sequence chorus accents and ghost notes"] };
     const form = { title: "Minor lift", tempoBpm: 128, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "intro", name: "Intro", bars: 4 }, { id: "chorus", name: "Chorus", bars: 4 }], parts: [
       { id: "pluck", name: "FM pluck", role: "melody", device: { type: "heisenberg", parameters: { "operatorC.modulationFactorA": 0.4, "operatorC.waveformIndex": 5 } }, gain: 0.62, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 62, velocity: 0.7 }], effects: [{ id: "warmth", type: "stompboxTube", parameters: { drive: 1.8, tone: 0, postGain: 0.7 } }] },
       { id: "chords", name: "Chords", role: "harmony", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [] },
-      { id: "drums", name: "Expressive drums", role: "percussion", device: { type: "gakki", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [] }
+      { id: "drums", name: "Expressive drums", role: "percussion", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [] }
     ] };
     const model = fakeModel()
       .respondWithTools([{ name: "record_native_plan", args: plan }])
@@ -499,7 +534,7 @@ describe("audio-independent native job lifecycle", () => {
       const afterMutation = JSON.stringify(model.calls[1]!.messages);
       const afterSearch = JSON.stringify(model.calls[2]!.messages);
       expect(afterSearch).toContain("soft-glass");
-      expect(afterSearch).toContain("Pocket Producer local parameter recipe");
+      expect(afterSearch).toContain("Pocket Producer original parameter recipe; unheard");
       expect(afterSearch).not.toBe(afterMutation);
     } finally { clearInterval(timer); }
   }, 90_000);
@@ -686,7 +721,7 @@ describe("audio-independent native job lifecycle", () => {
     extraProjects.push(scratchId);
     const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "sample-analysis-contention", request: { direction: "A quiet texture study", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
     const job = await claim(accepted.id, "sample-analysis-contender");
-    const reserve = (index: number) => reserveProviderEffect({ job, provider: "gemini", step: "library-sample-analysis", idempotencyKey: `sample-${index}`, inputHash: `hash-${index}`, model: "fixture-gemini", promptVersion: "library-sample-analysis-v1", reservationMicrousd: 100, maxDistinctEffectsForStep: 2 });
+    const reserve = (index: number) => reserveProviderEffect({ job, provider: "gemini", step: "library-sample-analysis", idempotencyKey: `sample-${index}`, inputHash: `hash-${index}`, model: "fixture-gemini", promptVersion: "library-sample-analysis-v2", reservationMicrousd: 100, maxDistinctEffectsForStep: 2 });
     const raced = await Promise.allSettled([reserve(1), reserve(2), reserve(3)]);
     expect(raced.filter((result) => result.status === "fulfilled")).toHaveLength(2);
     expect(raced.filter((result) => result.status === "rejected")).toEqual([expect.objectContaining({ reason: expect.objectContaining({ message: "MODEL_STEP_EFFECT_LIMIT_EXCEEDED" }) })]);
@@ -970,7 +1005,7 @@ describe("audio-independent native job lifecycle", () => {
     const form = { title: "Later field", tempoBpm: 96, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "listen", name: "Listen", bars: 4 }, { id: "reply", name: "Reply", bars: 4 }, { id: "thin", name: "Thin", bars: 4 }], parts: [
       { id: "field", name: "Late field event", role: "source", device: { type: "audio", parameters: {} }, gain: 0.62, pan: -0.18, motifs: [], placements: [], sources: [{ id: "field-cut", assetId: firstId, startBar: 0, durationBars: 1, sourceStartSeconds: 4.5, sourceDurationSeconds: 2.5, playbackMode: "once", gain: 0.65 }] },
       { id: "tap", name: "Room tap", role: "source", device: { type: "audio", parameters: {} }, gain: 0.5, pan: 0.2, motifs: [], placements: [], sources: [{ id: "tap-cut", assetId: secondId, startBar: 4, durationBars: 1, sourceStartSeconds: 1, sourceDurationSeconds: 3, playbackMode: "once", gain: 0.5 }] },
-      { id: "answer", name: "Pitched answer", role: "melody", device: { type: "gakki", parameters: { gain: 0.44 } }, gain: 0.56, pan: 0, motifs: [{ id: "answer-phrase", name: "Answer", lengthBeats: 4, notes: [{ beat: 0, durationBeats: 1, pitch: 67, velocity: 0.6 }, { beat: 2, durationBeats: 1, pitch: 64, velocity: 0.5 }] }], placements: [{ id: "answer-entry", motifId: "answer-phrase", startBar: 4, repeats: 4 }] }
+      { id: "answer", name: "Pitched answer", role: "melody", device: { type: "heisenberg", parameters: { "operatorA.gain": 0.44 } }, gain: 0.56, pan: 0, motifs: [{ id: "answer-phrase", name: "Answer", lengthBeats: 4, notes: [{ beat: 0, durationBeats: 1, pitch: 67, velocity: 0.6 }, { beat: 2, durationBeats: 1, pitch: 64, velocity: 0.5 }] }], placements: [{ id: "answer-entry", motifId: "answer-phrase", startBar: 4, repeats: 4 }] }
     ] };
     const model = fakeModel().respondWithTools([{ name: "search_native_resources", args: { query: "" } }]).respondWithTools([{ name: "compose_native_form", args: form }]).respond(new AIMessage("Selected the measured later intervals; no native mix was heard."));
     const timer = setInterval(() => { void heartbeat(job); }, 750);
@@ -1002,7 +1037,7 @@ describe("audio-independent native job lifecycle", () => {
       const synchronized = await nativeSnapshot(ownerId, scratchId);
       expect(uploads).toBe(2);
       expect(opens).toBe(2);
-      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v7", revisionId: nativeRevisionId });
+      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v8", revisionId: nativeRevisionId });
       expect(synchronized.synchronization.verifiedAt).toBeTruthy();
       expect((await readyOwnedSampleResources(ownerId, scratchId, [firstId, secondId]))[firstId]?.sampleName).toBe("samples/offline-source-1");
       expect((await jobSnapshot(ownerId, syncJob.id)).state).toBe("succeeded");
@@ -1025,7 +1060,7 @@ describe("audio-independent native job lifecycle", () => {
       { id: "pulse", name: "Four-lane pulse", role: "percussion", device: { type: "beatbox8", parameters: { gain: 0.64 } }, gain: 0.64, pan: 0, motifs: [{ id: "pulse-cell", name: "Pulse cell", lengthBeats: 4, notes: [note(0, 36, 0.25, 1), note(1, 42, 0.25, 1), note(2, 38, 0.25, 1), note(3, 42, 0.25, 1)] }], placements: [placement("pulse-full", "pulse-cell", 0, 48)] },
       { id: "bass", name: "Walking low line", role: "bass", device: { type: "pulverisateur", parameters: { "filter.cutoffFrequencyHz": 620, "filter.resonance": 0.28 } }, gain: 0.72, pan: 0, motifs: [{ id: "bass-figure", name: "Low figure", lengthBeats: 8, notes: [note(0, 36), note(2, 43), note(4, 38), note(6, 43)] }], placements: [placement("bass-growth", "bass-figure", 4, 6), placement("bass-return", "bass-figure", 24, 8)], effects: [{ id: "bass-control", type: "stompboxCompressor", parameters: { thresholdDb: -10, ratio: 0.36 } }] },
       { id: "chords", name: "Held triads", role: "harmony", device: { type: "heisenberg", parameters: { "operatorA.gain": 0.28, "envelopeMain.attackTimeNormalized": 0.3 } }, gain: 0.54, pan: -0.2, motifs: [{ id: "triad", name: "Held triad", lengthBeats: 4, notes: [note(0, 60, 3.5, 0.5), note(0, 64, 3.5, 0.48), note(0, 67, 3.5, 0.46)] }], placements: [placement("chord-growth", "triad", 4, 12), placement("chord-return", "triad", 24, 16)], effects: [{ id: "chord-room", type: "stompboxReverb", parameters: { roomSizeFactor: 0.61, mix: 0.21 } }] },
-      { id: "lead", name: "Answer line", role: "melody", device: { type: "gakki", parameters: { gain: 0.54 } }, gain: 0.61, pan: 0.12, motifs: [{ id: "answer-line", name: "Three-note answer", lengthBeats: 8, notes: [note(0, 72, 1.2), note(3, 69, 1.4), note(6, 76, 1)] }], placements: [placement("lead-break", "answer-line", 16, 4), placement("lead-return", "answer-line", 32, 4)] },
+      { id: "lead", name: "Answer line", role: "melody", device: { type: "heisenberg", parameters: { "operatorA.gain": 0.54 } }, gain: 0.61, pan: 0.12, motifs: [{ id: "answer-line", name: "Three-note answer", lengthBeats: 8, notes: [note(0, 72, 1.2), note(3, 69, 1.4), note(6, 76, 1)] }], placements: [placement("lead-break", "answer-line", 16, 4), placement("lead-return", "answer-line", 32, 4)] },
       { id: "haze", name: "Low haze", role: "texture", device: { type: "heisenberg", parameters: { "filter.cutoffFrequencyHz": 1100, "envelopeMain.attackTimeNormalized": 0.64 } }, gain: 0.36, pan: 0.25, motifs: [{ id: "haze-hold", name: "Haze hold", lengthBeats: 16, notes: [note(0, 55, 12, 0.38)] }], placements: [placement("haze-seed", "haze-hold", 0, 3), placement("haze-return", "haze-hold", 24, 3)] }
     ] };
     const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respond(new AIMessage("Five roles develop across five nonuniform sections; structural claims only."));
@@ -1152,7 +1187,7 @@ describe("audio-independent native job lifecycle", () => {
     expect((await nativeSnapshot(ownerId, scratchId)).synchronization.state).toBe("conflict");
     await reconcileNativeSyncReadback(details);
     await reconcileNativeSyncReadback(details);
-    expect((await nativeSnapshot(ownerId, scratchId)).synchronization).toMatchObject({ state: "verified", revisionId: current.id, mappingVersion: "nexus-native-v7" });
+    expect((await nativeSnapshot(ownerId, scratchId)).synchronization).toMatchObject({ state: "verified", revisionId: current.id, mappingVersion: "nexus-native-v8" });
     expect((await jobSnapshot(ownerId, job.id)).state).toBe("succeeded");
     expect((await getPool().query("SELECT count(*)::int AS count FROM job_event WHERE job_id=$1 AND event_type='succeeded'", [job.id])).rows[0].count).toBe(1);
     expect((await getPool().query("SELECT count(*)::int AS count FROM project_activity WHERE job_id=$1 AND origin=$2", [job.id, `native-sync:${job.id}:verified`])).rows[0].count).toBe(1);

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeNativeSection, applyNativeOperations, canonicalHash, discoverNativeCapabilities, fixtureConstruct, fixtureRevise, inspectNativeCapability, materializedNotes, nativeCompletionIssues, nativeDiff, nativeMusicHash, NativeToolSession, pinnedContext, protectedPartHash, seedNativeDocument, toNexusTicks, validateNativeOffline, type JobRecord } from "@pocket/core";
+import { createOfflineDocument } from "@pocket/core/test-support";
+import { nativePresetFingerprint, type NativePreset } from "@pocket/core";
 
 function session(direction: string) { return new NativeToolSession({} as JobRecord, seedNativeDocument(direction), false); }
 
@@ -252,10 +254,15 @@ describe("native construction contracts", () => {
     expect(mapped.structuralReadback.effects).toBe(3);
   });
   it("develops repeated exact chord voicings and expressive drum hits within chosen sections", async () => {
+    const source = await createOfflineDocument({ validated: true });
+    let data: unknown;
+    await source.modify((t) => { data = t.createPresetFor(t.create("gakki", { soundfontId: "11111111-1111-4111-8111-111111111111" })); });
+    const presetName = "presets/fixture-drum-kit";
+    const preset = { entityType: "gakki", _presetName: presetName, data, meta: { name: presetName, displayName: "Fixture drum kit", ownerName: "users/fixture", tags: [] } } as unknown as NativePreset;
     const base = applyNativeOperations(seedNativeDocument("A dark-to-hopeful song with a light offbeat groove"), [
       { kind: "setStructure", bars: 12, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "No drums" }, { id: "body", name: "Body", startBar: 4, endBar: 12, intent: "Lift" }] },
       { kind: "addPart", part: { id: "chords", name: "Warm chords", role: "harmony", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] } },
-      { kind: "addPart", part: { id: "kit", name: "Offbeat kit", role: "percussion", device: { type: "gakki", parameters: {} }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] } }
+      { kind: "addPart", part: { id: "kit", name: "Offbeat kit", role: "percussion", device: { type: "gakki", parameters: {}, preset: { name: presetName, displayName: "Fixture drum kit", ownerName: "users/fixture", contentHash: nativePresetFingerprint(preset) } }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] } }
     ]);
     const piece = applyNativeOperations(base, [
       { kind: "harmonizeSection", partId: "chords", sectionId: "body", cycleBars: 2, chords: [{ barOffset: 0, durationBars: 1, pitches: [50, 57, 60, 64], velocity: 0.64, strumTicks: 20 }, { barOffset: 1, durationBars: 1, pitches: [46, 53, 57, 60], velocity: 0.6, strumTicks: 20 }] },
@@ -264,7 +271,7 @@ describe("native construction contracts", () => {
     expect(piece.parts.find((part) => part.id === "chords")?.notes).toHaveLength(32);
     expect(piece.parts.find((part) => part.id === "kit")?.notes).toHaveLength(24);
     expect(analyzeNativeSection(piece, "intro").parts.find((part) => part.id === "kit")?.soundingNotes).toBe(0);
-    expect((await validateNativeOffline(piece)).readback.noteEntities).toBe(56);
+    expect((await validateNativeOffline(piece, {}, { [presetName]: preset })).readback.noteEntities).toBe(56);
     const guarded = applyNativeOperations(piece, [{ kind: "protect", partIds: ["chords"], motifIds: [] }]);
     expect(() => applyNativeOperations(guarded, [{ kind: "harmonizeSection", partId: "chords", sectionId: "body", cycleBars: 1, chords: [{ barOffset: 0, durationBars: 1, pitches: [50, 57], velocity: 0.5, strumTicks: 0 }] }])).toThrow(/Protected part/);
   });
