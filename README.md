@@ -48,6 +48,8 @@ The result is **editable music**, not just a flattened audio file. When you're r
 
 ### Start with the no-cost demo
 
+This repository is private; cloning requires access through your GitHub account.
+
 ```sh
 git clone https://github.com/theBlackfish01/PocketProducer.git
 cd PocketProducer

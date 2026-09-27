@@ -12,16 +12,19 @@ Destination: [theBlackfish01/PocketProducer](https://github.com/theBlackfish01/P
 - Hardened CI with read-only repository permissions, cancellation of obsolete runs, a timeout, the correct PostgreSQL health-check database, explicitly blank provider credentials and static course verification.
 - Added a maintained provider-free README screenshot journey. The published image was inspected and contains isolated test data, not a user's private session.
 - Updated the visual-test fixture for the read-only producer-model catalogue. It previously miscounted those unhandled GET requests as writes; application mutation behavior was not changed.
+- Quoted test exclusion globs after clean Linux CI reproduced Bash expansion of the old unquoted script. Unit, database and browser runners remain separate.
 
 ## Sensitive material review
 
-A local heuristic scan checked every reachable commit/blob plus nonignored working files, known credential patterns and exact configured secret values without printing those values. The initial scan covered **47 commits, 936 blobs, four configured secret values and 70 ZIP-entry reads** (the archived handoff appears in history and the working tree). No matches or files over 20 MiB were found. A later scan after the first two commits covered 49 commits / 967 blobs and also found no matches.
+A local heuristic scan checked every reachable commit/blob plus nonignored working files, known credential patterns and exact configured secret values without printing those values. The initial scan covered **47 commits, 936 blobs, four configured secret values and 70 ZIP-entry reads** (the archived handoff appears in history and the working tree). No matches or files over 20 MiB were found. The pre-push scan covered **51 commits / 980 blobs / 320 working files** and also found no matches. The pushed tree was checked separately: no `.env`, `.local/`, `node_modules/` or `playwright-report/` entries were uploaded.
 
 The checked-in handoff archive and older design/research notes are retained as project history. `.env`, `.local/`, provider traces, database exports, OAuth encryption keys, generated audio, dependencies and build/test outputs are ignored. Additional ignore rules cover common private-key, database and raw-trace filenames. This review is not a comprehensive security certification or permission to make the repository public.
 
 ## Verification
 
-See the current entry in [STATUS](STATUS.md) for final suite counts and GitHub CI results. The repository-preparation pass runs ordinary offline checks only; it does not call paid providers, continue paused generation, copy to Audiotool or probe rendering. The README photograph-free screenshot is evidence of the working interface with fixtures, not live-model quality.
+See the current entry in [STATUS](STATUS.md) for final suite counts and GitHub CI results. The repository-preparation pass runs ordinary offline checks only; it does not call paid providers, continue paused generation, copy to Audiotool or probe rendering. The README screenshot is evidence of the working interface with fixtures, not live-model quality.
+
+The musical-construction integration suite now uses the same 45-second lease as production. Its earlier generic three-second lease could expire during synchronous offline-SDK work, causing varying failed seed/revision assertions on a loaded machine. The full integration rerun passed all 99 tests. Linux CI then exposed the same issue in successful contending child workers: these also use production leases now, while deliberately killed workers retain three-second expiry and all exact fencing/revision-count assertions remain. The final repository integration subset passed 14/14 locally. Production lease/cancellation safeguards and spending limits were not relaxed. Follow the hosted run linked in STATUS for its separate result.
 
 ## Before a public release or submission
 
