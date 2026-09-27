@@ -5,6 +5,27 @@ import { resolve } from "node:path";
 const evidence = process.env.E2E_EVIDENCE_DIR ?? ".local/evidence";
 test.beforeAll(async () => { await mkdir(evidence, { recursive: true }); });
 const direction = (page: Page) => page.getByRole("textbox", { name: "Describe your arrangement" });
+
+test("producer selection persists and reaches the real job without changing a running job", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto("/");
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  const chooser = page.getByRole("combobox", { name: "Producer model" });
+  await expect(chooser).toBeEnabled();
+  await chooser.selectOption("gemini-3.7-flash");
+  await direction(page).fill("A small warm melody over a soft pulse");
+  await page.reload();
+  await expect(chooser).toHaveValue("gemini-3.7-flash");
+  await page.screenshot({ path: resolve(evidence, "model-picker-desktop.png"), fullPage: true });
+  const sent = page.waitForRequest((r) => r.url().endsWith("/native/constructions") && r.method() === "POST");
+  await page.getByRole("button", { name: "Create arrangement" }).click();
+  expect((await sent).postDataJSON()).toMatchObject({ model: "gemini-3.7-flash" });
+  await expect(page.locator(".producer-workspace-header")).toContainText("Version 1", { timeout: 90_000 });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(chooser).toBeVisible();
+  await chooser.selectOption("deepseek/deepseek-v4-pro-0813");
+  await page.screenshot({ path: resolve(evidence, "model-picker-phone.png"), fullPage: true });
+});
 async function producer(page: Page) { await expect(page.locator(".producer-workspace-header")).toBeVisible(); const tab = page.getByRole("button", { name: "Producer", exact: true }); if (await tab.isVisible()) await tab.click(); }
 async function arrangement(page: Page) { const tab = page.getByRole("button", { name: "Arrangement", exact: true }); if (await tab.isVisible()) await tab.click(); }
 async function create(page: Page, brief = "Build an evolving 64-bar ambient journey with a slow lead and spacious transitions") {
@@ -21,6 +42,28 @@ async function create(page: Page, brief = "Build an evolving 64-bar ambient jour
 async function native(page: Page, id: string) { return (await (await page.request.get(`/api/v1/projects/${id}/native`)).json()) as { currentRevisionId: string; versions: unknown[]; current: { document: Record<string, unknown> } }; }
 async function closeSheet(page: Page, name: string) { await page.getByRole("dialog", { name, exact: true }).getByRole("button", { name: "Close", exact: true }).last().click(); }
 
+test("home, inspiration and rewrite use the real offline API without creating music until asked", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Your next piece starts here" })).toBeVisible();
+  await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
+  await page.getByRole("button", { name: "Inspire me" }).click();
+  await expect(direction(page)).not.toHaveValue("");
+  await expect(page.getByRole("status").filter({ hasText: "Test suggestion" })).toBeVisible();
+  const id = new URL(page.url()).pathname.split("/")[2]!;
+  expect((await native(page, id)).versions).toHaveLength(0);
+  await direction(page).fill("Warm keys and a gentle pulse. No vocals.");
+  await page.getByRole("button", { name: "Rewrite prompt" }).click();
+  await expect(direction(page)).toHaveValue(/No vocals\..*\n\nLet the central idea/);
+  await page.getByRole("button", { name: "Undo rewrite" }).click();
+  await expect(direction(page)).toHaveValue("Warm keys and a gentle pulse. No vocals.");
+  await page.getByRole("link", { name: "Pocket Producer home" }).first().click();
+  await expect(page.getByRole("heading", { name: "Your next piece starts here" })).toBeVisible();
+  await page.goBack();
+  await expect(direction(page)).toHaveValue("Warm keys and a gentle pulse. No vocals.");
+  await page.getByRole("button", { name: "Create arrangement" }).click();
+  await expect(page.locator(".producer-workspace-header")).toContainText("Version 1", { timeout: 90_000 });
+});
+
 test("native construct, protect, revise, compare and restore survives direct reload", async ({ page }) => {
   test.setTimeout(120_000);
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -28,10 +71,7 @@ test("native construct, protect, revise, compare and restore survives direct rel
   const first = await native(page, projectId);
   const options = page.getByRole("button", { name: "Session options" });
   await options.click();
-  await page.getByRole("menuitem", { name: "Usage", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Usage & next steps" })).toBeVisible();
-  await page.keyboard.press("Escape"); await expect(options).toBeFocused();
-  await options.click();
+  await expect(page.getByRole("menuitem", { name: "Usage", exact: true })).toHaveCount(0);
   await page.getByRole("menuitem", { name: "Audiotool connection" }).click();
   await expect(page.getByRole("dialog", { name: "Your Audiotool copy" })).toBeVisible();
   await page.keyboard.press("Escape"); await expect(options).toBeFocused();
@@ -63,9 +103,12 @@ test("native construct, protect, revise, compare and restore survives direct rel
   await page.getByRole("button", { name: "Change this section" }).click();
   const pending = "Simplify the percussion in Ascent; keep the lead unchanged.";
   await direction(page).fill(pending);
+  await page.getByRole("button", { name: "Rewrite prompt" }).click();
+  await expect(direction(page)).toHaveValue(/keep the lead unchanged\..*\n\nLet the central idea/);
+  await page.getByRole("button", { name: "Undo rewrite" }).click();
   await page.reload();
   await expect(direction(page)).toHaveValue(pending);
-  await expect(page.locator(".direction-section")).toContainText("In Ascent");
+  await expect(page.getByRole("combobox", { name: "Change scope" }).locator("option:checked")).toHaveText("Ascent");
   await page.getByRole("button", { name: "Make this change" }).click();
   const compare = page.getByRole("dialog", { name: "Before and after" });
   await expect(compare).toBeVisible({ timeout: 90_000 });
@@ -144,7 +187,7 @@ test("a late preservation response cannot submit or alter another room", async (
   await expect(direction(page)).toHaveValue("Change the bass, but keep the melody");
 });
 
-test("partial work uses the same canvas, explicit usage review and no automatic continuation", async ({ page }) => {
+test("partial work keeps recovery available without financial UI or automatic continuation", async ({ page }) => {
   const id = await create(page, "A sparse 12-bar theme for a structural draft review");
   const selected = await native(page, id), jobId = crypto.randomUUID();
   const job = { id: jobId, project_id: id, kind: "native-revision", state: "needs_attention", stage: null, error_code: "NATIVE_PARTIAL", error_message: null, result_revision_id: null };
@@ -158,21 +201,23 @@ test("partial work uses the same canvas, explicit usage review and no automatic 
   await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, (route) => route.fulfill({ json: { jobId, state: job.state, selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 2, document: { ...selected.current.document, title: "Unselected draft" }, documentHash: "partial", canContinue: extensions > 0, canExtend: true, runLimits: { profile: "standard", maxCalls: extensions ? 60 : 40, maxInputTokens: 64000, maxOutputTokens: 16384, deadlineSeconds: 1800, maxJobCostUsd: 5 }, extensionCeiling: { maxCalls: 300, maxInputTokens: 256000, maxOutputTokens: 65536, deadlineSeconds: 21600, maxJobCostUsd: 100 }, budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 4.49, minimumNextCallUsd: 0.42, modelCalls: 3 }, continuationReason: extensions ? null : "This request has used its configured model-call allowance." } }));
   await page.reload();
   await page.getByRole("button", { name: "View work in progress" }).click();
-  await expect(page.getByRole("region", { name: "Unfinished arrangement preview" })).toContainText("2 confirmed changes");
+  await expect(page.getByRole("region", { name: "Unfinished arrangement preview" })).toContainText("Your arrangement");
   await expect(page.locator(".living-score")).toHaveCount(1);
   await producer(page);
-  await page.getByRole("button", { name: "Review usage & next steps" }).click();
-  await expect(page.getByText(/\$0.51 observed.*\$4.49/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue saved draft" })).toHaveCount(0);
-  await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/extend`, async (route) => { expect(route.request().postDataJSON()).toMatchObject({ maxCalls: 60 }); extensions++; await route.fulfill({ json: { jobId, extended: true } }); });
+  await expect(page.locator(".producer-panel")).not.toContainText(/allowance|\$0.51|model-call/);
+  await expect(page.getByText("The producer reached this request’s step limit.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue arrangement" })).toHaveCount(0);
+
   await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/continue`, async (route) => { continuations++; await route.fulfill({ status: 202, json: { jobId } }); });
-  await page.getByLabel("Model calls").fill("60"); await page.getByRole("button", { name: "Increase request limits" }).click();
-  await expect.poll(() => [extensions, continuations]).toEqual([1, 0]);
-  await page.getByRole("dialog", { name: "Usage & next steps" }).getByRole("button", { name: "Continue saved draft" }).click();
+  await expect(page.getByRole("button", { name: "Increase request limits" })).toHaveCount(0);
+  expect(continuations).toBe(0);
+  // Simulate an operator resolving the gate; the UI still requires explicit continuation.
+  extensions = 1; await page.reload(); await producer(page);
+  await page.getByRole("button", { name: "Continue arrangement" }).click();
   await expect.poll(() => continuations).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: `${evidence}/workspace-usage-mobile.png`, fullPage: true });
+  await page.screenshot({ path: `${evidence}/workspace-recovery-mobile.png`, fullPage: true });
   expect((await native(page, id)).currentRevisionId).toBe(selected.currentRevisionId);
 });
 
@@ -188,10 +233,10 @@ test("zero-step pause labels the retained approach without inventing a musical d
   await page.route(`**/api/v1/jobs/${jobId}`, (route) => route.fulfill({ json: job }));
   await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, (route) => route.fulfill({ json: { jobId, state: job.state, selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 0, document: null, documentHash: null, plan: { plan: { intent: "A quiet question and answer", sections: [{ name: "Whole", purpose: "Leave room for a reply" }], soundGoals: ["Soft lead"], hardConstraints: [], developmentTasks: ["Write the reply"], creativeState: { identity: "Intimate and restrained", densityIntent: "Spacious", palette: [], unfinishedTasks: ["Write the reply"], definiteFailures: [] } }, stage: "planned", inspectedDocumentHash: null, review: null }, canContinue: false, canExtend: false, continuationReason: "The overall allowance cannot reserve another call.", budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 0.1, minimumNextCallUsd: 0.42, modelCalls: 2 } } }));
   await page.reload(); await producer(page);
-  await expect(page.getByText("Your musical approach is saved")).toBeVisible();
-  await expect(page.getByText(/No musical changes were confirmed yet/)).toBeVisible();
+  await expect(page.locator(".producer-panel")).toContainText("Paused");
+  await expect(page.locator(".producer-panel")).toContainText("The authorized spending allowance cannot cover another step.");
   await expect(page.getByRole("button", { name: "View work in progress" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Continue saved draft" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Continue arrangement" })).toHaveCount(0);
   await page.getByText("Musical approach", { exact: true }).click();
   await expect(page.getByText("Intimate and restrained")).toBeVisible();
   expect((await native(page, id)).currentRevisionId).toBe(selected.currentRevisionId);
@@ -231,7 +276,7 @@ test("sample search exposes measured slice candidates only on request", async ({
   await sheet.getByRole("button", { name: "Inspect slices" }).click();
   await expect(sheet.getByText(/0.125–0.5s/)).toBeVisible();
   expect(inspections).toBe(1);
-  await sheet.getByRole("region", { name: "Measured sample intervals" }).scrollIntoViewIfNeeded();
+  await sheet.getByRole("region", { name: "Original sample audition" }).scrollIntoViewIfNeeded();
   await sheet.screenshot({ path: `${evidence}/workspace-sample-inspection.png` });
   await sheet.getByRole("button", { name: "Ask to use" }).click();
   await expect(direction(page)).toContainText("samples/fixture-hit");
@@ -244,7 +289,7 @@ test("sync is separate and never reads a construction draft or erases an unsent 
   await producer(page);
   const pending = "Make the chorus warmer with more chord movement. ".repeat(65);
   await direction(page).fill(pending);
-  await page.getByText("Creation options", { exact: true }).click(); await page.getByLabel("Depth").selectOption("extended");
+  await page.getByText("Options", { exact: true }).click(); await page.getByLabel("Depth").selectOption("extended");
   const jobId = crypto.randomUUID(); let jobReads = 0, draftReads = 0;
   await page.route(`**/api/v1/jobs/${jobId}`, async (route) => { const state = ++jobReads < 3 ? "running" : "succeeded"; await route.fulfill({ json: { id: jobId, project_id: id, kind: "native-sync", state, stage: "synchronizing", error_code: null, events: [] } }); });
   await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, async (route) => { draftReads++; await route.fulfill({ status: 404 }); });
@@ -252,7 +297,7 @@ test("sync is separate and never reads a construction draft or erases an unsent 
   await page.reload(); await producer(page);
   await expect.poll(() => jobReads).toBeGreaterThanOrEqual(3);
   await expect(direction(page)).toHaveValue(pending);
-  await page.getByText("Creation options", { exact: true }).click(); await expect(page.getByLabel("Depth")).toHaveValue("extended");
+  await page.getByText("Options", { exact: true }).click(); await expect(page.getByLabel("Depth")).toHaveValue("extended");
   expect(draftReads).toBe(0);
 });
 

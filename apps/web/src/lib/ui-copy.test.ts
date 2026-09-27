@@ -5,8 +5,11 @@ import type { Job, NativeVersion } from "./api"
 describe("Listening Room copy", () => {
   it("turns internal recovery and budget messages into useful next-step language", () => {
     expect(friendlyIssue("expected native head changed", "Fallback")).toMatch(/reopen it/i)
-    expect(friendlyIssue("provider budget limit exceeded", "Fallback")).toMatch(/usage limit/i)
+    expect(friendlyIssue("provider budget limit exceeded", "Fallback")).toMatch(/spending allowance.*draft is saved/i)
+    expect(friendlyIssue("MODEL_CALL_LIMIT_EXCEEDED", "Fallback")).toMatch(/step limit/i)
+    expect(friendlyIssue("REPEATED_NO_PROGRESS", "Fallback")).toMatch(/repeated steps/i)
     expect(friendlyIssue("uncertain remote outcome", "Fallback")).toMatch(/check what happened/i)
+    expect(friendlyIssue("unknown reservation outcome", "Fallback")).toMatch(/check what happened/i)
     expect(friendlyIssue("opaque provider code 123", "Your saved work is safe.")).toBe("Your saved work is safe.")
   })
 

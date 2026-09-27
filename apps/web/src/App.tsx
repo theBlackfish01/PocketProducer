@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { AudioLines, FolderOpen, Menu, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Brand } from "@/components/brand"
+import { ConnectedAccount } from "@/components/connected-account"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { NativeRoom } from "@/features/native/native-room"
 import { api, type AppStatus, type Project, type SessionSnapshot } from "@/lib/api"
@@ -78,7 +79,7 @@ export default function App() {
       if (disposed) return
       const route = sessionFromPath(path)
       if (path !== "/" && !route) { setLoading(false); setError("This page is no longer available. Choose a session or start a new one."); return }
-      const id = route?.id ?? list.projects[0]?.id
+      const id = route?.id
       if (id) {
         activeProjectRef.current = id
         const requestId = ++requestRef.current
@@ -97,15 +98,14 @@ export default function App() {
     const change = () => {
       const route = sessionFromPath(window.location.pathname)
       if (route) void chooseProject(route.id, true)
-      else if (window.location.pathname === "/" && projects[0]) void chooseProject(projects[0].id, true)
       else {
-        ++requestRef.current; activeProjectRef.current = null; setSnapshot(null); setLoading(false)
+        ++requestRef.current; activeProjectRef.current = null; setSnapshot(null); setLoading(false); setNavOpen(false)
         setError(window.location.pathname === "/" ? null : "This page is no longer available. Choose a session or start a new one.")
       }
     }
     window.addEventListener("popstate", change)
     return () => window.removeEventListener("popstate", change)
-  }, [chooseProject, projects])
+  }, [chooseProject])
 
   const createSession = async () => {
     setBusy(true); setError(null)
@@ -136,21 +136,23 @@ export default function App() {
     }
   }
 
+  const account = <ConnectedAccount connected={Boolean(nexus?.session.connected)} userName={nexus?.session.userName ?? null} onConnect={() => void connectAudiotool()} onDisconnect={() => { void api.disconnectAudiotool().then(() => api.status()).then((status) => setNexus(status.nexus)).catch(() => setError("Unable to disconnect Audiotool.")) }} />
+
   const navigation = <>
     <Button className="w-full justify-start rail-new" onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button>
     <div className="rail-heading"><FolderOpen className="size-4" /> Sessions</div>
     <p className="rail-caption">Recent</p>
-    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === snapshot?.project.id ? "page" : undefined} title={project.title} onClick={() => void chooseProject(project.id)}><span>{project.title}</span>{project.workspaceStatus && project.workspaceStatus !== "new" ? <small>{project.workspaceStatus === "working" ? "Working" : project.workspaceStatus === "attention" ? "Needs you" : "Ready"}</small> : null}</button>)}</div>
+    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === snapshot?.project.id ? "page" : undefined} title={project.title} onClick={() => void chooseProject(project.id)}><span>{project.title}</span>{project.workspaceStatus && project.workspaceStatus !== "new" ? <small>{project.workspaceStatus === "working" ? "Working" : project.workspaceStatus === "attention" ? "Paused" : "Ready"}</small> : null}</button>)}</div>
   </>
 
   return <div className="app-shell">
-    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}<div className="rail-footer">Your private music workspace</div></aside>
+    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}{account}</aside>
     <main className="main-area"><div className="main-inner">
       <div className="mobile-topbar"><Brand /><Button variant="ghost" size="icon" aria-label="Open sessions" onClick={() => setNavOpen(true)}><Menu /></Button></div>
       <div className="topline"><span>Listening Room <span aria-hidden="true">/</span> <strong>{snapshot?.project.title ?? "Welcome"}</strong></span></div>
       {error ? <div className="job-status" role="alert"><strong>Something needs attention</strong><p>{error}</p><Button variant="ghost" onClick={() => setError(null)}>Dismiss</Button></div> : null}
       {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot && nexus ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} audiotoolConnected={nexus.session.connected} audiotoolAvailable={Boolean(nexus.oauth)} onConnectAudiotool={() => void connectAudiotool()} onSourcesChanged={() => refreshSources(snapshot.project.id)} onProjectUpdated={() => { void refreshLabels().catch(() => undefined) }} /> : !error ? <div className="empty-surface"><h1>Your next piece starts here</h1><p>A mood, a moment or a detailed vision. What would you like to make?</p><Button onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button></div> : null}
     </div></main>
-    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your private music workspace.</SheetDescription></SheetHeader><div className="p-4">{navigation}</div></SheetContent></Sheet>
+    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your sessions</SheetDescription></SheetHeader><div className="mobile-session-list p-4">{navigation}{account}</div></SheetContent></Sheet>
   </div>
 }

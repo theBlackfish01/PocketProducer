@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 const testDatabaseUrl = process.env.TEST_DATABASE_URL ?? "postgresql://pocket:pocket_local_only@127.0.0.1:54329/pocket_producer_test";
 if (!new URL(testDatabaseUrl).pathname.slice(1).endsWith("_test")) throw new Error("E2E setup requires a dedicated *_test database");
 Object.assign(process.env, {
+  AI_GATEWAY_API_KEY: "", VERCEL_AI_GATEWAY_API_KEY: "",
   APP_ENV: "test", DATABASE_URL: testDatabaseUrl, OBJECT_STORAGE_LOCAL_ROOT: process.env.TEST_OBJECT_STORAGE_LOCAL_ROOT ?? ".local/test-audio", FIXTURE_MODE: "true", DEV_LOCAL_AUTH: "true",
   OPENAI_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "", INITIAL_BUILD_API_BUDGET_USD: "0", MAX_JOB_COST_USD: "0"
 });
@@ -25,6 +26,8 @@ try {
   if (owner) {
     const projectIds = (await client.query<{ id: string }>("SELECT id FROM project WHERE owner_id=$1", [owner])).rows.map((row) => row.id);
     if (projectIds.length) {
+      await client.query("DELETE FROM effect WHERE prompt_assistance_id IN (SELECT id FROM prompt_assistance WHERE project_id=ANY($1::uuid[]))", [projectIds]);
+      await client.query("DELETE FROM prompt_assistance WHERE project_id=ANY($1::uuid[])", [projectIds]);
       await client.query("DELETE FROM native_revision_sync WHERE project_id=ANY($1::uuid[])", [projectIds]);
       await client.query("DELETE FROM native_sync WHERE project_id=ANY($1::uuid[])", [projectIds]);
       await client.query("DELETE FROM native_project_head WHERE project_id=ANY($1::uuid[])", [projectIds]);

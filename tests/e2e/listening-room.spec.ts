@@ -14,7 +14,7 @@ test("one workspace retains upload, audition and seeking without retired endpoin
   await expect(page.getByRole("heading", { name: "What would you like to make?" })).toBeVisible();
   const id = new URL(page.url()).pathname.split("/")[2]!;
   await expect(page.getByRole("button", { name: "Playable audio", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Add a sound", exact: true }).click();
+  await page.getByRole("button", { name: "Add sound", exact: true }).click();
   const sounds = page.getByRole("dialog", { name: "Sounds", exact: true });
   await sounds.getByLabel("Upload a WAV source").setInputFiles(resolve(".local/fixtures/owned-percussion.wav"));
   await sounds.getByRole("button", { name: "Play sound owned-percussion.wav" }).click();
@@ -30,7 +30,7 @@ test("one workspace retains upload, audition and seeking without retired endpoin
   expect((await page.request.get(url, { headers: { Range: "bytes=99-1" } })).status()).toBe(416);
   expect((await page.request.get("/api/v1/assets/00000000-0000-4000-8000-000000000001/audio")).status()).toBe(404);
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "Add a sound", exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Add sound", exact: true })).toBeFocused();
   await expect(seek).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { lastPreview: HTMLMediaElement }).lastPreview.paused)).toBe(true);
   expect((await page.request.get(`/api/v1/projects/${id}/versions`)).status()).toBe(404);
@@ -69,7 +69,7 @@ test("closing Sounds cancels delayed microphone permission and stops the resulti
   });
   await page.goto("/");
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
-  await page.getByRole("button", { name: "Add a sound", exact: true }).click();
+  await page.getByRole("button", { name: "Add sound", exact: true }).click();
   await page.getByRole("button", { name: "Record a sound", exact: true }).click();
   await expect(page.getByRole("status").filter({ hasText: "Allow microphone" })).toBeVisible();
   await page.keyboard.press("Escape");

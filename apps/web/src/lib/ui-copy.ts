@@ -3,9 +3,15 @@ import type { Job, NativeVersion } from "./api"
 export function friendlyIssue(message: string | null | undefined, fallback: string) {
   if (!message) return fallback
   if (/stale|head changed|version conflict|expected.*revision/i.test(message)) return "This piece changed while you were working. Reopen it before trying again."
-  if (/budget|spend|allowance|limit exceeded/i.test(message)) return "This request would exceed the current usage limit. Your saved work is unchanged."
+  if (/uncertain|reconcil|unknown.*outcome/i.test(message)) return "We need to check what happened before another attempt can start."
+  if (/MODEL_CALL_LIMIT|model-call allowance|step limit/i.test(message)) return "The producer reached this request’s step limit."
+  if (/REPEATED_NO_PROGRESS/i.test(message)) return "The producer repeated steps without making progress. Your draft is saved."
+  if (/input or output|INPUT_LIMIT|INCOMPLETE_RESPONSE|tokens/i.test(message)) return "This direction needs more processing room before it can continue."
+  if (/MODEL_BUDGET_EXCEEDED:USER/i.test(message)) return "You’ve reached your usage limit. Your draft is saved."
+  if (/MODEL_BUDGET_EXCEEDED:PROVIDER/i.test(message)) return "This model’s shared allowance has been used. Your draft is saved."
+  if (/PROVIDER_USAGE_UNKNOWN/i.test(message)) return "The model’s usage is still being checked. Your draft is saved."
+  if (/budget|spend|allowance|reservation|charges/i.test(message)) return "The authorized spending allowance cannot cover another step. Your draft is saved."
   if (/connection|network|fetch|timeout|unavailable/i.test(message)) return "The connection was interrupted. Your saved work is still here."
-  if (/uncertain|reconcil|unknown outcome/i.test(message)) return "We need to check what happened before another attempt can start."
   return fallback
 }
 

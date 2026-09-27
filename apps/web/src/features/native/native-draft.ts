@@ -8,6 +8,7 @@ export interface NativeDraft {
   protectedPartIds: string[]
   sourceIds: string[]
   profile?: "standard" | "extended"
+  model?: string
 }
 
 export const nativeDraftKey = (projectId: string) => `pocket-producer:native-draft:${projectId}`
@@ -41,6 +42,7 @@ export function reconcileNativeDraft(raw: unknown, snapshot: NativeSnapshot, ass
     targetSectionId: requestedSectionId && sectionIds.has(requestedSectionId) ? requestedSectionId : null,
     protectedPartIds: headChanged ? fallback.protectedPartIds : [...new Set(requestedProtections.filter((id) => partIds.has(id)))],
     sourceIds: [...new Set(requestedSources.filter((id) => assetIds.has(id)))],
-    profile: saved.profile === "extended" ? "extended" : "standard"
+    profile: saved.profile === "extended" ? "extended" : "standard",
+    model: typeof saved.model === "string" && ["gpt-6-sol", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"].includes(saved.model) ? saved.model : "gpt-6-sol"
   }, notices }
 }

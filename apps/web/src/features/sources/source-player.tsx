@@ -3,6 +3,7 @@ import { Pause, Play, RotateCcw, Volume2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
+import { claimAudioPlayback, releaseAudioPlayback } from "@/lib/audio-coordinator"
 
 export interface SourcePlaybackItem {
   id: string
@@ -41,9 +42,9 @@ export function useSourcePlayback() {
       setDuration(measured || itemRef.current?.durationSeconds || 0)
       if (audio.currentTime > measured && measured > 0) audio.currentTime = measured
     }
-    const play = () => setPlaying(true)
-    const pause = () => setPlaying(false)
-    const ended = () => { setPlaying(false); setCurrentTime(audio.duration || 0) }
+    const play = () => { claimAudioPlayback(audio); setPlaying(true) }
+    const pause = () => { releaseAudioPlayback(audio); setPlaying(false) }
+    const ended = () => { releaseAudioPlayback(audio); setPlaying(false); setCurrentTime(audio.duration || 0) }
     const failed = () => { setPlaying(false); setError("This audio could not be played.") }
     audio.addEventListener("timeupdate", time)
     audio.addEventListener("loadedmetadata", metadata)
@@ -54,6 +55,7 @@ export function useSourcePlayback() {
     audio.addEventListener("error", failed)
     return () => {
       audio.pause()
+      releaseAudioPlayback(audio)
       audio.removeEventListener("timeupdate", time)
       audio.removeEventListener("loadedmetadata", metadata)
       audio.removeEventListener("durationchange", metadata)
