@@ -19,7 +19,7 @@
     "generate:fixtures": "tsx scripts/generate-fixtures.ts",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -b",
-    "test": "vitest run --config vitest.config.ts --exclude tests/integration/** --exclude tests/e2e/** --exclude tests/visual/**",
+    "test": "vitest run --config vitest.config.ts --exclude \"tests/integration/**\" --exclude \"tests/e2e/**\" --exclude \"tests/visual/**\"",
     "test:prepare": "tsx packages/core/src/db/prepare-test.ts",
     "test:integration": "pnpm test:prepare && vitest run --config vitest.config.ts tests/integration",
     "test:e2e:prepare": "pnpm test:prepare && tsx scripts/prepare-e2e.ts",
