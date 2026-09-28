@@ -17,7 +17,7 @@ afterEach(async () => {
   Object.assign(config, originalConfig);
   await getPool().query("DELETE FROM owner_usage_limit WHERE owner_id=$1", [owner]);
 });
-const direction = "A four-bar melody";
+const direction = "A 4-bar melody";
 const plan = nativePlanSchema.parse({ intent: "A warm melodic phrase", sections: [{ name: "Whole", purpose: "A short musical statement" }], soundGoals: ["Soft lead"], hardConstraints: ["Four bars"], developmentTasks: ["A deliberate pause"], creativeState: { identity: "Quiet", unfinishedTasks: ["Check the phrase"] } });
 const form = { title: "Recovery phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
 const good = () => new AIMessage(JSON.stringify({ verdict: "The phrase leaves deliberate space.", findings: [], noChangeReason: "The sparse requested statement is present." }));
@@ -45,6 +45,70 @@ async function prepared(profile: "standard" | "extended" = "standard", model = "
   await session.apply("initial", nativeFormOperations(nativeFormSchema.parse(form), []));
   return { job, session };
 }
+
+it("finishes through one compound tool without buying a goodbye turn, retaining subjective suggestions", async () => {
+  const { job } = await prepared("standard", "gpt-6-luna");
+  const producer = fakeModel().respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  const reviewer = fakeModel().respond(new AIMessage(JSON.stringify({ verdict: "A useful sparse statement with room to develop.", findings: [{ priority: "medium", sectionId: "whole", partId: "lead", observation: "Only one opening gesture", suggestedChange: "Consider a quiet answering note in a later revision" }], noChangeReason: null })));
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  expect(producer.callCount).toBe(1);
+  expect(reviewer.callCount).toBe(1);
+  expect(await loadNativePlan(job.id)).toMatchObject({ stage: "reviewed", reviewCount: 1, review: { modelUsed: true, findings: [{ priority: "medium" }] } });
+  expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(1);
+  const calls = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' AND prompt_version='deep-producer-v2'", [job.id])).rows;
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ state: "succeeded", cost_status: "observed" });
+});
+
+it("completes procedural inspection and review after a normal final response without reopening creation", async () => {
+  const { job } = await prepared();
+  const producer = fakeModel().respond(new AIMessage("The requested musical statement is complete."));
+  const reviewer = fakeModel().respond(good());
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  expect(producer.callCount).toBe(1);
+  expect(reviewer.callCount).toBe(1);
+  const saved = await loadNativePlan(job.id);
+  expect(saved!.inspectedDocumentHash).toBe(saved!.review!.documentHash);
+  expect(saved!.stage).toBe("reviewed");
+});
+
+it("defers review for missing objective requirements and bounds identical incomplete final responses", async () => {
+  const { job, session } = await prepared();
+  await session.apply("wrong-length", [{ kind: "setStructure", bars: 8, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 8, intent: "A short statement" }] }]);
+  const producer = fakeModel().respondWithTools([{ name: "review_native_score", args: {} }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respond(new AIMessage("Finished")).respond(new AIMessage("Finished"));
+  const reviewer = fakeModel();
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "needs_attention", error_code: "NATIVE_PARTIAL" });
+  expect(JSON.stringify(producer.calls[1]!.messages)).toContain("no review call was spent");
+  expect(reviewer.callCount).toBe(0);
+  expect(producer.callCount).toBe(4);
+  expect((await loadNativePlan(job.id))!.reviewCount).toBe(0);
+  expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(0);
+});
+
+it("preserves the last current review against optional edits but allows exact confirmed-step replay", async () => {
+  const { job, session } = await prepared();
+  await session.apply("confirmed-mix", [{ kind: "setMix", partId: "lead", gain: 0.5 }]);
+  const review = { documentHash: canonicalHash(session.document), contextHash: nativeReviewContextHash(direction, plan), verdict: "Useful statement", findings: [], noChangeReason: "Complete", modelUsed: true };
+  await saveNativeReview(job, review);
+  await getPool().query("UPDATE native_job_plan SET creative_review_count=4 WHERE job_id=$1", [job.id]);
+  const producer = fakeModel()
+    .respondWithTools([{ name: "configure_native_sound", args: { stepKey: "optional", operations: [{ kind: "setMix", partId: "lead", gain: 0.1 }] } }])
+    .respondWithTools([{ name: "configure_native_sound", args: { stepKey: "confirmed-mix", operations: [{ kind: "setMix", partId: "lead", gain: 0.5 }] } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  const reviewer = fakeModel();
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  expect(JSON.stringify(producer.calls[1]!.messages)).toContain("last available review");
+  expect(JSON.stringify(producer.calls[2]!.messages)).toContain("replayed");
+  expect(reviewer.callCount).toBe(0);
+  expect((await nativeSnapshot(owner, job.projectId)).current!.documentHash).toBe(review.documentHash);
+  expect((await getPool().query("SELECT 1 FROM native_job_step WHERE job_id=$1 AND step_key='optional'", [job.id])).rowCount).toBe(0);
+});
 
 it("rejects changed arguments for a confirmed step key without aborting the producer or duplicating work", async () => {
   const job = await create();
@@ -173,7 +237,7 @@ it("keeps current inspection coverage in the real producer input so final reads 
   const input = producer.calls[2]!.messages.map(m => m.text).join("\n");
   expect(input).toContain('"inspectedSectionIds":["whole"]');
   expect(input).toContain('"requiredSectionCount":1');
-  expect(input).toContain("Do not inspect them again just to satisfy the stage gate");
+  expect(input).toContain("Do not repeat procedural reads");
   const afterEdit = producer.calls[3]!.messages.map(m => m.text).join("\n");
   expect(afterEdit).toContain('"inspectedSectionIds":[]');
   expect((await jobSnapshot(owner, job.id)).state).toBe("succeeded");

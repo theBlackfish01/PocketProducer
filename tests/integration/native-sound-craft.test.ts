@@ -61,8 +61,11 @@ describe("scripted producer groove-to-rise production path", () => {
     expect(snapshot.current?.document.audio.state).toBe("deferred");
     expect(snapshot.synchronization.state).toBe("local");
     const reviews = await getPool().query<{ creative_review_history: Array<{ documentHash: string; modelUsed: boolean }> }>("SELECT creative_review_history FROM native_job_plan WHERE job_id=$1", [created.id]);
-    expect(reviews.rows[0]?.creative_review_history).toHaveLength(2);
-    expect(new Set(reviews.rows[0]!.creative_review_history.map((review) => review.documentHash)).size).toBe(2);
+    // The early groove is inspectable but lacks the requested middle rise:
+    // preflight now saves the review allowance for the completed form.
+    expect(JSON.stringify(model.calls[4]!.messages)).toContain("no review call was spent");
+    expect(reviews.rows[0]?.creative_review_history).toHaveLength(1);
+    expect(reviews.rows[0]!.creative_review_history[0]!.documentHash).toBe(snapshot.current!.documentHash);
     expect(reviews.rows[0]!.creative_review_history.every((review) => !review.modelUsed)).toBe(true);
     const capabilities = await getPool().query<{ payload: Record<string, unknown> }>("SELECT payload FROM job_event WHERE job_id=$1 AND event_type='capabilities' ORDER BY sequence DESC LIMIT 1", [created.id]);
     expect(capabilities.rows[0]?.payload).toMatchObject({ model: "scripted", library: "injected-test-client", nativeMixListening: false, sourceAnalysis: false });

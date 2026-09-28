@@ -1,5 +1,17 @@
 # Native finishing and recovery — 2026-09-27
 
+## Bounded useful completion — 2026-09-29
+
+Read-only hosted logs and LangSmith imports identified a later `REVIEW_EXHAUSTED` stop, not a demonstrated credit or output-token failure. The same logical job ran through repeated normal final responses, then continued into additional inspections and edits after its ordinary review attempts were consumed. Its final score no longer had a valid current review. Historical inputs/outputs were redacted, so the precise original completion checklist and musical findings cannot be reconstructed from those traces. Raw imports remain in ignored local storage.
+
+The producer now offers `finish_native_arrangement` in every tool menu. It checks the existing objective brief/source/protection and plan-evidence rules, inspects the current first/last sections through the existing analysis cache, obtains or reuses an exact score/context review, then marks the plan reviewed. The worker still performs its existing commit/ownership/lease/effect checks. Successful finalization avoids an extra paid model turn merely for a closing message. It does not export or play audio.
+
+`review_native_score` performs the same objective preflight before spending review allowance. A normal final text response also invokes the finishing operation when only procedural checks remain, rather than reopening the creative loop. Two consecutive normal final responses with identical music and missing requirements stop further identical finishing passes; changed work can continue within the existing envelope. Invalid reviews still require the existing bounded repair or remain blocked. Subjective suggestions are retained, not presented as resolved or heard quality, and are not a new veto requiring perfection. The producer is guided toward one coherent refinement pass.
+
+When the last available review is current and objective checks pass, optional new musical writes are rejected with a concrete instruction to finish. Exact confirmed-step replay remains idempotent; changed arguments under an existing key retain their original error. This guard does not increase budgets or restore stale reviews. Already exhausted drafts remain preserved and may still be ineligible for continuation; this change does not silently reset their review count, accept them, or launch paid work.
+
+Regression tests exercise compound completion with retained suggestions, no extra producer dispatch, procedural-only completion, preflight without critic spend, bounded identical failed endings, last-review protection and exact replay. Existing malformed-review, unknown-liability, changed-context, cancellation, ownership and version tests remain applicable. These are offline scripted-provider tests, not evidence of live Luna convergence or listening quality.
+
 This pass repairs the five findings from the paused Lantern review. It does not restart that paid job, increase any allowance, change models, accept a draft or copy it to Audiotool.
 
 ## Contracts
