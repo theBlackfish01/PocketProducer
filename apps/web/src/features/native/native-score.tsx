@@ -5,7 +5,7 @@ import type { NativeDocument } from "../../lib/api"
 import { Button } from "../../components/ui/button"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../components/ui/sheet"
 import { motifFamily, projectScoreOverview, ticksPerBar } from "./score"
-import { advanceConfirmedFrame, barLabel, confirmedChanges, documentEnd, roleNames, type ConfirmedFrame } from "./score-presentation"
+import { advanceConfirmedFrame, occupiedBars, confirmedChanges, documentEnd, roleNames, type ConfirmedFrame } from "./score-presentation"
 import { ScoreInspector } from "./score-inspector"
 import { ScoreDetailLane } from "./score-detail-lane"
 
@@ -86,7 +86,7 @@ export const NativeScore = memo(function NativeScore(props: Props) {
             <svg className="score-lane-svg" viewBox="0 0 1000 48" preserveAspectRatio="none" role="img" aria-label={`${lane.name}: ${lane.totalNoteOnsets} note starts across ${document.bars} bars; ${lane.blocks.length} phrase or clip placements`}>
               {document.sections.map((item) => <rect key={item.id} x={item.startBar / document.bars * 1000} y="0" width={(item.endBar - item.startBar) / document.bars * 1000} height="48" className={selectedSectionId === item.id ? "score-section-active" : "score-section-area"} />)}
               {lane.density.map((count, bar) => count ? <rect key={bar} x={(bar + 0.12) / document.bars * 1000} y={40 - Math.min(26, 5 + Math.log2(count + 1) * 5)} width={Math.max(1, 0.76 / document.bars * 1000)} height={Math.min(26, 5 + Math.log2(count + 1) * 5)} className={`score-density role-${lane.role}`}><title>Bar {bar + 1}: {count} note starts</title></rect> : null)}
-              {lane.blocks.slice(0, 120).map((block, index) => <rect key={block.key} x={block.startTick / documentEnd(document) * 1000} y={block.kind === "motif" ? 4 + index % 2 * 5 : 3} width={Math.max(2, (block.endTick - block.startTick) / documentEnd(document) * 1000)} height={block.kind === "motif" ? 7 : 12} rx="3" className={`score-block ${block.kind} family-${Math.max(0, families.indexOf(block.familyId ?? "")) % 4} ${highlightFamily && block.familyId !== highlightFamily ? "is-muted" : ""}`}><title>{block.label} · {block.familyId ? `F${families.indexOf(block.familyId) + 1}` : "clip"} · bars {barLabel(block.startTick, width)}–{barLabel(block.endTick, width)}{block.derivedFromMotifId ? " · variation" : ""}</title></rect>)}
+              {lane.blocks.slice(0, 120).map((block, index) => <rect key={block.key} x={block.startTick / documentEnd(document) * 1000} y={block.kind === "motif" ? 4 + index % 2 * 5 : 3} width={Math.max(2, (block.endTick - block.startTick) / documentEnd(document) * 1000)} height={block.kind === "motif" ? 7 : 12} rx="3" className={`score-block ${block.kind} family-${Math.max(0, families.indexOf(block.familyId ?? "")) % 4} ${highlightFamily && block.familyId !== highlightFamily ? "is-muted" : ""}`}><title>{block.label} · {block.familyId ? `F${families.indexOf(block.familyId) + 1}` : "clip"} · bars {occupiedBars(block.startTick, block.endTick, width)}{block.derivedFromMotifId ? " · variation" : ""}</title></rect>)}
             </svg>
           </motion.div>
         </div>)}

@@ -4,6 +4,9 @@ import { materializedSectionNotes, partGroupChain, ticksPerBar, type ScoreNote }
 export const roleNames: Record<string, string> = { percussion: "Drums", bass: "Bass", melody: "Melody", harmony: "Harmony", texture: "Atmosphere", lead: "Lead", fx: "Accents", source: "Your sounds" }
 export const pitchName = (pitch: number) => `${["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"][pitch % 12]}${Math.floor(pitch / 12) - 1}`
 export const barLabel = (tick: number, width: number) => `${Math.floor(tick / width) + 1}${tick % width ? ` + ${Number((tick % width / 960).toFixed(2))} beats` : ""}`
+// Occupied bars for a half-open musical interval; exact point labels above
+// intentionally still name the next bar at a boundary.
+export const occupiedBars = (startTick: number, endTick: number, width: number) => `${Math.floor(startTick / width) + 1}–${Math.ceil(endTick / width)}`
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 export interface ConfirmedFrame { document: NativeDocument; identity: string; scope?: string; steps: number; before?: NativeDocument }

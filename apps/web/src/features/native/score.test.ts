@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest"
 import type { NativeDocument, NativePart } from "../../lib/api"
 import { automationAt, compareScoreSection, materializedSectionNotes, projectScoreOverview } from "./score"
-import { advanceConfirmedFrame, confirmedChanges, controlPath, noteGeometry, scoreWindow } from "./score-presentation"
+import { advanceConfirmedFrame, barLabel, occupiedBars, confirmedChanges, controlPath, noteGeometry, scoreWindow } from "./score-presentation"
+
+it("labels occupied bar spans without including an exclusive endpoint", () => {
+  expect(occupiedBars(15360, 38400, 3840)).toBe("5–10")
+  expect(occupiedBars(15360, 38401, 3840)).toBe("5–11")
+  expect(occupiedBars(480, 960, 3840)).toBe("1–1")
+  expect(occupiedBars(0, 5760, 2880)).toBe("1–2")
+  expect(barLabel(38400, 3840)).toBe("11")
+})
 
 const instrument = (id: string, role = "melody"): NativePart => ({ id, name: id, role, device: { type: "heisenberg", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] })
 
