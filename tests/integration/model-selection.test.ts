@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { claimJobById, createNativeJob, createProject, dispatchOutbox, failProviderEffect, getConfig, getPool, markEffectDispatched, reserveProviderEffect, type JobRecord } from "@pocket/core";
 import { createNativeLibrary, jobSnapshot, nativeSnapshot } from "@pocket/core";
 import { processJob } from "@pocket/worker";
-import { AIMessage, fakeModel, CompatibleProducerModel, AccountedOpenAICalls } from "@pocket/core/test-support";
+import { AIMessage, fakeModel, CompatibleProducerModel, producerChatModel, AccountedOpenAICalls } from "@pocket/core/test-support";
 const config = getConfig(), original = { ...config };
 const owners: string[] = [], jobs: JobRecord[] = [];
 beforeAll(async () => {
   for (let i = 0; i < 2; i++) owners.push((await getPool().query<{ id: string }>("INSERT INTO app_user(provider_subject,display_name) VALUES($1,'Model quota test') RETURNING id", [`models-${randomUUID()}`])).rows[0]!.id);
 });
-afterEach(() => Object.assign(config, original));
+afterEach(() => { Object.assign(config, original); vi.unstubAllGlobals(); });
 afterAll(async () => {
   await getPool().query("DELETE FROM native_sync WHERE project_id IN (SELECT id FROM project WHERE owner_id=ANY($1::uuid[]))", [owners]);
   await getPool().query("DELETE FROM native_project_head WHERE project_id IN (SELECT id FROM project WHERE owner_id=ANY($1::uuid[]))", [owners]);
@@ -72,6 +72,56 @@ it("captures Luna xhigh and completes a scripted construction through the real w
   expect((await nativeSnapshot(selected.ownerId, selected.projectId)).current?.document.parts[0]?.notes[0]?.pitch).toBe(64);
   expect((await getPool().query("SELECT request FROM job WHERE id=$1", [selected.id])).rows[0].request._nativeRun).toEqual(selected.request._nativeRun);
 });
+
+it.each([ ["gpt-6-sol", "multiple"], ["gpt-6-luna", "multiple"], ["gpt-6-luna", "shared"] ] as const)("preserves every reasoning/tool item through %s construction (%s reasoning), mixed errors and history compaction", async (model, reasoningMode) => {
+  config.OPENAI_API_KEY = "offline-openai-test";
+  config.JOB_LEASE_SECONDS = 45;
+  const selected = await job(owners[1]!, model);
+  const form = { title: "Reasoning replay phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
+  type Item = { type: string; id?: string; call_id?: string; name?: string; output?: unknown };
+  const requests: Item[][] = [];
+  const expectedReasoning = new Map<string, string>();
+  const violations: string[] = [];
+  let turn = 0;
+  vi.stubGlobal("fetch", async (url: unknown, init: RequestInit) => {
+    await Promise.resolve();
+    if (String(url) !== "https://api.openai.com/v1/responses" || typeof init.body !== "string") throw new Error("Unexpected provider transport");
+    const body = JSON.parse(init.body) as { input: Item[]; stream?: boolean };
+    if (body.stream) throw new Error("Expected non-streaming production invocation");
+    requests.push(body.input);
+    for (const [index, item] of body.input.entries()) {
+      if (item.type !== "function_call") continue;
+      const required = expectedReasoning.get(item.call_id!);
+      if (required && !body.input.slice(0, index).some((previous) => previous.type === "reasoning" && previous.id === required)) violations.push(`${item.id} missing ${required}`);
+      if (!body.input.some((reply) => reply.type === "function_call_output" && reply.call_id === item.call_id)) violations.push(`${item.id} missing result`);
+    }
+    if (violations.length) return Response.json({ error: { message: `function_call provided without its required reasoning item: ${violations.join(", ")}`, type: "invalid_request_error" } }, { status: 400 });
+    const calls = turn === 0 ? [{ name: "compose_native_form", args: form }]
+      : turn === 1 ? [{ name: "read_native_brief", args: { offset: 0, length: 100 } }, { name: "inspect_native_part", args: { partId: "missing-part" } }]
+      : turn < 8 ? [{ name: "read_native_brief", args: { offset: 0, length: 100 } }] : [];
+    const output = calls.flatMap((call, index) => {
+      const id = `${turn}_${index}`;
+      expectedReasoning.set(`call_${id}`, `rs_${reasoningMode === "shared" ? `${turn}_0` : id}`);
+      return [...(reasoningMode === "shared" && index > 0 ? [] : [{ type: "reasoning", id: `rs_${id}`, summary: [] }]), { type: "function_call", id: `fc_${id}`, call_id: `call_${id}`, name: call.name, arguments: JSON.stringify(call.args), status: "completed" }];
+    });
+    const finalOutput = output.length ? output : [{ type: "message", id: `msg_${turn}`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "The phrase is ready.", annotations: [] }] }];
+    return Response.json({ id: `resp_${turn++}`, object: "response", created_at: 1, status: "completed", model, output: finalOutput, usage: { input_tokens: 100, output_tokens: 80, total_tokens: 180, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 20 } } });
+  });
+  const adapter = producerChatModel(model, 1000, model === "gpt-6-luna" ? "xhigh" : "high", 10_000);
+  await processJob(selected, { scriptedModel: adapter, library: createNativeLibrary(null) });
+  expect(violations).toEqual([]);
+  expect((await jobSnapshot(selected.ownerId, selected.id)).state).toBe("succeeded");
+  expect((await nativeSnapshot(selected.ownerId, selected.projectId)).current?.document.parts[0]?.notes[0]?.pitch).toBe(64);
+  expect(turn).toBe(9);
+  const final = requests.at(-1)!;
+  expect(final.some((item) => item.id === "fc_0_0")).toBe(false); // Confirmed mutation is compacted as a whole.
+  expect(final.some((item) => item.id === "fc_2_0")).toBe(false); // Older successful reads are also bounded.
+  expect(final.filter((item) => item.type === "reasoning").map((item) => item.id)).toEqual(["rs_1_0", ...(reasoningMode === "shared" ? [] : ["rs_1_1"]), "rs_4_0", "rs_5_0", "rs_6_0", "rs_7_0"]);
+  expect(final.some((item) => item.type === "function_call_output" && item.call_id === "call_1_1" && /error/i.test(JSON.stringify(item.output)))).toBe(true);
+  const effects = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [selected.id])).rows;
+  expect(effects).toHaveLength(9);
+  expect(effects.every((effect) => effect.state === "succeeded" && effect.cost_status === "observed")).toBe(true);
+}, 30_000);
 
 it("holds a missing Gateway cost as unknown through the actual accounting callback", async () => {
   Object.assign(config, { INITIAL_BUILD_API_BUDGET_USD: 100, MAX_JOB_COST_USD: 100, DEFAULT_USER_BUDGET_USD: 100, GATEWAY_POOL_BUDGET_USD: 100 });

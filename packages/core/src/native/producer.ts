@@ -260,12 +260,12 @@ function compactConfirmedNativeHistory(messages: BaseMessage[]): BaseMessage[] {
     if (mutationIds.every((id) => replies.some((reply) => reply instanceof ToolMessage && reply.tool_call_id === id && reply.status !== "error" && !/^Error[:\s]/i.test(reply.text)))) cutoff = index + 1 + replies.length;
   }
   const firstBrief = messages.find((message) => message instanceof HumanMessage);
-  const kept = [...messages.slice(0, cutoff).filter((message) => message.type === "system" || message === firstBrief), ...messages.slice(cutoff)].map((message) =>
-    message instanceof AIMessage && message.tool_calls?.length
-      ? new AIMessage({ content: "", tool_calls: message.tool_calls, additional_kwargs: message.additional_kwargs })
-      : message
-  );
-  return kept;
+  // Retained messages are protocol envelopes, not just prose/tool arguments.
+  // In particular, OpenAI response_metadata.output contains the ordered
+  // reasoning/function items (including multiple reasoning items in one turn).
+  // Rebuilding an AIMessage loses that replay data and can leave orphaned
+  // function-call IDs. Compact complete exchanges; never strip retained ones.
+  return [...messages.slice(0, cutoff).filter((message) => message.type === "system" || message === firstBrief), ...messages.slice(cutoff)];
 }
 
 export class NativeToolSession {
@@ -492,7 +492,8 @@ export async function produceNative(input: { session: NativeToolSession; directi
     const summary = input.mode === "generation" ? await fixtureConstruct(input.session, input.direction, input.sources) : await fixtureRevise(input.session, input.direction, input.targetPartId, input.targetSectionId);
     return { summary, provider: "deterministic-fixture", model: "fixture", costUsd: 0, usage: { inputTokens: 0, outputTokens: 0 }, steps: input.session.applied };
   }
-  const operationHash = canonicalHash({ version: "native-producer-v2", jobId: input.session.job.id, request: originalNativeRequest(input.session.job.request), model: modelName });
+  const originalModel = jobNativeRunLimits({ _nativeRun: input.session.job.request._nativeRun })?.model ?? modelName;
+  const operationHash = canonicalHash({ version: "native-producer-v2", jobId: input.session.job.id, request: originalNativeRequest(input.session.job.request), model: originalModel });
   if (!input.scriptedModel && !modelCredentials(modelName).apiKey) throw new Error("Selected producer is not configured");
   const reservation = await reserveProviderEffect({ job: input.session.job, provider: modelProvider(modelName), step: "native-producer-result", idempotencyKey: `native-producer:${operationHash}`, inputHash: operationHash, model: modelName, promptVersion: "native-producer-v2", reservationMicrousd: 0 });
   let continuingConfirmedWork = false;
@@ -715,7 +716,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
       // A failed graph may retain a depleted remaining-steps state. A fresh
       // attempt gets fresh graph memory; the durable plan, steps and effects
       // remain on the original logical job and are injected above.
-      await agent.invoke({ messages: [{ role: "user", content: pass === 0 ? continuation : `The previous turn stopped before satisfying these objective requirements: ${completionIssues.join("; ")}. Inspect confirmed state and complete only what is missing; do not claim audio was heard.` }], files } as never, { ...producerTraceConfig(input.session.job, "native", input.scriptedModel ? "scripted" : modelName, pass), configurable: { thread_id: `${input.session.job.id}:${input.session.job.attemptId ?? "local"}` }, recursionLimit: input.scriptedModel && input.testGraphStepLimit ? input.testGraphStepLimit : Math.min(1200, Math.max(80, (run?.maxCalls ?? config.MAX_MODEL_CALLS_PER_JOB) * 5 + 20)), callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) });
+      await agent.invoke({ messages: [{ role: "user", content: pass === 0 ? continuation : `The previous turn stopped before satisfying these objective requirements: ${completionIssues.join("; ")}. Inspect confirmed state and complete only what is missing; do not claim audio was heard.` }], files } as never, { ...producerTraceConfig(input.session.job, "native", input.scriptedModel ? "scripted" : modelName, pass), configurable: { thread_id: `${input.session.job.id}:${input.session.job.attemptId ?? "local"}${modelName !== originalModel ? `:${modelName}` : ""}` }, recursionLimit: input.scriptedModel && input.testGraphStepLimit ? input.testGraphStepLimit : Math.min(1200, Math.max(80, (run?.maxCalls ?? config.MAX_MODEL_CALLS_PER_JOB) * 5 + 20)), callbacks: [accounting], ...(input.signal ? { signal: input.signal } : {}) });
       completionIssues = nativeCompletionIssues(input.session.document, input.direction, input.mode, input.sources.map((source) => source.assetId), input.session.initialDocument, typeof input.session.job.request.targetSectionId === "string" ? input.session.job.request.targetSectionId : null);
       if (!input.scriptedModel) { const plan = await loadNativePlan(input.session.job.id); if (!plan) completionIssues.push("Record a durable production plan"); else { if (plan.stage !== "reviewed" || plan.inspectedDocumentHash !== canonicalHash(input.session.document)) completionIssues.push("Inspect current sections after the final edit and mark the plan reviewed"); if (plan.review?.documentHash !== canonicalHash(input.session.document) || !plan.review.modelUsed || plan.review.contextHash !== nativeReviewContextHash(input.direction, plan.plan)) completionIssues.push("Run a valid focused review on the final confirmed music; unavailable symbolic fallback is not approval"); completionIssues.push(...nativePlanEvidenceIssues(plan.plan, input.session.document)); } }
       if (!completionIssues.length) break;

@@ -1,5 +1,5 @@
 import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
-import type { BaseMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
 import type { Serialized } from "@langchain/core/load/serializable";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
@@ -99,7 +99,10 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
 
   override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
     const request = boundOpenAiRequest(messages, this.currentOutputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens);
-    const messageHash = canonicalHash(request.normalizedMessages);
+    // A handoff can reconstruct identical musical context for a different model.
+    // Keep prior Sol identities stable, but never collide with them for Luna.
+    const originalModel = jobNativeRunLimits({ _nativeRun: this.job.request._nativeRun })?.model;
+    const messageHash = canonicalHash(originalModel && originalModel !== this.model ? { model: this.model, messages: request.normalizedMessages } : request.normalizedMessages);
     const reservation = await reserveProviderEffect({
       job: this.job,
       provider: modelProvider(this.model),
@@ -158,7 +161,11 @@ export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound =
     type: message.type,
     content: message.content,
     name: message.name,
-    additionalKwargs: message.additional_kwargs
+    additionalKwargs: message.additional_kwargs,
+    // These are replayed on the wire even when assistant prose is empty.
+    // Preserve the conservative input/reservation bound for opaque context too.
+    providerOutput: message.response_metadata?.output,
+    toolCalls: message instanceof AIMessage ? message.tool_calls : undefined
   })));
   const serialized = JSON.stringify(normalizedMessages);
   // The callback sees the complete graph message payload. The fixed allowance covers
