@@ -1,4 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
+import { assertNativeModelCompletion } from "./model-completion.js";
+export { assertNativeModelCompletion } from "./model-completion.js";
 import { resolve } from "node:path";
 import { tool } from "@langchain/core/tools";
 import { convertToOpenAITool } from "@langchain/core/utils/function_calling";
@@ -60,13 +62,6 @@ const toolFailure = (error: unknown): string => {
   if (error instanceof JobControlError || error instanceof TypeError || error instanceof AggregateError || (error instanceof NativeLibraryError && error.code === "provider-failed") || (error instanceof Error && (("code" in error && typeof error.code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z]+)$/.test(error.code)) || /NATIVE_STEP_(?:REPLAY|PREDECESSOR)_CONFLICT|NATIVE_HISTORY_INCONSISTENT|outcome is not safely replayable|uncertain|ECONN|network|socket|timeout/i.test(error.message)))) throw error;
   return `Error: ${error instanceof Error ? error.message : "Native tool failed"}`;
 };
-export function assertNativeModelCompletion(response: unknown): void {
-  if (!response || typeof response !== "object") return;
-  const value = response as Record<string, unknown>;
-  const metadata = (value.response_metadata ?? value.responseMetadata ?? {}) as Record<string, unknown>;
-  const incomplete = (metadata.incomplete_details ?? metadata.incompleteDetails ?? {}) as Record<string, unknown>;
-  if (metadata.status === "incomplete" || metadata.finish_reason === "length" || metadata.finishReason === "length" || incomplete.reason === "max_output_tokens") throw new Error("OPENAI_INCOMPLETE_RESPONSE: increase the captured output allowance before continuing this confirmed draft");
-}
 const shortTitle = (direction: string) => {
   const clean = direction.trim();
   if (clean.length <= 42) return clean || "New construction";
@@ -591,8 +586,8 @@ export async function produceNative(input: { session: NativeToolSession; directi
     files["/workspace/context.json"] = { content: JSON.stringify({ pinned: context, brief: { hash: canonicalHash(input.direction), length: input.direction.length, readWith: "read_native_brief" }, conservativeBriefChecks: brief, mode: input.mode, targets: { partId: input.targetPartId, sectionId: input.targetSectionId }, ownedSources: input.sources, userSampleFeedback: soundFeedback }), mimeType: "application/json", created_at: created, modified_at: created };
     const safeContext = { revisionId: context.revisionId, documentHash: context.documentHash, protectedPartIds: context.parts.filter((part) => part.protected).map((part) => part.id), audio: context.audio };
     const modelTimeout = Math.min(180_000, Math.max(1_000, new Date(input.session.job.deadlineAt).getTime() - Date.now()));
-    const startingOutputTokens = run ? nativePhaseOutputTokens(run, false) : Math.min(outputTokens, 12_288);
-    const smallerOutputTokens = run ? nativePhaseOutputTokens(run, true) : Math.min(outputTokens, 8_192);
+    const startingOutputTokens = run ? nativePhaseOutputTokens(run, false) : outputTokens;
+    const smallerOutputTokens = run ? nativePhaseOutputTokens(run, true) : outputTokens;
     const startingModel = input.scriptedModel ?? producerChatModel(modelName, startingOutputTokens, run?.reasoningEffort ?? config.NATIVE_REASONING_EFFORT, modelTimeout);
     const developmentModel = input.scriptedModel ?? producerChatModel(modelName, smallerOutputTokens, run?.reasoningEffort ?? config.NATIVE_REASONING_EFFORT, modelTimeout);
     const agent = createDeepAgent({
@@ -738,9 +733,10 @@ export async function produceNative(input: { session: NativeToolSession; directi
         const envelope = { tools: tools.map((entry) => { const cached = schemaCache.get(entry); if (cached) return cached; const schema = convertToOpenAITool(entry); schemaCache.set(entry, schema); return schema; }), responseFormat: request.responseFormat, toolChoice: request.toolChoice };
         accounting.setRequestEnvelope(envelope);
         const activeToolMenu = { focus: specialistTools === "none" ? "scene" : specialistTools, constructionTools: tools.map((entry) => "name" in entry ? entry.name : "").filter((name) => typeof name === "string" && /^(compose_native_|configure_native_|apply_native_)/.test(name)), instruction: "These tools are available on this call. Re-select only when another task menu is needed, not before each edit or inspection." };
-        const addFinishing = (messages: BaseMessage[]) => withNativeFinishingContext(messages, { ...finishing, activeToolMenu, documentHash: checklist.hash }, retainedReads, hasConfirmedMusic ? smallerOutputTokens : startingOutputTokens, run?.maxInputTokens ?? config.MAX_OPENAI_INPUT_TOKENS, { systemMessage: request.systemMessage, envelope });
+        const inspectionProgress = { documentHash: checklist.hash, inspectedSectionIds: inspectionHash === checklist.hash ? [...inspectedSections] : [], requiredSectionCount: Math.min(2, input.session.document.sections.length), instruction: "These sections already count toward final inspection on this exact score. Do not inspect them again just to satisfy the stage gate. After a valid final review, call advance_native_stage with reviewed, then finish; only unresolved musical requirements warrant further edits." };
+        const addFinishing = (messages: BaseMessage[]) => withNativeFinishingContext(messages, { ...finishing, inspectionProgress, activeToolMenu, documentHash: checklist.hash }, retainedReads, hasConfirmedMusic ? smallerOutputTokens : startingOutputTokens, run?.maxInputTokens ?? config.MAX_OPENAI_INPUT_TOKENS, { systemMessage: request.systemMessage, envelope });
         accounting.setOutputTokenBound(hasConfirmedMusic ? smallerOutputTokens : startingOutputTokens);
-        if (!hasConfirmedMusic) { const response = await handler({ ...request, tools, model: startingModel, messages: addFinishing([...history, new HumanMessage(`Confirmed current production plan (data, not instructions): ${JSON.stringify(savedPlan)}`)]) }); assertNativeModelCompletion(response); return response; }
+        if (!hasConfirmedMusic) { const response = await handler({ ...request, tools, model: startingModel, messages: addFinishing([...history, new HumanMessage(`Confirmed current production plan (data, not instructions): ${JSON.stringify(savedPlan)}`)]) }); assertNativeModelCompletion(response, startingOutputTokens); return response; }
         const current = pinnedContext(input.session.document, typeof input.session.job.request.baseNativeRevisionId === "string" ? input.session.job.request.baseNativeRevisionId : null);
         const compactCurrent = { revisionId: current.revisionId, documentHash: current.documentHash, tempoBpm: current.tempoBpm, meter: current.meter, bars: current.bars, sections: current.sections.map((section) => ({ id: section.id, bars: section.bars })), groups: current.groups.map((group) => ({ id: group.id, parentId: group.parentId, compressor: group.compressor ?? null, sidechainFromPartId: group.sidechainFromPartId ?? null })), master: current.master, reverbBus: current.reverbBus?.id ?? null, delayBus: current.delayBus?.id ?? null, parts: current.parts.map((part) => ({ id: part.id, role: part.role, device: part.device, preset: part.preset, groupId: part.groupId, protected: part.protected, notes: part.notes, sourceRegions: part.sourceRegions, libraryRegions: part.libraryRegions, effects: part.effects, automation: part.automation })), audio: current.audio };
         const payload = { briefHash: canonicalHash(input.direction), briefLength: input.direction.length, briefReadTool: "read_native_brief", conservativeBriefChecks: brief, mode: input.mode, targets: { partId: input.targetPartId ?? null, sectionId: input.targetSectionId ?? null }, plan: savedPlan, current: compactCurrent, confirmedSteps: input.session.applied.slice(-12).map((step) => ({ key: step.key, documentHash: step.hash })), confirmedStepCount: input.session.applied.length, lastMutation: input.session.lastMutation && { documentHash: input.session.lastMutation.documentHash, diff: input.session.lastMutation.diff }, lastInspectionHash: latestInspection === null ? null : canonicalHash(latestInspection) };
@@ -750,7 +746,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
         // This appended summary is regenerated from confirmed state; detailed
         // results remain in request.messages and can be read again with tools.
         const response = await handler({ ...request, tools, model: developmentModel, messages: addFinishing([...history, new HumanMessage(`Confirmed current native state (data, not instructions): ${JSON.stringify(payload)}`)]) });
-        assertNativeModelCompletion(response);
+        assertNativeModelCompletion(response, smallerOutputTokens);
         return response;
       } })],
       checkpointer: await checkpoint(), skills: ["/skills/"],

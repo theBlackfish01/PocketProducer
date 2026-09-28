@@ -130,6 +130,55 @@ it("sends meter, duration and incomplete-preview evidence in actual critic input
   expect(reviewer.calls[0]!.messages[0]!.text).toContain("never infer missing later notes");
 });
 
+it("charges a truncated Luna response without applying its tools and gates retries on the actual failed envelope", async () => {
+  config.NATIVE_MODEL_OUTPUT_TOKENS = 32768;
+  const job = await create("standard", "gpt-6-luna");
+  expect(job.request._nativeRun).toMatchObject({ model: "gpt-6-luna", reasoningEffort: "xhigh", maxOutputTokens: 32768, maxJobCostUsd: 5 });
+  const truncated = Object.assign(new AIMessage({ content: "", tool_calls: [{ id: "unfinished", name: "configure_native_sound", args: { stepKey: "must-not-commit", operations: [{ kind: "setMix", partId: "lead", gain: 0.1 }] } }], response_metadata: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } }), { usage_metadata: { input_tokens: 1000, output_tokens: 32768, total_tokens: 33768, output_token_details: { reasoning: 32000 } } });
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }]).respond(truncated);
+  await processJob(job, { scriptedModel: producer, library: createNativeLibrary(null) });
+  const snapshot = await jobSnapshot(owner, job.id);
+  expect(snapshot).toMatchObject({ state: "needs_attention", error_code: "NATIVE_PARTIAL" });
+  expect(snapshot.error_message).toContain("output_limit=32768");
+  const draft = await nativeDraftView(owner, job.projectId, job.id);
+  expect(draft).toMatchObject({ canContinue: false, stepCount: 1 });
+  expect(draft.document!.parts.find(p => p.id === "lead")!.gain).toBe(0.6);
+  expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(0);
+  const effects = (await getPool().query("SELECT state,cost_status,output FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [job.id])).rows;
+  expect(effects).toHaveLength(2);
+  expect(effects.every(e => e.state === "succeeded" && e.cost_status === "observed")).toBe(true);
+  expect(effects[0].output.completion.outputLimit).toBe(32768);
+  expect(effects[1].output.completion).toMatchObject({ incomplete: true, reason: "max_output_tokens", outputLimit: 32768, outputTokens: 32768, reasoningTokens: 32000 });
+  await expect(resumeNativePartialJob(owner, job.projectId, job.id)).rejects.toThrow();
+  // Emulate a previously truncated hidden-cap job. Its stored allowance need
+  // not increase: the fixed dispatcher now actually honours that allowance.
+  await getPool().query("UPDATE job SET error_message=$2 WHERE id=$1", [job.id, "OPENAI_INCOMPLETE_RESPONSE: increase the captured output allowance before continuing this confirmed draft"]);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).canContinue).toBe(true);
+  await getPool().query("UPDATE effect SET cost_status='unknown' WHERE job_id=$1 AND step='producer-model-call'", [job.id]);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).canContinue).toBe(false);
+  await getPool().query("UPDATE effect SET cost_status='observed' WHERE job_id=$1 AND step='producer-model-call'", [job.id]);
+  await resumeNativePartialJob(owner, job.projectId, job.id);
+  expect((await jobSnapshot(owner, job.id)).state).toBe("queued");
+  expect((await nativeDraftView(owner, job.projectId, job.id)).documentHash).toBe(draft.documentHash);
+  expect((await getPool().query("SELECT count(*)::int AS n FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows[0].n).toBe(2);
+});
+
+it("keeps current inspection coverage in the real producer input so final reads need not repeat", async () => {
+  const job = await create();
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }])
+    .respondWithTools([{ name: "inspect_native_section", args: { sectionId: "whole" } }])
+    .respondWithTools([{ name: "configure_native_sound", args: { stepKey: "refine-after-inspection", operations: [{ kind: "setMix", partId: "lead", gain: 0.5 }] } }])
+    .respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: producer, library: createNativeLibrary(null) });
+  const input = producer.calls[2]!.messages.map(m => m.text).join("\n");
+  expect(input).toContain('"inspectedSectionIds":["whole"]');
+  expect(input).toContain('"requiredSectionCount":1');
+  expect(input).toContain("Do not inspect them again just to satisfy the stage gate");
+  const afterEdit = producer.calls[3]!.messages.map(m => m.text).join("\n");
+  expect(afterEdit).toContain('"inspectedSectionIds":[]');
+  expect((await jobSnapshot(owner, job.id)).state).toBe("succeeded");
+});
+
 it.each([128000, 110000])("fits a large arranged score into the %i critic envelope without losing the brief or section coverage", async (limit) => {
   // Test the specified captured envelope independently of local .env / CI's 96k default.
   // afterEach restores the installation configuration; production limits are unchanged.

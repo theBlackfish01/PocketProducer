@@ -242,7 +242,9 @@ describe("audio-independent native job lifecycle", () => {
     expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts.map((part) => part.id)).toEqual(["lead", "bass"]);
     const effects = await getPool().query<{ step: string; state: string; actual_cost_microusd: string; reservation_microusd: string }>("SELECT step,state,actual_cost_microusd::text,reservation_microusd::text FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [accepted.id]);
     expect(effects.rows).toHaveLength(3);
-    expect(Number(effects.rows[1]!.reservation_microusd)).toBeLessThan(Number(effects.rows[0]!.reservation_microusd));
+    // Both phases reserve the same captured output ceiling; it must not shrink
+    // after construction, even though actual charges remain usage-based.
+    expect(Number(effects.rows[1]!.reservation_microusd)).toBe(Number(effects.rows[0]!.reservation_microusd));
     expect(effects.rows.reduce((sum, row) => sum + Number(row.actual_cost_microusd), 0)).toBe(500_000 * priceScale);
     expect((await nativeDraftView(ownerId, scratchId, accepted.id)).stepCount).toBe(2);
   }, 120_000);

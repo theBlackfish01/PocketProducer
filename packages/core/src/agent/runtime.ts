@@ -1,4 +1,5 @@
 import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import { nativeCompletionDiagnostic } from "../native/model-completion.js";
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import type { LLMResult } from "@langchain/core/outputs";
 import type { Serialized } from "@langchain/core/load/serializable";
@@ -82,6 +83,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   private currentOutputTokenBound: number;
   private requestEnvelope: unknown;
   private readonly inputBounds = new Map<string, ReturnType<typeof boundOpenAiRequest>["inputComponents"]>();
+  private readonly outputBounds = new Map<string, number>();
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   costMicrousd = 0;
 
@@ -122,6 +124,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
     await markEffectDispatched(reservation.id, this.job);
     this.effects.set(runId, reservation.id);
     this.inputBounds.set(runId, request.inputComponents);
+    this.outputBounds.set(runId, request.outputTokenBound);
   }
 
   override async handleLLMEnd(output: LLMResult, runId: string): Promise<void> {
@@ -137,7 +140,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
       throw new Error("PROVIDER_USAGE_UNKNOWN: reconcile the observed response before continuing");
     }
     const actualCostMicrousd = gatewayCost ?? this.cost(usage);
-    const state = await completeProviderEffect({ effectId, job: this.job, output: { usage, inputReservationBytes: this.inputBounds.get(runId) }, actualCostMicrousd, ...(providerRequestId ? { providerRequestId } : {}) });
+    const state = await completeProviderEffect({ effectId, job: this.job, output: { usage, inputReservationBytes: this.inputBounds.get(runId), completion: nativeCompletionDiagnostic(returned?.message, this.outputBounds.get(runId)) }, actualCostMicrousd, ...(providerRequestId ? { providerRequestId } : {}) });
     if (state !== "succeeded") throw new Error("OPENAI_EFFECT_OUTCOME_UNCERTAIN");
     this.usage.inputTokens += usage.inputTokens;
     this.usage.outputTokens += usage.outputTokens;

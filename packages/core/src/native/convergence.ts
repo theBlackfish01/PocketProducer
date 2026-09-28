@@ -198,17 +198,19 @@ export class NativeConvergenceMonitor {
   private readonly evidence = new Set<string>();
   private state: string | null = null;
   private evidenceAtChange = 0;
+  private turnsWithoutStateChange = 0;
   observeTool(name: string, result: unknown): void {
     // A bounded discovery window, not unlimited progress from paging reads.
     this.evidence.add(canonicalHash([name, result]));
   }
   observeState(state: unknown): { stagnantTurns: number; guidance: string } {
     const stable = canonicalHash(state);
-    if (stable !== this.state) { this.state = stable; this.evidenceAtChange = this.evidence.size; }
+    if (stable !== this.state) { this.state = stable; this.evidenceAtChange = this.evidence.size; this.turnsWithoutStateChange = 0; }
+    else this.turnsWithoutStateChange++;
     const hash = canonicalHash([stable, Math.min(6, this.evidence.size - this.evidenceAtChange)]);
     this.unchanged = hash === this.last ? this.unchanged + 1 : 0;
     this.last = hash;
     if (this.unchanged >= 12) throw new Error("NATIVE_INCOMPLETE:REPEATED_NO_PROGRESS: Repeated steps did not produce new musical work or evidence. The draft is retained for continuation.");
-    return { stagnantTurns: this.unchanged, guidance: this.unchanged >= 6 ? "You are repeating work without new evidence. Use the retained results, repair the specific blocker or finish the outstanding checklist. Do not repeat unchanged reads or errors." : "" };
+    return { stagnantTurns: this.unchanged, guidance: this.turnsWithoutStateChange >= 4 ? "You are repeating inspection without changing the music or resolving completion requirements. Use the retained exact-hash observations. If a concrete finding needs a change, apply one targeted batch now; otherwise inspect only missing final sections, run the final review and mark reviewed. Do not restart a tour of parts and motifs. Read again only for a specific missing detail needed by that edit. Never skip unmet requirements." : "" };
   }
 }

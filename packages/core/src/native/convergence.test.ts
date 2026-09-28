@@ -114,6 +114,13 @@ describe("bounded native finishing", () => {
     expect(() => { for (let i = 0; i < 25; i++) { monitor.observeTool("inspect", { page: i }); monitor.observeState({ music: "unchanged", findings: "unresolved" }); } }).toThrow(/REPEATED_NO_PROGRESS/);
     expect(monitor.observeState({ music: "changed", findings: "needs verification" }).stagnantTurns).toBe(0);
   });
+  it("nudges a targeted action early even when each inspection returns different evidence", () => {
+    const monitor = new NativeConvergenceMonitor();
+    monitor.observeState({ music: "same", missing: ["Final review"] });
+    for (let i = 0; i < 4; i++) { monitor.observeTool("inspect_native_section", { section: i }); monitor.observeState({ music: "same", missing: ["Final review"] }); }
+    expect(monitor.observeState({ music: "same", missing: ["Final review"] }).guidance).toContain("apply one targeted batch now");
+    expect(monitor.observeState({ music: "changed", missing: ["Final review"] }).guidance).toBe("");
+  });
   it("drops only extra recalled guidance under input pressure, retaining exact current evidence", () => {
     const brief = new HumanMessage("Exact brief and musical facts " + "x".repeat(1000));
     const messages = withNativeFinishingContext([brief], { outstandingRequirements: ["Inspect final sections"] }, [{ tool: "read_native_example", arguments: { id: "old" }, content: "g".repeat(6000), truncated: false }], 400, 3000);
