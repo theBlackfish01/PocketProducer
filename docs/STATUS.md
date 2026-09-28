@@ -1,5 +1,11 @@
 # Live implementation status
 
+## Desktop sidebar scroll fix — 2026-09-28
+
+Desktop navigation is viewport-fixed rather than limited by its sticky parent, retaining the existing 202px grid column and independently scrolling recent sessions. Mobile navigation and application logic are unchanged. Read-only live-page measurement reproduced the rail moving to `y=-329` when the page scrolled beyond its 900px parent. Added an isolated browser regression for a long arrangement, 40 independently scrolling sessions, visible brand/account, and mobile sheet scrolling/Escape focus return. Desktop/mobile screenshots inspected: `.local/evidence/sidebar-scrolled-desktop.png`, `.local/evidence/sidebar-mobile-navigation.png`.
+
+Verification: full visual browser suite **18/18** (1.8m), targeted test lint, `tsc -b`, production build (2.67s; existing chunk-size warning) and diff whitespace check pass. Fixture browser tests use no providers; no generation, data mutation, worker restart or remote copy was performed. The optional agent-browser CLI is unavailable, so browser verification used the pinned Playwright setup.
+
 ## Input-pressure review repairs — 2026-09-28
 
 Both findings reproduced before repair: the 96-bar/12-part/12-section critic request measured **229,091 > 128,000** including system/schema, and finishing context with one optional observation measured **128,362 > 128,000** although required context fit. These were gaps in the preceding goal-pass review, not provider credit failures.

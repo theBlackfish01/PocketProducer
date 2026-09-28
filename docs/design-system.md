@@ -1,5 +1,9 @@
 # Listening Room design system
 
+## Viewport-anchored desktop navigation — September 28
+
+At desktop widths (1024px and above), the existing session rail is fixed to the viewport with dynamic viewport height. Its 202px width shares a CSS variable with the reserved grid column; the main area stays in column two. This avoids sticky navigation stopping at a short container boundary when content overflows it. Recent sessions retain their independent scroll area, with the brand and account outside it. The phone/tablet sheet and breakpoints are unchanged. No new primitive, component or dependency. Regression coverage scrolls a large room to the bottom, scrolls 40 recent sessions independently, and verifies mobile sheet scrolling and Escape focus return.
+
 ## Confirmed musical clarity — September 28
 
 Title labels now reflect confirmed draft titles for otherwise untitled sessions, without overwriting explicit project names or selected versions. List/detail use the same owner-scoped server projection; one existing activity consumer triggers title refresh. Note labels report the complete relevant musical range, not padded plot axes or only the first displayed notes. Routine sample-capability diagnostics stay out of the Producer conversation. Input-length pauses identify conversation growth without implying a credit shortage. No new component family or visual redesign.

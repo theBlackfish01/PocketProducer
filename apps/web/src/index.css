@@ -202,8 +202,13 @@ button:disabled { cursor: not-allowed; }
 }
 
 /* Listening Room: a guided music workspace, with one composition workspace. */
-.app-shell { grid-template-columns: 202px minmax(0, 1fr); }
+.app-shell { --session-rail-width: 202px; grid-template-columns: var(--session-rail-width) minmax(0, 1fr); }
 .session-rail { gap: 0; padding: 26px 20px 18px; background: #fffcf6; }
+@media (min-width: 1024px) {
+  /* Stay anchored even when page overflow extends beyond the grid container. */
+  .session-rail { position: fixed; left: 0; width: var(--session-rail-width); height: 100dvh; }
+  .main-area { grid-column: 2; }
+}
 .session-rail .brand-lockup { margin-bottom: 30px; }
 .rail-new { min-height: 46px; border-radius: 13px; box-shadow: 0 6px 15px rgba(142, 47, 20, .12); }
 .rail-heading { display: flex; align-items: center; gap: 10px; margin: 27px 10px 22px; font-weight: 620; font-size: .88rem; }

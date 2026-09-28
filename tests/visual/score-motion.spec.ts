@@ -83,6 +83,37 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
 
 test.beforeAll(async () => { await mkdir(evidence, { recursive: true }) })
 
+test("desktop session rail stays viewport-height while the room and recent sessions scroll independently", async ({ page }) => {
+  await mockRoom(page, { large: true, audiotool: true })
+  await page.route("**/api/v1/projects", route => route.fulfill({ json: { projects: Array.from({ length: 40 }, (_, i) => ({ id: i ? `room-${i}` : projectId, title: i ? `Session ${i}` : "Night Drive", currentRevisionId: null, version: 1, createdAt: "2026-09-26" })) } }))
+  await page.reload()
+  await page.setViewportSize({ width: 1440, height: 800 })
+  const rail = page.getByRole("complementary", { name: "Session navigation" })
+  await expect(rail.getByRole("button", { name: "Session 39", exact: true })).toBeAttached()
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100)
+  await expect.poll(async () => (await rail.boundingBox())!.y).toBe(0)
+  expect((await rail.boundingBox())!.height).toBe(800)
+  await expect(rail.locator(".brand-lockup")).toBeInViewport()
+  await expect(rail.locator(".account-row")).toBeInViewport()
+  const pageY = await page.evaluate(() => window.scrollY)
+  await rail.locator(".rail-list").evaluate(element => { element.scrollTop = element.scrollHeight })
+  await expect(rail.getByRole("button", { name: "Session 39", exact: true })).toBeInViewport()
+  expect(await page.evaluate(() => window.scrollY)).toBe(pageY)
+  await page.screenshot({ path: `${evidence}/sidebar-scrolled-desktop.png` })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await expect(rail).toBeHidden()
+  const open = page.getByRole("button", { name: "Open sessions" })
+  await open.click()
+  await expect(page.getByRole("dialog")).toBeVisible()
+  await page.getByRole("dialog").getByRole("button", { name: "Session 39", exact: true }).scrollIntoViewIfNeeded()
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Session 39", exact: true })).toBeInViewport()
+  await page.screenshot({ path: `${evidence}/sidebar-mobile-navigation.png` })
+  await page.keyboard.press("Escape")
+  await expect(open).toBeFocused()
+})
+
 test("welcome explains the creative loop and compact session status stays accessible", async ({ page }) => {
   const room = await mockRoom(page)
   let creates = 0
