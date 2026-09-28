@@ -12,6 +12,7 @@ function issueMessage(message: string | null | undefined, fallback: string) {
   if (/MODEL_CALL_LIMIT|model-call allowance|step limit/i.test(message)) return "The producer reached this request’s step limit."
   if (/REPEATED_NO_PROGRESS/i.test(message)) return "The producer repeated steps without making progress. Your draft is saved."
   if (/INPUT_LIMIT/i.test(message)) return "The producer’s conversation became too long. Your draft is saved."
+  if (/REVIEW_EXHAUSTED|final review.*review allowance/i.test(message)) return "The final musical review could not be completed. Your draft is saved."
   if (/input or output|(?:input|output|response) allowance|INCOMPLETE_RESPONSE|tokens/i.test(message)) return "The producer could not finish its response. Your draft is saved."
   if (/MODEL_BUDGET_EXCEEDED:USER/i.test(message)) return "You’ve reached your usage limit. Your draft is saved."
   if (/MODEL_BUDGET_EXCEEDED:(?:MODEL|SITE)/i.test(message)) return "The shared demo allowance is unavailable for the next step. Your draft is saved."
