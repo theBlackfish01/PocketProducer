@@ -14,6 +14,10 @@ Commands below use `pnpm`; on Windows, use `corepack pnpm` if `pnpm` is not on P
 
 ## 2. Railway project and services
 
+**Do not accept an inferred three-service workspace deployment.** Railway may suggest separate `@pocket/web`, `@pocket/api` and `@pocket/worker` services and start Vite with `pnpm --filter @pocket/web dev`. That is not this application's hosted topology. Use one repository-root Dockerfile service plus PostgreSQL, with no custom application start command. Verify the actual build log uses the Dockerfile and the actual volume list contains a mounted volume UUID; a proposed volume name in a configuration patch is not proof that storage exists.
+
+If Railway's current API rejects the older `railway.toml` config-file setting, set the equivalent health check, restart policy, root, Dockerfile path and replica/sleep settings directly on the service. Do not put `railway.toml` in a Nixpacks config field. Confirm the resulting deployment settings and runtime logs before enabling access.
+
 Create/select the correct workspace, then create:
 
 1. **Postgres** with its persistent database volume. Keep it on Railway private networking. Public DB access is only needed temporarily for a controlled migration; remove it afterward.
@@ -52,6 +56,8 @@ Copy the template in `deploy/railway.env.example` into **service variables**, re
 Budget configuration must move with the ledger. Do **not** infer unused provider credit from configured limits. Start with zero limits in the template. After verifying the restored ledger, copy the current authorized values from the existing installation: `SOL_POOL_BUDGET_USD`, `LUNA_POOL_BUDGET_USD`, `OPENAI_POOL_BUDGET_USD`, `GEMINI_POOL_BUDGET_USD`, `GATEWAY_POOL_BUDGET_USD`, `INITIAL_BUILD_API_BUDGET_USD`, `DEFAULT_USER_BUDGET_USD`, and `MAX_JOB_COST_USD`. Also carry over run/model settings. The approved model allocations are cumulative Sol $5 and Luna $50, not fresh deployment credits. Earlier other-model spending and unknown liabilities stay counted. Leave `AI_GATEWAY_API_KEY` unset unless deliberately maintaining an old Gateway request; do not resume one just because the key exists.
 
 ## 4. Preserve existing data and spending (before live startup)
+
+The owner may explicitly choose a fresh hosted database and leave local test projects/audio behind. In that case no asset relocation, old encryption-key transfer or original-owner prebinding is needed: generate a new private session key and let verified Audiotool sign-in create the hosted owner. Keep generation disabled (no provider keys and zero allowances) until remaining cumulative spend/unknown liabilities are accounted for or the owner explicitly authorizes new hosted allocations. Skipping project transfer is not permission to silently reset the spending allowance. Leave the local installation and its records intact.
 
 Do this during a short maintenance window. Stop local API/worker and ensure there are no running, queued or cancel-requested jobs before taking the snapshot. Do not run local and hosted workers concurrently against a copied ledger. A split database can spend the same remaining allowance twice.
 

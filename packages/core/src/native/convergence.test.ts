@@ -1,11 +1,17 @@
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import { boundOpenAiRequest } from "../agent/runtime.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import * as configuration from "../config.js";
 import { NativeConvergenceMonitor, nativeFinishingGuidance, nativeReadEvidence, withNativeFinishingContext, compactNativeReadHistory } from "./convergence.js";
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {
   it("omits the final optional observation before rejecting otherwise fitting mandatory context", () => {
+    // This boundary case requires 128k; do not depend on the developer's .env
+    // overriding the installation default (96k on a clean CI runner).
+    const config = configuration.getConfig();
+    const configSpy = vi.spyOn(configuration, "getConfig").mockReturnValue({ ...config, MAX_OPENAI_INPUT_TOKENS: 128000 });
+    onTestFinished(() => configSpy.mockRestore());
     const brief = new HumanMessage("Exact original brief");
     const system = new SystemMessage("s".repeat(124500));
     const history = [brief, new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(20000) }] }, tool_calls: [{ id: "read", name: "inspect_native_part", args: { partId: "bass" } }] }), new ToolMessage({ tool_call_id: "read", content: JSON.stringify({ documentHash: "current", part: { id: "bass", detail: "n".repeat(1800) } }) })];
