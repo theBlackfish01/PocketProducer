@@ -131,6 +131,9 @@ it("sends meter, duration and incomplete-preview evidence in actual critic input
 });
 
 it.each([128000, 110000])("fits a large arranged score into the %i critic envelope without losing the brief or section coverage", async (limit) => {
+  // Test the specified captured envelope independently of local .env / CI's 96k default.
+  // afterEach restores the installation configuration; production limits are unchanged.
+  config.MAX_OPENAI_INPUT_TOKENS = limit;
   const { job, session } = await prepared();
   job.request._nativeRun = { ...(job.request._nativeRun as object), maxInputTokens: limit };
   const document = nativeDocumentSchema.parse({ ...session.document, bars: 96,
