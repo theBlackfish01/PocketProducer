@@ -12,14 +12,26 @@ import { nativeCreativeStateSchema, nativePlanSchema, nativeStageSchema, type Na
 import { nativeReviewSchema, type NativeReview } from "./critique.js";
 import { appendPublicActivity } from "./activity.js";
 import { modelProvider, producerModelSchema } from "../providers/models.js";
-import { sharedUsageBlock } from "../providers/limits.js";
+import { sharedUsageBlock, type UsageBlock } from "../providers/limits.js";
+import { allowanceMessage, selectFundedRoute, lunaHandoffLimits } from "../providers/demo-policy.js";
+import { modelCredentials } from "../providers/models.js";
 import { nativeReviewPlanHash, nativeReviewContextHash } from "./plan.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
 
-function sharedAllowanceReason(block: "SITE" | "PROVIDER" | "USER"): string {
-  const scope = block === "SITE" ? "installation-wide API" : block === "PROVIDER" ? "selected provider's shared" : "per-user";
+// Call only under the existing global budget transaction lock. This bounds the
+// public queue without spending reservations or changing captured job profiles.
+async function hostedQueueCapacity(client: pg.PoolClient, ownerId: string) {
+  if (getConfig().DEV_LOCAL_AUTH) return;
+  const active = await client.query<{ total: number; owned: number }>(`SELECT count(*)::int AS total,
+    count(*) FILTER (WHERE owner_id=$1)::int AS owned FROM job WHERE state IN ('queued','running','cancel_requested')`, [ownerId]);
+  if (active.rows[0]!.owned >= 1) throw Object.assign(new Error("Let your current request finish before starting another."), { statusCode: 429 });
+  if (active.rows[0]!.total >= 8) throw Object.assign(new Error("The shared studio is busy. Please try again shortly."), { statusCode: 429 });
+}
+
+function sharedAllowanceReason(block: UsageBlock): string {
+  const scope = block === "SITE" ? "installation-wide API" : block === "PROVIDER" ? "selected provider's shared" : block === "MODEL" ? "selected model's shared" : "per-user";
   return `The ${scope} allowance cannot reserve another call; increasing this request alone will not help.`;
 }
 
@@ -29,10 +41,11 @@ async function head(client: pg.PoolClient, ownerId: string, projectId: string, l
 }
 
 export async function createNativeJob(input: { ownerId: string; projectId: string; kind: "native-generation" | "native-revision" | "native-sync"; idempotencyKey: string; request: Record<string, unknown>; expectedHeadId: string | null }): Promise<{ id: string; duplicate: boolean }> {
-  const requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard"), input.request.model === undefined ? undefined : producerModelSchema.parse(input.request.model)) };
+  let requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard"), input.request.model === undefined ? undefined : producerModelSchema.parse(input.request.model)) };
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('pocket-producer-provider-budget-v1'))");
     const existing = await client.query<{ id: string; request: Record<string, unknown> }>("SELECT id,request FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND idempotency_key=$4 FOR UPDATE", [input.ownerId, input.projectId, input.kind, input.idempotencyKey]);
     if (existing.rows[0]) {
       const priorRequest = { ...existing.rows[0].request };
@@ -70,6 +83,7 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
       if (uncertain.rowCount) throw Object.assign(new Error("An earlier request has an uncertain outcome. Review it before starting another."), { statusCode: 409 });
     }
     const current = await head(client, input.ownerId, input.projectId, true);
+    await hostedQueueCapacity(client, input.ownerId);
     if (current !== input.expectedHeadId) throw Object.assign(new Error("Native head changed; refresh before continuing"), { statusCode: 409 });
     if (input.kind === "native-generation" && current) throw Object.assign(new Error("This room already has a native construction; revise it instead"), { statusCode: 409 });
     if (input.kind !== "native-generation" && !current) throw Object.assign(new Error("Construct a native project first"), { statusCode: 409 });
@@ -89,6 +103,14 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     for (const assetId of assetIds) {
       const asset = await client.query("SELECT 1 FROM asset WHERE id=$1 AND owner_id=$2 AND project_id=$3 AND kind='source' AND readiness='ready'", [assetId, input.ownerId, input.projectId]);
       if (asset.rowCount !== 1) throw Object.assign(new Error("A selected source is unavailable in this room"), { statusCode: 422 });
+    }
+    const requestedLimits = jobNativeRunLimits(requestWithLimits);
+    // Opt-in shared-demo policy; existing self-hosted installations retain their
+    // captured routing unless model pools are configured. Reservations always enforce caps.
+    if (requestedLimits && getConfig().SOL_POOL_BUDGET_USD !== undefined && getConfig().LUNA_POOL_BUDGET_USD !== undefined) {
+      const selected = await selectFundedRoute(client, input.ownerId, requestedLimits);
+      if (selected.blocked) throw Object.assign(new Error(allowanceMessage(selected.blocked)), { statusCode: 409 });
+      requestWithLimits = { ...requestWithLimits, _nativeRun: selected.limits };
     }
     const hash = canonicalHash({ version: "native-command-v1", ...input, request: requestWithLimits });
     const inserted = await client.query<{ id: string }>(
@@ -110,8 +132,43 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
       ...(typeof input.request.targetSectionId === "string" ? { sectionId: input.request.targetSectionId } : {}),
       ...(typeof input.request.targetPartId === "string" ? { partId: input.request.targetPartId } : {}),
     });
+    if (requestedLimits && requestedLimits.model !== jobNativeRunLimits(requestWithLimits)?.model) await appendPublicActivity(client, { ...input, jobId: id }, `model-route:${id}`, { version: 1, kind: "working", text: "Sol's shared allowance is unavailable. Starting with Luna." });
     await client.query("COMMIT");
     return { id, duplicate: false };
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
+/** Only a pre-dispatch Sol pool refusal can request this handoff. All other
+ * limits and unknown effects remain fences. The same job and deadline survive. */
+export async function handoffNativeToLuna(job: JobRecord, requiredSolReservation: number): Promise<boolean> {
+  if (jobNativeRunLimits(job.request)?.model !== "gpt-6-sol") return false;
+  if (getConfig().LUNA_POOL_BUDGET_USD === undefined) return false;
+  if (!getConfig().FIXTURE_MODE && !modelCredentials("gpt-6-luna").apiKey) return false;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('pocket-producer-provider-budget-v1'))");
+    await assertSyncLease(client, job);
+    const stored = (await client.query<{ request: Record<string, unknown> }>("SELECT request FROM job WHERE id=$1", [job.id])).rows[0]!.request;
+    const limits = jobNativeRunLimits(stored)!;
+    if (limits.model !== "gpt-6-sol" || await sharedUsageBlock(client, job.ownerId, "openai", requiredSolReservation, "gpt-6-sol") !== "MODEL") { await client.query("ROLLBACK"); return false; }
+    if (await head(client, job.ownerId, job.projectId, true) !== (stored.expectedNativeHeadId ?? null)) throw new JobControlError("LEASE_LOST", "Selected version changed before model handoff");
+    const unknown = await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND step<>'native-producer-result' AND (state<>'succeeded' OR cost_status<>'observed') LIMIT 1", [job.id]);
+    if (unknown.rowCount) { await client.query("ROLLBACK"); return false; }
+    const next = lunaHandoffLimits(limits);
+    const hasMusic = Boolean((await client.query("SELECT 1 FROM native_job_step WHERE job_id=$1 LIMIT 1", [job.id])).rowCount);
+    const required = Math.ceil(minimumNextNativeReservationUsd(next, hasMusic) * 1e6);
+    if (await sharedUsageBlock(client, job.ownerId, "openai", required, next.model)) { await client.query("ROLLBACK"); return false; }
+    const totals = (await client.query<{ amount: string; calls: string }>("SELECT COALESCE(sum(actual_cost_microusd),0)::text AS amount, count(*) FILTER (WHERE reservation_microusd>0)::text AS calls FROM effect WHERE job_id=$1", [job.id])).rows[0]!;
+    if (Number(totals.calls) >= limits.maxCalls || Number(totals.amount) + required > Math.min(limits.maxJobCostUsd, getConfig().MAX_JOB_COST_USD) * 1e6) { await client.query("ROLLBACK"); return false; }
+    const request = { ...stored, _nativeRunCurrent: next };
+    await client.query("UPDATE job SET request=$2,updated_at=now() WHERE id=$1", [job.id, request]);
+    await client.query("INSERT INTO native_model_handoff(job_id,from_limits,to_limits) VALUES($1,$2,$3)", [job.id, limits, next]);
+    await appendPublicActivity(client, { ownerId: job.ownerId, projectId: job.projectId, jobId: job.id }, `model-handoff:${job.id}`, { version: 1, kind: "continued", text: "Continuing with Luna." });
+    await client.query("COMMIT");
+    job.request = request;
+    return true;
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
 }
@@ -174,10 +231,11 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
         COALESCE(SUM(CASE WHEN job_id=$1 THEN CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END ELSE 0 END),0)::text AS job_committed,
         COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS site_committed FROM effect`, [jobId]);
       const hasMusic = await client.query("SELECT 1 FROM native_job_step WHERE job_id=$1 LIMIT 1", [jobId]);
-      const minimum = minimumNextNativeReservationUsd(limits, Boolean(hasMusic.rowCount));
+      const route = await selectFundedRoute(client, ownerId, limits, Boolean(hasMusic.rowCount));
+      const minimum = minimumNextNativeReservationUsd(route.limits, Boolean(hasMusic.rowCount));
       // Advisory check only: reservations retain their budget-before-job lock order
       // and recheck atomically before dispatch, including any concurrent spending.
-      const sharedBlock = await sharedUsageBlock(client, ownerId, modelProvider(limits.model), Math.ceil(minimum * 1e6));
+      const sharedBlock = route.blocked;
       if (sharedBlock) throw Object.assign(new Error(sharedAllowanceReason(sharedBlock)), { statusCode: 409 });
       if (limits.maxJobCostUsd - Number(amounts.rows[0]!.job_committed) / 1_000_000 < minimum || getConfig().INITIAL_BUILD_API_BUDGET_USD - Number(amounts.rows[0]!.site_committed) / 1_000_000 < minimum) throw Object.assign(new Error("A next model call cannot fit the current request or installation allowance; increase the applicable limit before continuing"), { statusCode: 409 });
     }
@@ -193,6 +251,7 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
       await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
     }
     if (aggregate?.state !== "dispatched" && !legacyZeroStepPause) throw Object.assign(new Error("No safely resumable producer effect remains"), { statusCode: 409 });
+    await hostedQueueCapacity(client, ownerId);
     await client.query("UPDATE job SET state='queued',stage=NULL,error_code=NULL,error_message=NULL,deadline_at=now()+make_interval(secs=>$2),updated_at=now() WHERE id=$1", [jobId, limits?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'continued',$2 FROM job WHERE id=$1", [jobId, { message: "Continuing confirmed native work under the original request and budget" }]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
@@ -322,9 +381,10 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const legacyZeroStepPause = aggregateRow?.state === "failed" && aggregateRow.cost_status === "observed" && Number(aggregateRow.reservation_microusd) === 0 && session.applied.length === 0
     && /(?:MODEL_BUDGET_EXCEEDED|MODEL_CALL_LIMIT_EXCEEDED|OPENAI_INPUT_LIMIT_EXCEEDED|OPENAI_INCOMPLETE_RESPONSE)/.test(stopped);
   const aggregateRecoverable = aggregateRow?.state === "dispatched" || legacyZeroStepPause;
-  const minimumNextCallUsd = runLimits ? minimumNextNativeReservationUsd(runLimits, session.applied.length > 0) : 0;
+  const fundedRoute = runLimits ? await selectFundedRoute(getPool(), ownerId, runLimits, session.applied.length > 0) : null;
+  const minimumNextCallUsd = fundedRoute ? minimumNextNativeReservationUsd(fundedRoute.limits, session.applied.length > 0) : 0;
   const siteBudgetBlocked = siteRemainingUsd < minimumNextCallUsd;
-  const sharedBlock = await sharedUsageBlock(getPool(), ownerId, modelProvider(runLimits?.model ?? getConfig().OPENAI_MODEL), Math.ceil(minimumNextCallUsd * 1e6));
+  const sharedBlock = fundedRoute ? fundedRoute.blocked : await sharedUsageBlock(getPool(), ownerId, modelProvider(getConfig().OPENAI_MODEL), Math.ceil(minimumNextCallUsd * 1e6), getConfig().OPENAI_MODEL);
   const budgetBlocked = Boolean(sharedBlock) || siteBudgetBlocked || (runLimits?.maxJobCostUsd ?? 0) - spentUsd - reservedUsd < minimumNextCallUsd;
   const outputBlocked = /OPENAI_INCOMPLETE_RESPONSE/.test(stopped) && (runLimits?.maxOutputTokens ?? 0) <= (jobNativeRunLimits(originalNativeRequest(request))?.maxOutputTokens ?? 0);
   const savedPlan = await loadNativePlan(jobId);

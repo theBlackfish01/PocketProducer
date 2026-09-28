@@ -13,12 +13,20 @@ const configSchema = z.object({
   APP_ENV: z.enum(["development", "test", "production"]).default("development"),
   APP_ORIGIN: z.url().default("http://127.0.0.1:5173"),
   API_PORT: z.coerce.number().int().min(1).max(65_535).default(8787),
+  PORT: z.coerce.number().int().min(1).max(65_535).optional(),
+  SERVE_WEB: booleanString.default(false),
+  HOSTED_MAINTENANCE: booleanString.default(false),
+  HOSTED_AUTH_MODE: z.enum(["audiotool", "invite"]).default("audiotool"),
+  AUDIOTOOL_SESSION_KEY: optionalSecret,
   DATABASE_URL: z.string().min(1).default("postgresql://pocket:pocket_local_only@127.0.0.1:54329/pocket_producer"),
   OBJECT_STORAGE_LOCAL_ROOT: z.string().default(".local/audio"),
   OPENAI_API_KEY: optionalSecret,
   AI_GATEWAY_API_KEY: optionalSecret,
   VERCEL_AI_GATEWAY_API_KEY: optionalSecret,
   OPENAI_POOL_BUDGET_USD: z.coerce.number().min(0).max(100).optional(),
+  SOL_POOL_BUDGET_USD: z.preprocess((value) => value === "" ? undefined : value, z.coerce.number().min(0).max(100).optional()),
+  LUNA_POOL_BUDGET_USD: z.preprocess((value) => value === "" ? undefined : value, z.coerce.number().min(0).max(100).optional()),
+  SOURCE_REPOSITORY_PUBLIC: booleanString.default(false),
   GEMINI_POOL_BUDGET_USD: z.coerce.number().min(0).max(100).default(5),
   GATEWAY_POOL_BUDGET_USD: z.coerce.number().min(0).max(100).default(10),
   DEFAULT_USER_BUDGET_USD: z.coerce.number().min(0).max(100).default(13),
@@ -67,6 +75,14 @@ export function getConfig(): AppConfig {
   }
   if (cachedConfig.APP_ENV === "production" && cachedConfig.DEV_LOCAL_AUTH) {
     throw new Error("DEV_LOCAL_AUTH must be false in production");
+  }
+  if (cachedConfig.APP_ENV === "production") {
+    const origin = new URL(cachedConfig.APP_ORIGIN);
+    if (origin.protocol !== "https:" || origin.origin !== cachedConfig.APP_ORIGIN) throw new Error("Production APP_ORIGIN must be an exact HTTPS origin without a trailing slash");
+    if (!cachedConfig.AUDIOTOOL_SESSION_KEY || !/^[A-Za-z0-9+/]{43}=$/.test(cachedConfig.AUDIOTOOL_SESSION_KEY)) throw new Error("Production requires AUDIOTOOL_SESSION_KEY: base64 of exactly 32 random bytes");
+    if (!cachedConfig.SERVE_WEB) throw new Error("Production requires SERVE_WEB=true for same-origin hosting");
+    if (cachedConfig.HOSTED_AUTH_MODE === "audiotool" && (!cachedConfig.AUDIOTOOL_CLIENT_ID || !cachedConfig.AUDIOTOOL_SCOPES.split(/\s+/).includes("user:read"))) throw new Error("Audiotool sign-in requires AUDIOTOOL_CLIENT_ID and user:read scope");
+    if (cachedConfig.AUDIOTOOL_CLIENT_ID && cachedConfig.AUDIOTOOL_REDIRECT_URL !== `${cachedConfig.APP_ORIGIN}/auth/audiotool/callback`) throw new Error("Audiotool callback must match the hosted application origin");
   }
   if (cachedConfig.APP_ENV === "test") {
     const databaseName = new URL(cachedConfig.DATABASE_URL).pathname.slice(1);

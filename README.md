@@ -16,7 +16,7 @@ Start with a mood, a detailed production brief, or an unfinished idea. Pocket Pr
 
 The result is **editable music**, not just a flattened audio file. When you're ready, explicitly copy a saved arrangement to Audiotool and continue working in Studio.
 
-> **Current boundary:** this is a local development preview. Native full-mix rendering and playback inside Pocket Producer are not implemented. You can audition source samples; those are not a playback of the arrangement. It is not ready to be exposed as a public multi-user service.
+> **Listening:** audition source samples here, then copy your arrangement to Audiotool Studio to hear and continue editing it. In-app full-mix playback is not implemented.
 
 ## The creative loop
 
@@ -159,6 +159,8 @@ On Linux, use `pnpm exec playwright install --with-deps chromium` when system br
 Coverage includes protected revisions, immutable history, ownership, duplicate requests, worker restart/contention, cancellation, unknown provider outcomes, quota recovery, tool errors, source handling, desktop/phone layouts and reduced motion. [STATUS](docs/STATUS.md) records actual commands and results; [testing notes](docs/testing.md) distinguish scripted evidence from live-provider evidence.
 
 ## Repository guide
+
+Hosting a demo? Follow the [Railway deployment guide](docs/RAILWAY-DEPLOYMENT.md) for Sign in with Audiotool, private user sessions, persistent storage and the launch checklist.
 
 ```text
 apps/web/          Listening Room and source audition

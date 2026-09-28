@@ -50,7 +50,8 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname
     let json: unknown
-    if (path.endsWith("/integrations/audiotool/profile")) json = { profile: { userName: "fixture", displayName: "Fixture musician", avatarUrl: null } }
+    if (path.endsWith("/auth/session")) json = { mode: "development", user: { ownerId: "fixture", displayName: "Fixture" } }
+    else if (path.endsWith("/integrations/audiotool/profile")) json = { profile: { userName: "fixture", displayName: "Fixture musician", avatarUrl: null } }
     else if (path.endsWith("/producer-models")) json = { models: [{ id: "gpt-6-sol", label: "GPT-6 Sol", provider: "openai", available: true }, { id: "gpt-6-luna", label: "GPT-6 Luna · xhigh", provider: "openai", available: true }, { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", provider: "gemini", available: true }] }
     else if (path.endsWith("/status")) json = { providers: { openai: false, gemini: false, audiotool: Boolean(options.audiotool) }, uploadFormats: ["audio/wav"], nexus: { sdk: "fixture", liveExportVerified: false, connection: options.audiotool ? "authorized" : "unconfigured", oauth: options.audiotool ? { clientId: "fixture", redirectUrl: "http://127.0.0.1:15174/auth/audiotool/callback", scope: "project:write" } : null, session: { connected: Boolean(options.audiotool), userName: options.audiotool ? "fixture" : null, expiresAt: null } } }
     else if (path.endsWith("/projects")) json = { projects: [{ id: projectId, title: "Night Drive", currentRevisionId: null, version: 1, createdAt: "2026-09-26" }] }

@@ -1,6 +1,6 @@
 # Security and private development
 
-Pocket Producer is a loopback-only development preview, not a production-hardened public service. Do not expose the API or development server through a public tunnel. The development identity is shared; an Audiotool avatar is not multi-user application authentication.
+Pocket Producer supports loopback development and hosted sign-in with Audiotool. Do not expose the development server/identity publicly. Production requires HTTPS, server-side PKCE/verified Audiotool identity and individual server sessions; invitation mode is optional. Follow [the hosted runbook](docs/RAILWAY-DEPLOYMENT.md). This is a small funded demo, not an independently security-audited public service. Account/request/queue controls and total spending caps do not prevent multiple Audiotool accounts or infrastructure-level denial of service. Use hosting-level monitoring/protection and revoke abusive owners without deleting their usage records.
 
 ## Keep private material out of Git
 

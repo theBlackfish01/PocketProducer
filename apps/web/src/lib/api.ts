@@ -47,6 +47,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       const response = await fetch(`/api/v1${path}`, { cache: "no-store", ...init, headers });
       if (response.ok) return await response.json() as T;
+      if (response.status === 401) { window.dispatchEvent(new Event("pocket:auth-expired")); throw new DOMException("Sign in to continue.", "AbortError") }
       if (retryableRead && response.status >= 502 && attempt < 4) {
         await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)))
         continue
@@ -83,7 +84,7 @@ export const api = {
   soundFeedback: (projectId: string) => request<{ feedback: SoundFeedback[] }>(`/projects/${projectId}/native/sound-feedback`),
   saveSoundFeedback: (projectId: string, input: Pick<SoundFeedback, "sampleName" | "contentHash" | "rating" | "note">) => request<{ feedback: SoundFeedback }>(`/projects/${projectId}/native/sound-feedback`, { method: "POST", body: JSON.stringify(input) }),
   searchLibraryPresets: (deviceType: "heisenberg" | "pulverisateur" | "gakki" | "beatbox8", query: string) => request<{ presets: Array<{ name: string; displayName: string; ownerName: string; deviceType: string; tags: string[] }>; provenance: string }>(`/native/library/presets?deviceType=${encodeURIComponent(deviceType)}&query=${encodeURIComponent(query)}`),
-  producerModels: (signal?: AbortSignal) => request<{ models: ProducerModelOption[] }>("/producer-models", { signal }),
+  producerModels: (signal?: AbortSignal) => request<{ models: ProducerModelOption[]; fallbackModel?: string | null; repository?: { url: string; public: boolean } }>("/producer-models", { signal }),
   constructNative: (projectId: string, direction: string, sourceAssetIds: string[], idempotencyKey: string, profile: "standard" | "extended" = "standard", model?: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/constructions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, profile, model, sourceAssetIds, expectedNativeHeadId: null }) }),
   reviseNative: (projectId: string, input: { direction: string; model?: string; profile?: "standard" | "extended"; baseNativeRevisionId: string; expectedNativeHeadId: string; targetPartId?: string; targetSectionId?: string; protectionChange?: { expectedPartIds: string[]; desiredPartIds: string[] }; sourceAssetIds: string[] }, idempotencyKey: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/revisions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
   abandonNative: (projectId: string, jobId: string) => request<{ jobId: string; abandoned: boolean }>(`/projects/${projectId}/native/requests/${jobId}/abandon`, { method: "POST", body: "{}" }),
@@ -101,4 +102,4 @@ export const api = {
     return response.json() as Promise<{ asset: { id: string; name: string } }>;
   }
 };
-export interface ProducerModelOption { id: string; label: string; provider: string; available: boolean }
+export interface ProducerModelOption { id: string; label: string; provider: string; available: boolean; reason?: string | null }

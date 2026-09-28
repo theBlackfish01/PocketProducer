@@ -2,7 +2,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { mkdir, open, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { z } from "zod";
-import { REPOSITORY_ROOT } from "../config.js";
+import type pg from "pg";
+import { REPOSITORY_ROOT, getConfig } from "../config.js";
 import { getPool } from "../db/pool.js";
 
 const tokenSchema = z.object({
@@ -19,6 +20,11 @@ export class AudiotoolSessionExpiredError extends Error {
 const keyPath = resolve(REPOSITORY_ROOT, ".local/secrets/audiotool-session.key");
 
 async function sessionKey(): Promise<Buffer> {
+  const configured = getConfig().AUDIOTOOL_SESSION_KEY;
+  if (configured) {
+    if (!/^[A-Za-z0-9+/]{43}=$/.test(configured)) throw new Error("Invalid Audiotool session encryption key");
+    return Buffer.from(configured, "base64");
+  }
   try {
     const existing = await readFile(keyPath);
     if (existing.length !== 32) throw new Error("Audiotool session key has an invalid length");
@@ -54,10 +60,10 @@ async function decryptTokens(ownerId: string, row: { token_ciphertext: string; t
   return tokenSchema.parse(JSON.parse(plaintext));
 }
 
-export async function saveAudiotoolSession(ownerId: string, userName: string, input: unknown): Promise<void> {
+export async function saveAudiotoolSession(ownerId: string, userName: string, input: unknown, database: pg.Pool | pg.PoolClient = getPool()): Promise<void> {
   const tokens = tokenSchema.parse(input);
   const encrypted = await encryptTokens(ownerId, tokens);
-  await getPool().query(
+  await database.query(
     `INSERT INTO audiotool_session(owner_id,user_name,token_ciphertext,token_iv,token_tag,expires_at)
      VALUES($1,$2,$3,$4,$5,to_timestamp($6::double precision/1000))
      ON CONFLICT(owner_id) DO UPDATE SET user_name=EXCLUDED.user_name,token_ciphertext=EXCLUDED.token_ciphertext,

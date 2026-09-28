@@ -115,3 +115,6 @@ Recheck Home/history, large-score end scrolling, keyboard focus return, phone ov
 3. Preserve semantic tokens and the Slider accessible-name forwarding.
 4. Run `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm test:e2e`, `pnpm test:visual` and inspect screenshots plus motion recordings.
 5. Record any generated-source divergence and migration note here.
+## Hosted entry — 2026-09-28
+
+Public entry now uses one full-width **Sign in with Audiotool** button, the existing Brand, owned Base UI button, ivory/forest/orange tokens and editorial heading font. No invitation input, dollar amounts or internal state appear in this mode. Inline errors are announced and keyboard activation works. The optional private invitation mode retains its labelled input. Sign out is separate from disconnecting Audiotool. React guidance informed guarded session reads/cache isolation; the score/section-inspection flow is unchanged. `auth.css` owns only the entry/account layout; update it alongside existing theme tokens, not a second primitive library. `tests/hosted/audiotool.spec.ts` exercises real hosted HTTP/cookies/database with scripted external consent/identity responses, desktop and emulated phone/reduced motion. Screenshots are `.local/evidence/audiotool-sign-in-desktop.png` and `audiotool-sign-in-mobile.png`.

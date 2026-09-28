@@ -8,6 +8,7 @@ export function friendlyIssue(message: string | null | undefined, fallback: stri
   if (/REPEATED_NO_PROGRESS/i.test(message)) return "The producer repeated steps without making progress. Your draft is saved."
   if (/input or output|INPUT_LIMIT|INCOMPLETE_RESPONSE|tokens/i.test(message)) return "This direction needs more processing room before it can continue."
   if (/MODEL_BUDGET_EXCEEDED:USER/i.test(message)) return "You’ve reached your usage limit. Your draft is saved."
+  if (/MODEL_BUDGET_EXCEEDED:(?:MODEL|SITE)/i.test(message)) return "The shared demo allowance is unavailable for the next step. Your draft is saved."
   if (/MODEL_BUDGET_EXCEEDED:PROVIDER/i.test(message)) return "This model’s shared allowance has been used. Your draft is saved."
   if (/PROVIDER_USAGE_UNKNOWN/i.test(message)) return "The model’s usage is still being checked. Your draft is saved."
   if (/budget|spend|allowance|reservation|charges/i.test(message)) return "The authorized spending allowance cannot cover another step. Your draft is saved."

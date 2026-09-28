@@ -4,6 +4,7 @@ const testDatabaseUrl = process.env.TEST_DATABASE_URL ?? "postgresql://pocket:po
 if (!new URL(testDatabaseUrl).pathname.slice(1).endsWith("_test")) throw new Error("E2E setup requires a dedicated *_test database");
 Object.assign(process.env, {
   AI_GATEWAY_API_KEY: "", VERCEL_AI_GATEWAY_API_KEY: "",
+  SOL_POOL_BUDGET_USD: "", LUNA_POOL_BUDGET_USD: "", SOURCE_REPOSITORY_PUBLIC: "false",
   APP_ENV: "test", DATABASE_URL: testDatabaseUrl, OBJECT_STORAGE_LOCAL_ROOT: process.env.TEST_OBJECT_STORAGE_LOCAL_ROOT ?? ".local/test-audio", FIXTURE_MODE: "true", DEV_LOCAL_AUTH: "true",
   OPENAI_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "", INITIAL_BUILD_API_BUDGET_USD: "0", MAX_JOB_COST_USD: "0"
 });

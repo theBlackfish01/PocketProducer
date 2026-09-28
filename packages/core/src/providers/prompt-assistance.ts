@@ -85,7 +85,7 @@ export async function assistMusicalPrompt(ownerId: string, projectId: string, ke
     if (pending.rowCount) throw issue("An earlier prompt request is still being checked. Keep writing while it settles.");
     const total = await client.query<{ total: string }>("SELECT COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS total FROM effect");
     if (!config.FIXTURE_MODE && (Number(total.rows[0]?.total ?? 0) + reservation > config.INITIAL_BUILD_API_BUDGET_USD * 1_000_000 || reservation > config.MAX_JOB_COST_USD * 1_000_000)) throw issue("Prompt help is unavailable with the current setup. Your direction is unchanged.");
-    if (!config.FIXTURE_MODE) await assertSharedUsage(client, ownerId, "openai", reservation);
+    if (!config.FIXTURE_MODE) await assertSharedUsage(client, ownerId, "openai", reservation, model);
     const row = await client.query<{ id: string }>("INSERT INTO prompt_assistance(owner_id,project_id,idempotency_key,input_hash,request) VALUES($1,$2,$3,$4,$5) RETURNING id", [ownerId, projectId, key, hash, { ...input, model, version, outputTokens }]);
     const effect = await client.query<{ id: string }>("INSERT INTO effect(prompt_assistance_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd,cost_status,dispatched_at) VALUES($1,'prompt-assistance',$2,$3,'dispatched','openai',$4,$5,$6,'unknown',now()) RETURNING id", [row.rows[0]!.id, key, hash, model, version, reservation]);
     effectId = effect.rows[0]!.id;

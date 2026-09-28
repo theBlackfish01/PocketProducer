@@ -8,6 +8,10 @@
     "node": ">=22.12.0 <25"
   },
   "scripts": {
+    "start": "node --import tsx scripts/start-hosted.ts",
+    "access": "tsx scripts/manage-access.ts",
+    "assets:relocate": "tsx scripts/relocate-assets.ts",
+    "test:hosted": "pnpm test:prepare && pnpm --filter @pocket/web build && playwright test --config tests/hosted.playwright.config.ts",
     "dev": "concurrently -n api,worker,web -c green,magenta,cyan \"pnpm dev:api\" \"pnpm dev:worker\" \"pnpm dev:web\"",
     "dev:api": "pnpm --filter @pocket/api dev",
     "dev:worker": "pnpm --filter @pocket/worker dev",
@@ -19,7 +23,7 @@
     "generate:fixtures": "tsx scripts/generate-fixtures.ts",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -b",
-    "test": "vitest run --config vitest.config.ts --exclude \"tests/integration/**\" --exclude \"tests/e2e/**\" --exclude \"tests/visual/**\"",
+    "test": "vitest run --config vitest.config.ts --exclude \"tests/integration/**\" --exclude \"tests/e2e/**\" --exclude \"tests/visual/**\" --exclude \"tests/hosted/**\"",
     "test:prepare": "tsx packages/core/src/db/prepare-test.ts",
     "test:integration": "pnpm test:prepare && vitest run --config vitest.config.ts tests/integration",
     "test:e2e:prepare": "pnpm test:prepare && tsx scripts/prepare-e2e.ts",

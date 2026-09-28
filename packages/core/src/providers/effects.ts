@@ -96,9 +96,9 @@ export async function reserveProviderEffect(input: {
     const overall = Number(totals.rows[0]?.overall ?? 0);
     const job = Number(totals.rows[0]?.job ?? 0);
     if (input.reservationMicrousd < 0) throw new Error("Invalid model reservation");
+    if (input.provider !== "audiotool") await assertSharedUsage(client, input.job.ownerId, input.provider, input.reservationMicrousd, input.model);
     if (overall + input.reservationMicrousd > overallLimit) throw new Error("MODEL_BUDGET_EXCEEDED:SITE");
     if (job + input.reservationMicrousd > jobLimit) throw new Error("MODEL_BUDGET_EXCEEDED:JOB");
-    if (input.provider !== "audiotool") await assertSharedUsage(client, input.job.ownerId, input.provider, input.reservationMicrousd);
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd,attempt_id,lease_generation)
        VALUES($1,$2,$3,$4,'reserved',$5,$6,$7,$8,$9,$10) RETURNING id`,

@@ -1,11 +1,18 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { getConfig } from "../config.js";
 import { nativeRunLimits, jobNativeRunLimits } from "../native/profile.js";
 import { CompatibleProducerModel, compatibleMessages, producerChatModel, reportedGatewayCost } from "./compatible-model.js";
 import { modelCredentials, producerModels, selectableProducerModelSchema } from "./models.js";
+import { boundOpenAiRequest } from "../agent/runtime.js";
 const config = getConfig(), original = { ...config };
 afterEach(() => { Object.assign(config, original); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it("bounds replayed Responses output and tool arguments even without assistant prose", () => {
+  const opaque = new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", id: "rs_offline", encrypted_content: "x".repeat(4000) }] } });
+  const call = new AIMessage({ content: "", tool_calls: [{ id: "call_offline", name: "inspect", args: { description: "x".repeat(4000) } }] });
+  for (const message of [opaque, call]) expect(() => boundOpenAiRequest([[message]], 100, 3000)).toThrow(/OPENAI_INPUT_LIMIT_EXCEEDED/);
+});
 
 it("offers Luna xhigh instead of DeepSeek while retaining captured historical jobs", () => {
   expect(producerModels().map((model) => model.id)).toEqual(["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash"]);

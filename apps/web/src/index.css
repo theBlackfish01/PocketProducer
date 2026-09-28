@@ -1,8 +1,14 @@
 @import "tailwindcss";
+
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 @import "./features/native/producer-workspace.css";
+
+.repository-link { display: inline-flex; align-items: center; gap: .45rem; padding: .65rem .25rem; font-size: .8rem; color: var(--muted-foreground); text-decoration: none; }
+.repository-link:hover { color: var(--foreground); text-decoration: underline; }
+.repository-link:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; border-radius: .25rem; }
+.demo-availability { font-size: .85rem; color: var(--muted-foreground); margin-top: .75rem; }
 
 @theme inline {
   --font-heading: Georgia, "Times New Roman", serif;

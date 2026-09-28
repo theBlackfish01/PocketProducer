@@ -5,5 +5,5 @@
     "noEmit": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts", "../apps/api/src/auth.ts", "../apps/api/src/activity-stream.ts", "../apps/api/src/server.ts", "../apps/api/src/web.ts"]
 }

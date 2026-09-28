@@ -3,6 +3,7 @@ import { AudioLines, FolderOpen, Menu, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Brand } from "@/components/brand"
 import { ConnectedAccount } from "@/components/connected-account"
+import { RepositoryLink } from "@/components/repository-link"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { NativeRoom } from "@/features/native/native-room"
 import { api, type AppStatus, type Project, type SessionSnapshot } from "@/lib/api"
@@ -11,7 +12,7 @@ import { navigateSession, sessionFromPath } from "@/lib/session-route"
 
 const returnSessionKey = "pocket-producer:audiotool-return"
 
-export default function App() {
+export default function App({ onSignOut, listenerName, hostedAudiotool = false }: { onSignOut?: () => void; listenerName?: string; hostedAudiotool?: boolean }) {
   const [projects, setProjects] = useState<Project[]>([])
   const [snapshot, setSnapshot] = useState<SessionSnapshot | null>(null)
   const [nexus, setNexus] = useState<AppStatus["nexus"] | null>(null)
@@ -19,6 +20,12 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(false)
+  const [repositoryPublic, setRepositoryPublic] = useState(false)
+  useEffect(() => {
+    const controller = new AbortController()
+    void api.producerModels(controller.signal).then((data) => { if (!controller.signal.aborted) setRepositoryPublic(data.repository?.public === true) }).catch(() => undefined)
+    return () => controller.abort()
+  }, [])
   const activeProjectRef = useRef<string | null>(null)
   const requestRef = useRef(0)
   const mountedRef = useRef(false)
@@ -121,6 +128,16 @@ export default function App() {
 
   const connectAudiotool = async () => {
     if (!nexus?.oauth) return
+    if (hostedAudiotool) {
+      setError(null)
+      try {
+        const response = await fetch("/api/v1/auth/audiotool/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ returnPath: window.location.pathname }) })
+        const body = await response.json() as { url?: string; message?: string }
+        if (!response.ok || !body.url) throw new Error(body.message ?? "Unable to reconnect Audiotool")
+        window.location.assign(body.url)
+      } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to reconnect Audiotool") }
+      return
+    }
     const id = activeProjectRef.current
     sessionStorage.setItem(returnSessionKey, id ? `/sessions/${id}` : "/")
     setError(null)
@@ -138,6 +155,7 @@ export default function App() {
 
   const account = <ConnectedAccount connected={Boolean(nexus?.session.connected)} userName={nexus?.session.userName ?? null} onConnect={() => void connectAudiotool()} onDisconnect={() => { void api.disconnectAudiotool().then(() => api.status()).then((status) => setNexus(status.nexus)).catch(() => setError("Unable to disconnect Audiotool.")) }} />
 
+  const hostedAccount = onSignOut ? <div className="hosted-account"><span>{listenerName}</span><Button variant="ghost" onClick={onSignOut}>Sign out</Button></div> : null
   const navigation = <>
     <Button className="w-full justify-start rail-new" onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button>
     <div className="rail-heading"><FolderOpen className="size-4" /> Sessions</div>
@@ -146,13 +164,13 @@ export default function App() {
   </>
 
   return <div className="app-shell">
-    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}{account}</aside>
+    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}<RepositoryLink isPublic={repositoryPublic} />{account}{hostedAccount}</aside>
     <main className="main-area"><div className="main-inner">
       <div className="mobile-topbar"><Brand /><Button variant="ghost" size="icon" aria-label="Open sessions" onClick={() => setNavOpen(true)}><Menu /></Button></div>
       <div className="topline"><span>Listening Room <span aria-hidden="true">/</span> <strong>{snapshot?.project.title ?? "Welcome"}</strong></span></div>
       {error ? <div className="job-status" role="alert"><strong>Something needs attention</strong><p>{error}</p><Button variant="ghost" onClick={() => setError(null)}>Dismiss</Button></div> : null}
       {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot && nexus ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} audiotoolConnected={nexus.session.connected} audiotoolAvailable={Boolean(nexus.oauth)} onConnectAudiotool={() => void connectAudiotool()} onSourcesChanged={() => refreshSources(snapshot.project.id)} onProjectUpdated={() => { void refreshLabels().catch(() => undefined) }} /> : !error ? <div className="empty-surface"><h1>Your next piece starts here</h1><p>A mood, a moment or a detailed vision. What would you like to make?</p><Button onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button></div> : null}
     </div></main>
-    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your sessions</SheetDescription></SheetHeader><div className="mobile-session-list p-4">{navigation}{account}</div></SheetContent></Sheet>
+    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your sessions</SheetDescription></SheetHeader><div className="mobile-session-list p-4">{navigation}<RepositoryLink isPublic={repositoryPublic} />{account}{hostedAccount}</div></SheetContent></Sheet>
   </div>
 }

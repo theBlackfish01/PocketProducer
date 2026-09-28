@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
+import { handoffNativeToLuna } from "@pocket/core";
 import {
   appendAttemptEvent, canonicalHash, claimNextJob, closePool, commitCancelled, createAudiotoolServerClient, dispatchOutbox, expireJob, failJob, getConfig, heartbeat, isCancelled, jobNativeRunLimits, needsAttentionJob, providerAvailability, readProjectActivity, requeueJob, profileOwnedSourceWav, safeStoragePath, AudiotoolSessionExpiredError, JobControlError, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeHasMaterial, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type JobRecord, type NativeLibrary, type NativeLibraryClient, type NativeRemoteClient, type NativeSource
 } from "@pocket/core";
@@ -91,7 +92,7 @@ async function boundedNativeWait<T>(run: () => Promise<T>, job: JobRecord, signa
   finally { if (timer) clearTimeout(timer); if (onAbort) signal.removeEventListener("abort", onAbort); }
 }
 
-interface OfflineNativeConstruction { library: NativeLibrary; scriptedModel: NonNullable<Parameters<typeof produceNative>[0]["scriptedModel"]>; scriptedReviewer?: NonNullable<Parameters<typeof produceNative>[0]["scriptedReviewer"]>; scriptedGeminiClient?: NonNullable<Parameters<typeof produceNative>[0]["scriptedGeminiClient"]>; testGraphStepLimit?: number }
+interface OfflineNativeConstruction { library: NativeLibrary; scriptedModel: NonNullable<Parameters<typeof produceNative>[0]["scriptedModel"]>; scriptedFallbackModel?: NonNullable<Parameters<typeof produceNative>[0]["scriptedModel"]>; scriptedReviewer?: NonNullable<Parameters<typeof produceNative>[0]["scriptedReviewer"]>; scriptedGeminiClient?: NonNullable<Parameters<typeof produceNative>[0]["scriptedGeminiClient"]>; testGraphStepLimit?: number }
 async function nativeConstruction(job: JobRecord, signal: AbortSignal, offlineInput?: OfflineNativeConstruction): Promise<void> {
   const direction = typeof job.request.direction === "string" ? job.request.direction : "Construct an editable piece";
   const baseId = typeof job.request.baseNativeRevisionId === "string" ? job.request.baseNativeRevisionId : null;
@@ -279,7 +280,15 @@ export async function processJob(job: JobRecord, offlineNative?: OfflineNativeCo
   try {
     if (await isCancelled(job)) return await commitCancelled(job);
     await withLeaseMonitor(job, async (signal) => {
-      if (job.kind === "native-generation" || job.kind === "native-revision") await nativeConstruction(job, signal, offlineNative);
+      if (job.kind === "native-generation" || job.kind === "native-revision") {
+        try { await nativeConstruction(job, signal, offlineNative); }
+        catch (error) {
+          const denied = error instanceof Error ? /^MODEL_BUDGET_EXCEEDED:MODEL:gpt-6-sol:reservation=(\d+)$/.exec(error.message) : null;
+          if (!denied || !await handoffNativeToLuna(job, Number(denied[1]))) throw error;
+          // New session/graph from confirmed domain state, never provider reasoning.
+          await nativeConstruction(job, signal, offlineNative ? { ...offlineNative, scriptedModel: offlineNative.scriptedFallbackModel ?? offlineNative.scriptedModel } : undefined);
+        }
+      }
       else if (job.kind === "native-sync") await nativeSynchronization(job, signal);
       else throw new Error("Native synchronization is not yet enabled for this worker");
     });
@@ -311,6 +320,10 @@ export async function processJob(job: JobRecord, offlineNative?: OfflineNativeCo
 }
 
 export async function runWorker(): Promise<void> {
+  await getPool().query("SELECT 1");
+  process.send?.("worker-ready");
+  const heartbeat = setInterval(() => { if (process.connected) process.send?.("worker-heartbeat"); }, 5_000);
+  heartbeat.unref();
   let stopping = false;
   process.on("SIGINT", () => { stopping = true; });
   process.on("SIGTERM", () => { stopping = true; });

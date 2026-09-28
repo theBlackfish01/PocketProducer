@@ -298,11 +298,11 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
         : syncState === "applying" ? "Preparing the editable Audiotool copy…"
           : audiotoolAvailable ? `Version ${current?.ordinal ?? ""} is ready to copy.` : "Audiotool connection is not set up."
 
-  const submit = async (freshAttempt = false) => {
+  const submit = async (freshAttempt = false, submittedModel = producerModel) => {
     if (!direction.trim() || busy || activeJob || activity.state?.actions.canSubmit === false || activity.state?.headId !== snapshot?.currentRevisionId || draftNotices.length) return
     const head = snapshot?.currentRevisionId ?? null
     const operation: Receipt["operation"] = head ? "native-revision" : "native-generation"
-    const signature = JSON.stringify({ operation, head, direction: direction.trim(), profile, model: producerModel, targetPartId, targetSectionId, protectedPartIds: [...protectedPartIds].sort(), sourceIds: [...sourceIds].sort() })
+    const signature = JSON.stringify({ operation, head, direction: direction.trim(), profile, model: submittedModel, targetPartId, targetSectionId, protectedPartIds: [...protectedPartIds].sort(), sourceIds: [...sourceIds].sort() })
     const storageKey = `pocket-producer:native-command:${projectId}:${signature}`
     const key = freshAttempt ? crypto.randomUUID() : localStorage.getItem(storageKey) ?? crypto.randomUUID()
     localStorage.setItem(storageKey, key)
@@ -333,7 +333,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       if (head) { const preview = await api.nativePreservationPreview(projectId, direction.trim(), head, targetSectionId); if (!stillInProject()) return; setPreservationPreview(preview); if (preview.unresolved.length) throw new Error(preview.unresolved.join(". ")) }
       const savedProtections = current?.document.protectedPartIds ?? []
       const protectionChanged = JSON.stringify([...savedProtections].sort()) !== JSON.stringify([...protectedPartIds].sort())
-      const result = head ? await api.reviseNative(projectId, { direction: direction.trim(), profile, model: producerModel, baseNativeRevisionId: head, expectedNativeHeadId: head, ...(targetPartId ? { targetPartId } : {}), ...(targetSectionId ? { targetSectionId } : {}), ...(protectionChanged ? { protectionChange: { expectedPartIds: savedProtections, desiredPartIds: protectedPartIds } } : {}), sourceAssetIds: sourceIds }, key) : await api.constructNative(projectId, direction.trim(), sourceIds, key, profile, producerModel)
+      const result = head ? await api.reviseNative(projectId, { direction: direction.trim(), profile, model: submittedModel, baseNativeRevisionId: head, expectedNativeHeadId: head, ...(targetPartId ? { targetPartId } : {}), ...(targetSectionId ? { targetSectionId } : {}), ...(protectionChanged ? { protectionChange: { expectedPartIds: savedProtections, desiredPartIds: protectedPartIds } } : {}), sourceAssetIds: sourceIds }, key) : await api.constructNative(projectId, direction.trim(), sourceIds, key, profile, submittedModel)
       if (!stillInProject()) return
       await acceptRequest(await api.job(result.jobId))
     } catch (cause) {
@@ -444,7 +444,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const ToolDescription = panel ? DialogDescription : SheetDescription;
   const composer = <><DirectionComposer projectId={projectId} headId={current?.id ?? null} direction={direction} onDirection={setDirection} revision={Boolean(current)} active={Boolean(activeJob) || job?.state === "needs_attention"} busy={busy}
     canSubmit={!busy && !activeJob && activity.state?.headId === snapshot?.currentRevisionId && Boolean(activity.state?.actions.canSubmit) && draftNotices.length === 0 && direction.trim().length >= 3}
-    onSubmit={() => void submit()} onAddSound={() => setSoundsOpen(true)} sectionId={targetSectionId} partId={targetPartId} protectedPartIds={protectedPartIds} sourceIds={sourceIds}
+    onSubmit={(model) => { setProducerModel(model); void submit(false, model) }} onAddSound={() => setSoundsOpen(true)} sectionId={targetSectionId} partId={targetPartId} protectedPartIds={protectedPartIds} sourceIds={sourceIds}
     sections={current?.document.sections ?? []} onSection={setTargetSectionId} partName={selectedPart?.name} clearPart={() => setTargetPartId(null)}
     protectedNames={[...new Set([...protectedPartIds.map(partName), ...(preservationPreview?.revisionId === current?.id ? preservationPreview?.namedParts.map((item) => item.name) ?? [] : []), ...(preservationPreview?.revisionId === current?.id && preservationPreview?.theme ? [`${preservationPreview.theme.label} theme phrase`] : [])])]} profile={profile} onProfile={setProfile} model={producerModel} onModel={setProducerModel}>
     {draftNotices.length ? <div className="job-status" role="status">{draftNotices.map((notice) => <p key={notice}>{notice}</p>)}<Button size="sm" variant="outline" onClick={() => setDraftNotices([])}>I reviewed the updated scope</Button></div> : null}

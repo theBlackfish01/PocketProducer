@@ -1,0 +1,11 @@
+.auth-page { min-height: 100dvh; padding: clamp(24px, 5vw, 64px); background: var(--background); }
+.auth-card { width: min(100%, 540px); margin: clamp(40px, 10vh, 100px) auto; padding: clamp(24px, 5vw, 48px); border: 1px solid var(--border); border-radius: 24px; background: var(--card); box-shadow: 0 16px 48px #193c2c0a; }
+.auth-card h1 { font-family: var(--font-heading); font-size: clamp(34px, 5vw, 48px); line-height: 1.1; margin: 16px 0; }
+.auth-card form { display: grid; gap: 12px; margin-top: 28px; }
+.auth-card input { width: 100%; min-height: 48px; border: 1px solid var(--border); border-radius: 12px; background: var(--background); padding: 12px; font-size: 16px; }
+.auth-card input:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.auth-card button { min-height: 48px; }
+.auth-card > button { width: 100%; margin-top: 28px; }
+.auth-hint { margin-top: 24px; font-size: 13px; color: var(--muted-foreground); }
+.auth-notice { padding: 12px 24px; background: var(--secondary); }
+.hosted-account { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px; font-size: 12px; }

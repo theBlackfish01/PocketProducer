@@ -15,10 +15,18 @@ const unknown = await getPool().query<{ provider: string; effects: string; held:
      COALESCE(SUM(GREATEST(reservation_microusd,actual_cost_microusd)),0)::text AS held
    FROM effect WHERE cost_status='unknown' GROUP BY provider ORDER BY provider`
 );
+const models = await getPool().query<{ model: string; held: string }>(`SELECT model,
+  COALESCE(sum(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS held
+  FROM effect WHERE provider='openai' GROUP BY model`);
 process.stdout.write(`${JSON.stringify({
   overallLimitUsd: config.INITIAL_BUILD_API_BUDGET_USD,
   providerPoolLimitsUsd: { openai: config.OPENAI_POOL_BUDGET_USD ?? config.INITIAL_BUILD_API_BUDGET_USD, gemini: config.GEMINI_POOL_BUDGET_USD, gateway: config.GATEWAY_POOL_BUDGET_USD },
   defaultUserLifetimeLimitUsd: config.DEFAULT_USER_BUDGET_USD,
+  otherOpenAiCommittedUsd: models.rows.filter((row) => !["gpt-6-sol", "gpt-6-luna"].includes(row.model)).reduce((sum, row) => sum + Number(row.held), 0) / 1e6,
+  modelPools: [{ model: "gpt-6-sol", limitUsd: config.SOL_POOL_BUDGET_USD ?? null }, { model: "gpt-6-luna", limitUsd: config.LUNA_POOL_BUDGET_USD ?? null }].map((entry) => {
+    const committedUsd = Number(models.rows.find((row) => row.model === entry.model)?.held ?? 0) / 1e6;
+    return { ...entry, committedUsd, availableUpperBoundUsd: entry.limitUsd === null ? null : Math.max(0, entry.limitUsd - committedUsd) };
+  }),
   jobLimitUsd: config.MAX_JOB_COST_USD,
   maxCalls: config.MAX_MODEL_CALLS_PER_JOB,
   geminiModel: config.GEMINI_MODEL,

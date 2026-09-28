@@ -1,4 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
+// Never inherit the live installation's shared-demo pools into fixture servers.
+Object.assign(process.env, { SOL_POOL_BUDGET_USD: "", LUNA_POOL_BUDGET_USD: "", SOURCE_REPOSITORY_PUBLIC: "false" });
 
 const webPort = Number(process.env.E2E_WEB_PORT ?? 15_173);
 const apiPort = Number(process.env.E2E_API_PORT ?? 18_787);
