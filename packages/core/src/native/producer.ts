@@ -46,11 +46,18 @@ class NativeGraphInterruptedError extends Error {
 class NativeModelOutcomeUncertainError extends Error {
   constructor() { super("A model call has no confirmed outcome. Its usage must be reconciled before continuation."); this.name = "NativeModelOutcomeUncertainError"; }
 }
+class NativeStepKeyReuseError extends Error {
+  constructor(key: string, appliedHash: string, currentHash: string) {
+    super(`Step key ${key} already committed different operations (saved result ${appliedHash}; current document ${currentHash}). No new changes were applied. Inspect the current music before deciding whether another edit is needed. Replay requires the exact original operations; use a new step key only for an intentional additional edit.`);
+    this.name = "NativeStepKeyReuseError";
+  }
+}
 const op = (value: unknown): NativeOperation => nativeOperationSchema.parse(value);
 const toolFailure = (error: unknown): string => {
+  if (error instanceof NativeStepKeyReuseError) return `Error: ${error.message}`;
   // Never turn loss of authority or an ambiguous provider outcome into a
   // routine model correction. These require the worker's fenced lifecycle.
-  if (error instanceof JobControlError || error instanceof TypeError || error instanceof AggregateError || (error instanceof NativeLibraryError && error.code === "provider-failed") || (error instanceof Error && (("code" in error && typeof error.code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z]+)$/.test(error.code)) || /NATIVE_STEP_REPLAY_CONFLICT|NATIVE_HISTORY_INCONSISTENT|outcome is not safely replayable|uncertain|ECONN|network|socket|timeout/i.test(error.message)))) throw error;
+  if (error instanceof JobControlError || error instanceof TypeError || error instanceof AggregateError || (error instanceof NativeLibraryError && error.code === "provider-failed") || (error instanceof Error && (("code" in error && typeof error.code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z]+)$/.test(error.code)) || /NATIVE_STEP_(?:REPLAY|PREDECESSOR)_CONFLICT|NATIVE_HISTORY_INCONSISTENT|outcome is not safely replayable|uncertain|ECONN|network|socket|timeout/i.test(error.message)))) throw error;
   return `Error: ${error instanceof Error ? error.message : "Native tool failed"}`;
 };
 export function assertNativeModelCompletion(response: unknown): void {
@@ -303,7 +310,10 @@ export class NativeToolSession {
   private async applyOrdered(key: string, operations: NativeOperation[]) {
     const existing = this.applied.find((value) => value.key === key);
     if (existing) {
-      if (existing.operationHash !== canonicalHash(operations)) throw new Error("NATIVE_STEP_REPLAY_CONFLICT");
+      // This session has a confirmed receipt (or verified durable replay), so
+      // changed arguments are a rejected proposal, not an unknown effect.
+      // Database receipt/predecessor mismatches remain fatal fences below.
+      if (existing.operationHash !== canonicalHash(operations)) throw new NativeStepKeyReuseError(key, existing.hash, canonicalHash(this.document));
       return { documentHash: canonicalHash(this.document), appliedStepHash: existing.hash, replayed: true, context: pinnedContext(this.document, typeof this.job.request?.baseNativeRevisionId === "string" ? this.job.request.baseNativeRevisionId : null) };
     }
     const before = this.document;

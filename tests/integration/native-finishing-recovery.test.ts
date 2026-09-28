@@ -7,6 +7,7 @@ import { processJob } from "@pocket/worker";
 import { nativeFormSchema } from "@pocket/core";
 import { boundOpenAiRequest } from "@pocket/core/test-support";
 import { listProjects, requireProject, abandonNativePartialJob } from "@pocket/core";
+import { completeProviderEffect, failProviderEffect, reconcileNativeStepConflict } from "@pocket/core";
 
 let owner = "";
 const config = getConfig(), originalConfig = { ...config };
@@ -42,6 +43,72 @@ async function prepared(profile: "standard" | "extended" = "standard", model = "
   await session.apply("initial", nativeFormOperations(nativeFormSchema.parse(form), []));
   return { job, session };
 }
+
+it("rejects changed arguments for a confirmed step key without aborting the producer or duplicating work", async () => {
+  const job = await create();
+  const first = { stepKey: "shape", operations: [{ kind: "setMix", partId: "lead", gain: 0.5 }] };
+  const changed = { stepKey: "shape", operations: [{ kind: "setMix", partId: "lead", gain: 0.1 }] };
+  const model = fakeModel()
+    .respondWithTools([{ name: "compose_native_form", args: form }])
+    .respondWithTools([{ name: "configure_native_sound", args: first }])
+    .respondWithTools([{ name: "configure_native_sound", args: changed }])
+    .respondWithTools([{ name: "configure_native_sound", args: first }])
+    .respond(new AIMessage("The confirmed shape already satisfies the direction."));
+  await processJob(job, { scriptedModel: model, library: createNativeLibrary(null) });
+  const result = await jobSnapshot(owner, job.id);
+  expect(result.state, result.error_message ?? "").toBe("succeeded");
+  expect(JSON.stringify(model.calls[3]!.messages)).toContain("already committed different operations");
+  expect(JSON.stringify(model.calls[3]!.messages)).toContain("No new changes were applied");
+  expect(JSON.stringify(model.calls[4]!.messages)).toContain('replayed');
+  const snapshot = await nativeSnapshot(owner, job.projectId);
+  expect(snapshot.current!.document.parts.find(part => part.id === "lead")!.gain).toBe(0.5);
+  const steps = (await getPool().query("SELECT step_key FROM native_job_step WHERE job_id=$1 ORDER BY ordinal", [job.id])).rows;
+  expect(steps.filter(step => step.step_key === "shape")).toHaveLength(1);
+  const effects = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1", [job.id])).rows;
+  expect(effects.every(effect => effect.state === "succeeded" && effect.cost_status === "observed")).toBe(true);
+  const replay = new NativeToolSession(job, seedNativeDocument(direction));
+  await replay.replay();
+  await expect(replay.apply("shape", [{ kind: "setMix", partId: "lead", gain: 0.1 }])).rejects.toThrow("already committed different operations");
+  expect(canonicalHash(replay.document)).toBe(snapshot.current!.documentHash);
+  expect(await replay.apply("shape", [{ kind: "setMix", partId: "lead", gain: 0.5 }])).toMatchObject({ replayed: true });
+});
+
+it("reconciles only a verified local key collision while preserving paid receipts and requiring explicit continuation", async () => {
+  const { job, session } = await prepared();
+  const aggregate = await reserveProviderEffect({ job, provider: "openai", step: "native-producer-result", idempotencyKey: `collision:${job.id}`, inputHash: job.id, model: "gpt-6-sol", promptVersion: "native-producer-v2", reservationMicrousd: 0 });
+  await markEffectDispatched(aggregate.id, job);
+  const call = await reserveProviderEffect({ job, provider: "openai", step: "producer-model-call", idempotencyKey: `call:${job.id}`, inputHash: job.id, model: "gpt-6-sol", promptVersion: "deep-producer-v2", reservationMicrousd: 1000 });
+  await markEffectDispatched(call.id, job);
+  await completeProviderEffect({ effectId: call.id, job, output: { confirmed: true }, actualCostMicrousd: 123 });
+  await failProviderEffect({ effectId: aggregate.id, job, errorClass: "Error", uncertain: false });
+  await needsAttentionJob(job, "PROVIDER_OUTCOME_UNCERTAIN", "NATIVE_STEP_REPLAY_CONFLICT");
+  const hash = canonicalHash(session.document);
+  const paidBefore = (await getPool().query("SELECT * FROM effect WHERE id=$1", [call.id])).rows[0];
+  const stepsBefore = (await getPool().query("SELECT * FROM native_job_step WHERE job_id=$1", [job.id])).rows;
+  await expect(reconcileNativeStepConflict(randomUUID(), job.projectId, job.id, hash)).rejects.toThrow("Project not found");
+  await expect(reconcileNativeStepConflict(owner, job.projectId, job.id, "f".repeat(64))).rejects.toThrow("differs");
+  await getPool().query("UPDATE effect SET cost_status='unknown' WHERE id=$1", [call.id]);
+  await expect(reconcileNativeStepConflict(owner, job.projectId, job.id, hash)).rejects.toThrow("external outcome");
+  await getPool().query("UPDATE effect SET cost_status='observed' WHERE id=$1", [call.id]);
+  await getPool().query("UPDATE native_job_step SET result_hash=$2 WHERE job_id=$1", [job.id, "f".repeat(64)]);
+  await expect(reconcileNativeStepConflict(owner, job.projectId, job.id, hash)).rejects.toThrow("NATIVE_HISTORY_INCONSISTENT");
+  await getPool().query("UPDATE native_job_step SET result_hash=$2 WHERE job_id=$1", [job.id, hash]);
+  await getPool().query("UPDATE native_job_step SET operation_hash=$2 WHERE job_id=$1", [job.id, "f".repeat(64)]);
+  await expect(reconcileNativeStepConflict(owner, job.projectId, job.id, hash)).rejects.toThrow("operation receipts are inconsistent");
+  await getPool().query("UPDATE native_job_step SET operation_hash=$2 WHERE job_id=$1", [job.id, stepsBefore[0].operation_hash]);
+  await getPool().query("UPDATE job SET request=jsonb_set(request,'{expectedNativeHeadId}',to_jsonb($2::text)) WHERE id=$1", [job.id, randomUUID()]);
+  await expect(reconcileNativeStepConflict(owner, job.projectId, job.id, hash)).rejects.toThrow("differs");
+  await getPool().query("UPDATE job SET request=$2 WHERE id=$1", [job.id, job.request]);
+  expect((await getPool().query("SELECT state FROM effect WHERE id=$1", [aggregate.id])).rows[0].state).toBe("failed");
+  await reconcileNativeStepConflict(owner, job.projectId, job.id, hash);
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "needs_attention", error_code: "NATIVE_PARTIAL" });
+  expect((await nativeDraftView(owner, job.projectId, job.id))).toMatchObject({ documentHash: hash, canContinue: true });
+  expect((await getPool().query("SELECT * FROM effect WHERE id=$1", [call.id])).rows[0]).toEqual(paidBefore);
+  expect((await getPool().query("SELECT * FROM native_job_step WHERE job_id=$1", [job.id])).rows).toEqual(stepsBefore);
+  expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(0);
+  await resumeNativePartialJob(owner, job.projectId, job.id);
+  expect((await jobSnapshot(owner, job.id)).state).toBe("queued");
+});
 
 it("sends actual shared ambience settings to the focused critic, not only send IDs", async () => {
   const { job, session } = await prepared();

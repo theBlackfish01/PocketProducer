@@ -614,7 +614,8 @@ describe("audio-independent native job lifecycle", () => {
     expect(good.status, good.status === "rejected" ? String(good.reason) : "").toBe("fulfilled");
     expect(session.document.parts.find((part) => part.id === "hook")?.gain).toBe(0.2);
     expect((await session.apply("good-sibling", [{ kind: "setMix", partId: "hook", gain: 0.2 }])).replayed).toBe(true);
-    await expect(session.apply("good-sibling", [{ kind: "setMix", partId: "hook", gain: 0.4 }])).rejects.toThrow(/REPLAY_CONFLICT/);
+    await expect(session.apply("good-sibling", [{ kind: "setMix", partId: "hook", gain: 0.4 }])).rejects.toThrow(/already committed different operations/);
+    expect(session.document.parts.find((part) => part.id === "hook")?.gain).toBe(0.2);
     const savedHash = canonicalHash(session.document);
     await cancelJob(ownerId, job.id);
     await expect(session.apply("after-cancel", [{ kind: "setMix", partId: "hook", pan: 0.3 }])).rejects.toThrow(/lease|cancel/i);

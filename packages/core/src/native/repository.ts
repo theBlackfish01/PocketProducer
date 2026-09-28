@@ -196,6 +196,45 @@ export async function abandonNativePartialJob(ownerId: string, projectId: string
   finally { client.release(); }
 }
 
+/** Operator-only repair for the historical local step-key collision. This does
+ * not resume the job or settle any provider charge. All external outcomes must
+ * already be confirmed, and durable music must replay to the reviewed hash. */
+export async function reconcileNativeStepConflict(ownerId: string, projectId: string, jobId: string, expectedDraftHash: string): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(expectedDraftHash)) throw new Error("Supply the inspected draft hash");
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('pocket-producer-provider-budget-v1'))");
+    const project = await client.query("SELECT 1 FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [projectId, ownerId]);
+    if (!project.rowCount) throw new Error("Project not found");
+    const row = (await client.query<{ kind: string; state: string; error_code: string | null; error_message: string | null; cancellation_requested_at: unknown; result_native_revision_id: string | null }>("SELECT kind,state,error_code,error_message,cancellation_requested_at,result_native_revision_id FROM job WHERE id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [jobId, ownerId, projectId])).rows[0];
+    if (!row || !["native-generation", "native-revision"].includes(row.kind) || row.state !== "needs_attention" || row.error_code !== "PROVIDER_OUTCOME_UNCERTAIN" || row.error_message !== "NATIVE_STEP_REPLAY_CONFLICT" || row.cancellation_requested_at || row.result_native_revision_id) throw new Error("Not the confirmed local step-key conflict repair case");
+    const competing = await client.query("SELECT 1 FROM job WHERE project_id=$1 AND id<>$2 AND kind IN ('native-generation','native-revision') AND state IN ('queued','running','cancel_requested') LIMIT 1", [projectId, jobId]);
+    if (competing.rowCount) throw new Error("Another construction request is active");
+    const effects = (await client.query<{ id: string; step: string; state: string; cost_status: string; reservation_microusd: string; actual_cost_microusd: string }>("SELECT id,step,state,cost_status,reservation_microusd::text,actual_cost_microusd::text FROM effect WHERE job_id=$1 FOR UPDATE", [jobId])).rows;
+    const calls = effects.filter(effect => effect.step !== "native-producer-result");
+    if (!calls.length || calls.some(effect => effect.state !== "succeeded" || effect.cost_status !== "observed")) throw new Error("An external outcome is not confirmed; reconciliation cannot retry it");
+    const aggregates = effects.filter(effect => effect.step === "native-producer-result");
+    const aggregate = aggregates[0];
+    if (aggregates.length !== 1 || !aggregate || aggregate.state !== "failed" || aggregate.cost_status !== "observed" || Number(aggregate.reservation_microusd) !== 0 || Number(aggregate.actual_cost_microusd) !== 0) throw new Error("The zero-cost failed aggregate is not repairable");
+    const steps = (await client.query<{ operation_hash: string; operations: unknown }>("SELECT operation_hash,operations FROM native_job_step WHERE job_id=$1 ORDER BY ordinal FOR UPDATE", [jobId])).rows;
+    if (!steps.length || steps.some(step => canonicalHash(step.operations) !== step.operation_hash)) throw new Error("Saved operation receipts are inconsistent");
+    // The project/job locks keep the head, request and step journal stable.
+    // This read uses the same replay/hash/protection validation as the worker.
+    const draft = await nativeDraftView(ownerId, projectId, jobId);
+    if (!draft.headMatches || !draft.stepCount || draft.documentHash !== expectedDraftHash) throw new Error("The confirmed draft or selected version differs from the inspected evidence");
+    const completion = await client.query("SELECT 1 FROM native_producer_completion WHERE job_id=$1", [jobId]);
+    if (completion.rowCount) throw new Error("Completed producer evidence requires a different recovery path");
+    await client.query("UPDATE effect SET state='dispatched',completed_at=NULL,updated_at=now() WHERE id=$1", [aggregate.id]);
+    await client.query("UPDATE job SET error_code='NATIVE_PARTIAL',error_message='NATIVE_INCOMPLETE:CONFIRMED_STEP_KEY_CONFLICT: Saved steps verified; continue from current music without repeating the conflicting proposal',updated_at=now() WHERE id=$1", [jobId]);
+    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'aggregate_repaired',$2 FROM job WHERE id=$1", [jobId, { reason: "NATIVE_STEP_REPLAY_CONFLICT", documentHash: expectedDraftHash, message: "Verified saved step replay and all provider receipts; restored only the zero-cost aggregate. No request dispatched." }]);
+    await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
+    await appendPublicActivity(client, { ownerId, projectId, jobId }, `step-conflict-reconciled:${jobId}`, { version: 1, kind: "working", text: "Your saved changes have been checked. You can continue this request." });
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+}
+
 export async function resumeNativePartialJob(ownerId: string, projectId: string, jobId: string): Promise<void> {
   const client = await getPool().connect();
   try {
