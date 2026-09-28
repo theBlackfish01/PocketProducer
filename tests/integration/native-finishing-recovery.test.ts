@@ -110,6 +110,44 @@ it("reconciles only a verified local key collision while preserving paid receipt
   expect((await jobSnapshot(owner, job.id)).state).toBe("queued");
 });
 
+it("sends meter, duration and incomplete-preview evidence in actual critic input", async () => {
+  const { job, session } = await prepared();
+  await session.apply("rhythm", [
+    { kind: "setMeter", meter: { numerator: 3, denominator: 4 } },
+    { kind: "addPart", part: { id: "drums", name: "Pulse", role: "percussion", device: { type: "heisenberg", parameters: {} }, gain: 0.5, pan: 0,
+      notes: Array.from({ length: 12 }, (_, i) => ({ id: `hit-${i}`, startTick: i * 480, durationTicks: 240, pitch: i % 3 === 2 ? 38 : 42, velocity: 1 })), placements: [], sourceRegions: [], effects: [], automation: [] } }
+  ]);
+  const reviewer = fakeModel().respond(good());
+  await focusedNativeReview({ job, direction, document: session.document, plan, attempt: 1, scriptedReviewer: reviewer });
+  const body = JSON.parse(reviewer.calls[0]!.messages[1]!.text) as { confirmedScore: { timing: unknown; sections: { parts: { id: string; omittedPreviewOnsets: number; rhythmWindow: { notes: number[][] } }[] }[] } };
+  expect(body.confirmedScore.timing).toMatchObject({ ticksPerBar: 2880, ticksPerQuarter: 960, meter: { numerator: 3, denominator: 4 } });
+  const drums = body.confirmedScore.sections[0]!.parts.find(part => part.id === "drums")!;
+  expect(drums.omittedPreviewOnsets).toBe(4);
+  expect(drums.rhythmWindow).toMatchObject({ endTick: 5760, totalOnsets: 12, omittedOnsets: 0 });
+  expect(drums.rhythmWindow.notes).toContainEqual([5280, 38, 1, 240]);
+  expect(reviewer.calls[0]!.messages[0]!.text).toContain("never infer missing later notes");
+});
+
+it("replays a settled same-score critic receipt after evidence formatting changes, without a new paid call", async () => {
+  const { job, session } = await prepared();
+  const reviewer = fakeModel().respond(good());
+  const input = { job, direction, document: session.document, plan, attempt: 0, scriptedReviewer: reviewer };
+  const first = await focusedNativeReview(input);
+  // Simulate a settled pre-upgrade request envelope. Its semantic identity
+  // still binds the same job, score, requirements, model and review attempt.
+  await getPool().query("UPDATE effect SET input_hash=$2 WHERE job_id=$1 AND prompt_version='native-symbolic-review-v2'", [job.id, canonicalHash({ earlierEnvelope: true })]);
+  const before = (await getPool().query("SELECT * FROM effect WHERE job_id=$1", [job.id])).rows;
+  expect(await focusedNativeReview(input)).toEqual(first);
+  expect(reviewer.callCount).toBe(1);
+  expect((await getPool().query("SELECT * FROM effect WHERE job_id=$1", [job.id])).rows).toEqual(before);
+  await getPool().query("UPDATE effect SET state='uncertain',cost_status='unknown' WHERE job_id=$1 AND prompt_version='native-symbolic-review-v2'", [job.id]);
+  await expect(focusedNativeReview(input)).rejects.toThrow(/unconfirmed|uncertain/);
+  expect(reviewer.callCount).toBe(1);
+  await getPool().query("UPDATE effect SET state='succeeded',cost_status='observed',output=jsonb_set(output,'{review,contextHash}',to_jsonb($2::text)) WHERE job_id=$1 AND prompt_version='native-symbolic-review-v2'", [job.id, 'f'.repeat(64)]);
+  await expect(focusedNativeReview(input)).rejects.toThrow(/INPUT_MISMATCH/);
+  expect(reviewer.callCount).toBe(1);
+});
+
 it("sends actual shared ambience settings to the focused critic, not only send IDs", async () => {
   const { job, session } = await prepared();
   const bus = { id: "room", name: "Small shared room", roomSize: 0.24, preDelayMs: 26, damp: 0.68 };

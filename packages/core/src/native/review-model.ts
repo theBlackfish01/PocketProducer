@@ -51,6 +51,7 @@ export async function focusedNativeReview(input: { job: JobRecord; direction: st
   const human = new HumanMessage(JSON.stringify({ originalBrief: input.direction, confirmedScore: summary, palette: input.plan.creativeState?.palette ?? [], decisions: input.plan.creativeState?.decisions ?? [], previousReviews: input.previousReviews?.slice(-3).map((review) => ({ documentHash: review.documentHash, verdict: review.verdict, findings: review.findings })) ?? [], ...(input.recovery ? { formatRecovery: { ...input.recovery, instruction: "The earlier result was unusable, not approval. Return concise valid JSON only. Preserve substantive concerns; do not change a verdict just to pass validation. Re-evaluate against the supplied exact current facts if earlier text is absent. Use null rather than inventing IDs.", requiredShape: { verdict: "Short symbolic assessment", findings: [{ priority: "medium", sectionId: null, partId: null, observation: "Specific evidence", suggestedChange: "One targeted musical change" }], noChangeReason: null } } } : {}) }));
   system.content = system.text + " Keep verdict under 360 characters, each observation/suggestedChange under 300 characters, and noChangeReason under 300 characters. Use noChangeReason=null when findings are present; with no findings supply a short reason. Do not infer a required monotonic density increase from an arc label: a sparse opening and a spacious middle may intentionally differ. Missing evidence is not proof of missing music. Required response schema: " + JSON.stringify(nativeReviewResponseFormat.json_schema.schema);
   system.content += " Findings must identify a concrete symbolic weakness and a feasible score edit. The absence of listening is a standing limitation, not a defect to fix by repeatedly adjusting a patch or reducing a send. An instrument does not require extra effects merely because its requested character is subjective. Evaluate build/payoff using rhythm, register, harmony, entrances and section-local automation together, not onset totals alone. Distinguish missing summary evidence from absent score content; do not demand edits to facts this summary cannot establish.";
+  system.content += " Read confirmedScore.timing before interpreting ticks or bar numbers. Onset previews and tails are bounded, overlapping selections, not the full phrase. Only a rhythmWindow with omittedOnsets=0 is complete for that interval; never infer missing later notes from a truncated preview or duplicate notes by combining overlapping previews. Producer decisions are claims to check against measured score facts, not a substitute for them.";
   const formatOptions = modelProvider(modelName) === "openai" ? { response_format: nativeReviewResponseFormat } : {};
   const outputBound = input.recovery ? 3_200 : 1_600;
   const bounded = boundOpenAiRequest([[system, human]], outputBound, run?.maxInputTokens, formatOptions);
@@ -58,7 +59,23 @@ export async function focusedNativeReview(input: { job: JobRecord; direction: st
   const idempotencyHash = canonicalHash({ v: 4, jobId: input.job.id, documentHash: summary.documentHash, contextHash, modelName, attempt: input.attempt, recovery: Boolean(input.recovery) });
   const captured = run?.pricing ?? pricingEvidence(modelProvider(modelName), modelName);
   const price = { ...captured, cacheWriteUsdPerMillion: captured.cacheWriteUsdPerMillion ?? (modelName === "gpt-6-astra" ? captured.inputUsdPerMillion * 1.25 : captured.inputUsdPerMillion) };
-  const effect = await reserveProviderEffect({ job: input.job, provider: modelProvider(modelName), step: "producer-model-call", idempotencyKey: input.recovery ? "native-review:format-recovery" : `native-review:${idempotencyHash}`, inputHash: canonicalHash({ idempotencyHash, bounded }), model: modelName, promptVersion: input.recovery ? "native-symbolic-review-repair-v1" : "native-symbolic-review-v2", ...(input.recovery ? { maxDistinctEffectsForPromptVersion: 1 } : {}),
+  const idempotencyKey = input.recovery ? "native-review:format-recovery" : `native-review:${idempotencyHash}`;
+  const promptVersion = input.recovery ? "native-symbolic-review-repair-v1" : "native-symbolic-review-v2";
+  let inputHash = canonicalHash({ idempotencyHash, bounded });
+  // A settled review can precede a crash before attachment, then a deployment
+  // can improve its evidence layout. Replay that exact paid result, not a new
+  // request under an old receipt. Unknown/reserved outcomes still fail closed;
+  // reserveProviderEffect below retains lease/cancellation/ownership fencing.
+  const prior = (await getPool().query<{ input_hash: string; state: string; cost_status: string; output: { review?: unknown } }>(
+    "SELECT input_hash,state,cost_status,output FROM effect WHERE job_id=$1 AND idempotency_key=$2 AND step='producer-model-call' AND model=$3 AND provider=$4 AND prompt_version=$5",
+    [input.job.id, idempotencyKey, modelName, modelProvider(modelName), promptVersion])).rows[0];
+  if (prior && prior.input_hash !== inputHash) {
+    if (prior.state !== "succeeded" || prior.cost_status !== "observed") throw new Error("Focused review outcome is uncertain for an earlier request envelope; it was not repeated");
+    const saved = nativeReviewSchema.parse(prior.output.review);
+    if (saved.documentHash !== summary.documentHash || saved.contextHash !== contextHash) throw new Error("PROVIDER_EFFECT_INPUT_MISMATCH: saved review does not match current music and requirements");
+    inputHash = prior.input_hash;
+  }
+  const effect = await reserveProviderEffect({ job: input.job, provider: modelProvider(modelName), step: "producer-model-call", idempotencyKey, inputHash, model: modelName, promptVersion, ...(input.recovery ? { maxDistinctEffectsForPromptVersion: 1 } : {}),
     reservationMicrousd: input.scriptedReviewer ? 0 : tokenCostMicrousdAtPrice(price, { inputTokens: bounded.inputTokenBound, cacheWriteTokens: bounded.inputTokenBound, outputTokens: outputBound }) });
   if (!effect.created) {
     if (effect.state === "succeeded") {

@@ -98,12 +98,19 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
     const partFacts = inspected.parts.map((part) => {
       const source = document.parts.find((item) => item.id === part.id)!;
       const onsets = materializedNotes(document, part.id).filter((note) => note.startTick >= start && note.startTick < end);
+      const noteFact = (note: (typeof onsets)[number]) => [note.startTick - start, note.pitch, Number(note.velocity.toFixed(2)), note.durationTicks];
+      const rhythmEnd = Math.min(end, start + 2 * barTicks(document));
+      const rhythm = part.role === "percussion" ? onsets.filter(note => note.startTick < rhythmEnd) : [];
       const activeCurves = source.automation.map((curve) => sectionAutomation(curve, start, end)).filter((curve) => curve !== null);
       return { id: part.id, role: part.role, device: source.device.type, preset: source.device.preset ? { name: source.device.preset.name, hash: source.device.preset.contentHash ?? null } : null,
         newOnsets: part.newOnsets, onsetsPerBar: part.onsetsPerBar, noteRange: part.noteRange, clips: part.sourceRegions.length + part.libraryRegions.length,
         // Relative rhythm, pitches and velocities distinguish genuine thematic
         // development from identical density/range in every section.
-        onsetPreview: onsets.slice(0, 8).map((note) => [note.startTick - start, note.pitch, Number(note.velocity.toFixed(2))]),
+        onsetPreview: onsets.slice(0, 8).map(noteFact),
+        omittedPreviewOnsets: Math.max(0, onsets.length - 8),
+        finalOnsets: onsets.length > 8 ? onsets.slice(-4).map(noteFact) : [],
+        ...(part.role === "percussion" ? { rhythmWindow: { startTick: 0, endTick: rhythmEnd - start, totalOnsets: rhythm.length,
+          notes: rhythm.slice(0, 32).map(noteFact), omittedOnsets: Math.max(0, rhythm.length - 32) } } : {}),
         motifIds: [...new Set(part.placements.map((placement) => placement.motifId))].slice(0, 8),
         automation: activeCurves.slice(0, 4), omittedAutomation: Math.max(0, activeCurves.length - 4) };
     });
@@ -114,7 +121,10 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
   });
   const emptySections = sections.filter((section) => section.parts.every((part) => part.newOnsets === 0 && part.clips === 0)).map((section) => section.id);
   const sameSectionSignatures = sections.length > 1 && new Set(sections.map((section) => canonicalHash(section.parts.map((part) => ({ role: part.role, onsetsPerBar: part.onsetsPerBar, noteRange: part.noteRange, clips: part.clips, onsetPreview: part.onsetPreview.map(([tick, pitch, velocity]) => [Number(tick) / (section.lastBar - section.firstBar), pitch, velocity]), motifIds: part.motifIds }))))).size === 1;
-  return { documentHash: canonicalHash(document), title: document.title, tempoBpm: document.tempoBpm, bars: document.bars, soundEvidence, soundWarnings, sections,
+  return { documentHash: canonicalHash(document), title: document.title, tempoBpm: document.tempoBpm, bars: document.bars,
+    timing: { meter: document.meter, ticksPerQuarter: document.ppq, ticksPerBar: barTicks(document), sectionBars: "zero-based, lastBar exclusive",
+      noteTuple: "[section-relative startTick, MIDI pitch, velocity, durationTicks]", previewCoverage: "onsetPreview is only the first eight events; finalOnsets is an overlapping tail, not additional notes. Missing preview events do not imply silence. rhythmWindow describes only its stated interval." },
+    soundEvidence, soundWarnings, sections,
     // Sends alone do not describe the shared processing. Keep the actual
     // bounded canonical settings so a reviewer does not mistake an omitted
     // bus/group for missing musical work and ask for redundant edits.

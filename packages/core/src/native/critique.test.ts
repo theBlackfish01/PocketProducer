@@ -52,6 +52,28 @@ describe("grounded symbolic editor", () => {
     score.parts[0]!.automation[0]!.points = [{ tick: 0, value: 0.2 }, { tick: 7680, value: 0.8 }];
     expect(symbolicNativeReview(score, null).sections[1]!.parts[0]!.automation[0]!.last).toBe(0.2);
   });
+  it("labels partial previews and supplies complete bounded drum timing across both bars", () => {
+    const score = structuredClone(document);
+    score.meter = { numerator: 3, denominator: 4 };
+    const part = score.parts[0]!;
+    part.role = "percussion";
+    part.notes = Array.from({ length: 12 }, (_, i) => ({ id: `hit-${i}`, startTick: i * 480, durationTicks: 240, pitch: i % 3 === 2 ? 38 : 42, velocity: 1 }));
+    const summary = symbolicNativeReview(score, null);
+    const facts = summary.sections[0]!.parts[0]!;
+    expect(summary.timing).toMatchObject({ meter: { numerator: 3, denominator: 4 }, ticksPerQuarter: 960, ticksPerBar: 2880 });
+    expect(facts.onsetPreview).toHaveLength(8);
+    expect(facts.omittedPreviewOnsets).toBe(4);
+    expect(facts.finalOnsets.at(-1)).toEqual([5280, 38, 1, 240]);
+    expect(facts.rhythmWindow).toMatchObject({ startTick: 0, endTick: 5760, totalOnsets: 12, omittedOnsets: 0 });
+    expect(facts.rhythmWindow!.notes.filter(note => note[1] === 38).map(note => note[0])).toEqual([960, 2400, 3840, 5280]);
+    // Dense excerpts remain bounded and explicitly incomplete, never claimed
+    // as a full pattern. Tail duplication is called out in the wire contract.
+    part.notes = Array.from({ length: 48 }, (_, i) => ({ id: `dense-${i}`, startTick: i * 120, durationTicks: 120, pitch: 42, velocity: 1 }));
+    const dense = symbolicNativeReview(score, null).sections[0]!.parts[0]!;
+    expect(dense.rhythmWindow!.notes).toHaveLength(32);
+    expect(dense.rhythmWindow!.omittedOnsets).toBe(16);
+    expect(summary.timing.previewCoverage).toContain("not additional notes");
+  });
   it("shows unresolved kit identity and repeated default tonal cores to the reviewer", () => {
     const weak = applyNativeOperations(seedNativeDocument("Synth and disco"), [
       ...["bass", "chords"].map((id) => ({ kind: "addPart" as const, part: { id, name: id, role: id === "bass" ? "bass" as const : "harmony" as const, device: { type: "heisenberg" as const, parameters: { "filter.cutoffFrequencyHz": id === "bass" ? 300 : 3000 } }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] } })),
