@@ -5,6 +5,16 @@ import { NativeConvergenceMonitor, nativeFinishingGuidance, nativeReadEvidence, 
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {
+  it("compacts complete text-only reasoning responses across finishing passes", () => {
+    const brief = new HumanMessage("Exact original musical brief");
+    const history = [brief, ...Array.from({ length: 8 }, (_, i) => [new AIMessage({ content: `Unfinished response ${i}`, response_metadata: { output: [{ type: "reasoning", encrypted_content: `${i}:` + "x".repeat(20000) }] } }), new HumanMessage(`Complete missing requirement ${i}`)]).flat()];
+    const result = withNativeFinishingContext(history, { missing: ["Final review"] }, [], 900, 30000);
+    expect(() => boundOpenAiRequest([result], 900, 30000)).not.toThrow();
+    expect(result).toContain(brief);
+    expect(result.filter((m) => m instanceof HumanMessage)).toHaveLength(11);
+    expect(result.filter((m) => m instanceof AIMessage)).toHaveLength(1);
+    expect(result.some((m) => m.text === "Unfinished response 7")).toBe(true);
+  });
   it("replaces old oversized error replay before discarding a newer useful exchange", () => {
     const old = new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(18000) }] }, tool_calls: [{ id: "old", name: "inspect_native_part", args: { partId: "missing" } }] });
     const recent = new AIMessage({ content: "", tool_calls: [{ id: "recent", name: "inspect_native_part", args: { partId: "bass" } }] });

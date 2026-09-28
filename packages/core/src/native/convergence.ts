@@ -48,7 +48,7 @@ function currentReadEvidence(messages: BaseMessage[], hash: unknown): ReadEviden
   });
 }
 
-// Drop only complete historical assistant/tool groups. Keep every human/system
+// Drop only complete historical assistant responses/tool groups. Keep every human/system
 // instruction and pending group. Keep the latest failure verbatim unless the
 // final pressure pass must replace its complete exchange with diagnostics; recent successful
 // results are retained within the available envelope. Current
@@ -57,7 +57,11 @@ export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4
   const groups: { start: number; end: number; error: boolean }[] = [];
   for (let i = 0; i < messages.length; i++) {
     const ai = messages[i];
-    if (!(ai instanceof AIMessage) || !ai.tool_calls?.length) continue;
+    if (!(ai instanceof AIMessage)) continue;
+    // A completed text-only response can also contain large opaque reasoning.
+    // Internal completion passes must not pin all such historical responses.
+    // Remove the whole message, never individual reasoning/content items.
+    if (!ai.tool_calls?.length) { groups.push({ start: i, end: i + 1, error: false }); continue; }
     const replies = messages.slice(i + 1, i + 1 + ai.tool_calls.length);
     if (replies.length !== ai.tool_calls.length || !replies.every((reply) => reply instanceof ToolMessage) || !ai.tool_calls.every((call) => replies.some((reply) => reply instanceof ToolMessage && reply.tool_call_id === call.id))) continue;
     groups.push({ start: i, end: i + 1 + replies.length, error: replies.some((reply) => reply instanceof ToolMessage && (reply.status === "error" || /^Error[:\s]/i.test(reply.text))) });

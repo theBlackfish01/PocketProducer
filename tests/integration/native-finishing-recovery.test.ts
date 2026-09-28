@@ -43,6 +43,18 @@ async function prepared(profile: "standard" | "extended" = "standard", model = "
   return { job, session };
 }
 
+it("sends actual shared ambience settings to the focused critic, not only send IDs", async () => {
+  const { job, session } = await prepared();
+  const bus = { id: "room", name: "Small shared room", roomSize: 0.24, preDelayMs: 26, damp: 0.68 };
+  await session.apply("ambience", [{ kind: "setReverbBus", bus }, { kind: "setSend", partId: "lead", busId: "room", gain: 0.09 }]);
+  const reviewer = fakeModel().respond(good());
+  await focusedNativeReview({ job, direction, document: session.document, plan, attempt: 0, scriptedReviewer: reviewer });
+  const payload = JSON.parse(reviewer.calls[0]!.messages.find((message) => message.type === "human")!.text);
+  expect(payload.confirmedScore.sharedProcessing).toEqual({ reverbBus: bus, delayBus: null, groups: [], master: null });
+  expect(payload.confirmedScore.soundEvidence[0].sends).toEqual([{ busId: "room", gain: 0.09 }]);
+  expect(reviewer.calls[0]!.messages.find((message) => message.type === "system")!.text).toContain('"maxLength":300');
+});
+
 it("compacts final system/schema/reasoning input through the real producer before accounting dispatch", async () => {
   const job = await create();
   const model = fakeModel().respondWithTools([{ name: "record_native_plan", args: plan }]);
@@ -273,6 +285,22 @@ it("retains failed recovery diagnostics, never grants another recovery, and repl
   expect(await nativeFormatRecoveryAvailable(job.id)).toBe(false);
   expect(await focusedNativeReview(input)).toEqual(review);
   expect(reviewer.callCount).toBe(2);
+});
+
+it("stops finishing passes when the required review cannot be obtained, preserving the draft", async () => {
+  const { job, session } = await prepared();
+  const stale = { documentHash: canonicalHash(session.document), verdict: "Earlier substantive review", findings: [], noChangeReason: "Earlier requirements were met", modelUsed: true, contextHash: "0".repeat(64) };
+  await getPool().query("UPDATE native_job_plan SET creative_review_count=4,creative_review_history=$2::jsonb,creative_review=NULL WHERE job_id=$1", [job.id, JSON.stringify([stale])]);
+  const producer = fakeModel().respond(new AIMessage("The review is unavailable; the draft remains."));
+  const reviewer = fakeModel();
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  const state = await jobSnapshot(owner, job.id);
+  expect(state.state).toBe("needs_attention");
+  expect(state.error_message).toContain("REVIEW_EXHAUSTED");
+  expect(producer.callCount).toBe(1);
+  expect(reviewer.callCount).toBe(0);
+  expect((await nativeSnapshot(owner, job.projectId)).current).toBeNull();
+  expect((await nativeDraftView(owner, job.projectId, job.id)).document).toEqual(session.document);
 });
 
 it.each(["standard", "extended"] as const)("reattaches a settled %s recovery after interruption without another critic call", async (profile) => {

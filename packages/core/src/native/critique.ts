@@ -100,6 +100,10 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
   const emptySections = sections.filter((section) => section.parts.every((part) => part.newOnsets === 0 && part.clips === 0)).map((section) => section.id);
   const sameSectionSignatures = sections.length > 1 && new Set(sections.map((section) => canonicalHash(section.parts.map((part) => ({ role: part.role, onsetsPerBar: part.onsetsPerBar, noteRange: part.noteRange, clips: part.clips, onsetPreview: part.onsetPreview.map(([tick, pitch, velocity]) => [Number(tick) / (section.lastBar - section.firstBar), pitch, velocity]), motifIds: part.motifIds }))))).size === 1;
   return { documentHash: canonicalHash(document), title: document.title, tempoBpm: document.tempoBpm, bars: document.bars, soundEvidence, soundWarnings, sections,
+    // Sends alone do not describe the shared processing. Keep the actual
+    // bounded canonical settings so a reviewer does not mistake an omitted
+    // bus/group for missing musical work and ask for redundant edits.
+    sharedProcessing: { reverbBus: document.reverbBus ?? null, delayBus: document.delayBus ?? null, groups: document.groups ?? [], master: document.master ?? null },
     emptySections, sameSectionSignatures, arcEvidence: nativeArcEvidence(document), plannedIdentity: plan?.creativeState?.identity ?? plan?.intent ?? "", unfinishedTasks: plan?.creativeState?.unfinishedTasks ?? plan?.developmentTasks ?? [], evidenceIssues: nativePlanEvidenceIssues(plan, document),
     limits: "Symbolic structure and metadata only; no audio was heard and repetition can be artistically intentional." };
 }

@@ -1,7 +1,18 @@
 import { expect, it } from "vitest";
-import { parseNativeReview } from "./review-model.js";
+import { parseNativeReview, nativeReviewResponseFormat } from "./review-model.js";
 import { seedNativeDocument } from "./producer.js";
 import { nativePlanSchema, nativeReviewPlanHash } from "./plan.js";
+
+it("publishes the critic's existing field limits as a strict response contract", () => {
+  const schema = nativeReviewResponseFormat.json_schema.schema as { additionalProperties: boolean; required: string[]; properties: Record<string, { maxLength?: number; items?: { properties: Record<string, { maxLength: number }> } }> };
+  expect(nativeReviewResponseFormat.json_schema.strict).toBe(true);
+  expect(schema.additionalProperties).toBe(false);
+  expect(schema.required).toEqual(["verdict", "findings", "noChangeReason"]);
+  expect(schema.properties.verdict!.maxLength).toBe(360);
+  expect(schema.properties.findings!.items!.properties.observation!.maxLength).toBe(300);
+  const document = seedNativeDocument("A quiet motif");
+  expect(parseNativeReview(JSON.stringify({ verdict: "Specific assessment", findings: [], noChangeReason: "x".repeat(301) }), document, "stop").diagnostic?.paths).toContain("noChangeReason");
+});
 
 it("diagnoses format, truncation and invalid musical references without blessing fallback", () => {
   const document = seedNativeDocument("A quiet motif");

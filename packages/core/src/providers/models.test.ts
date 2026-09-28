@@ -5,6 +5,7 @@ import { nativeRunLimits, jobNativeRunLimits } from "../native/profile.js";
 import { CompatibleProducerModel, compatibleMessages, producerChatModel, reportedGatewayCost } from "./compatible-model.js";
 import { modelCredentials, producerModels, selectableProducerModelSchema } from "./models.js";
 import { boundOpenAiRequest } from "../agent/runtime.js";
+import { nativeReviewResponseFormat } from "../native/review-model.js";
 const config = getConfig(), original = { ...config };
 afterEach(() => { Object.assign(config, original); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -51,6 +52,21 @@ it("captures the selected provider and price without changing old jobs", () => {
   expect(() => nativeRunLimits("standard", "arbitrary/model")).toThrow();
   Object.assign(config, { APP_ENV: "development", FIXTURE_MODE: false });
   expect(() => nativeRunLimits("standard", "gemini-3.7-flash")).toThrow(/not configured/);
+});
+
+it("sends the bounded critic schema through the pinned Responses adapter", async () => {
+  config.OPENAI_API_KEY = "offline-review-test";
+  const review = JSON.stringify({ verdict: "A deliberate phrase.", findings: [], noChangeReason: "The requested contour is present." });
+  const transport = vi.fn(() => Promise.resolve(Response.json({ id: "resp_review", object: "response", created_at: 1, status: "completed", model: "gpt-6-luna", output: [{ type: "message", id: "msg_review", role: "assistant", status: "completed", content: [{ type: "output_text", text: review, annotations: [] }] }], usage: { input_tokens: 20, output_tokens: 30, total_tokens: 50 } })));
+  vi.stubGlobal("fetch", transport);
+  const options = { response_format: nativeReviewResponseFormat, callbacks: [] };
+  const response = await producerChatModel("gpt-6-luna", 1600, "low", 1000).invoke("Review this score", options);
+  expect(response.text).toBe(review);
+  const [, init] = transport.mock.calls[0] as unknown as [string, RequestInit];
+  const body = JSON.parse(init.body as string);
+  expect(body.text.format).toMatchObject({ type: "json_schema", name: "native_symbolic_review", strict: true, schema: nativeReviewResponseFormat.json_schema.schema });
+  expect(body.max_output_tokens).toBe(1600);
+  expect(transport).toHaveBeenCalledTimes(1);
 });
 
 it("uses the Gateway key alias, never the OpenAI key for DeepSeek", () => {
