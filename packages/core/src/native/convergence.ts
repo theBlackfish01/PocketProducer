@@ -113,9 +113,16 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
           if (!(minimalError instanceof Error) || !minimalError.message.startsWith("OPENAI_INPUT_LIMIT_EXCEEDED")) throw minimalError;
         }
       }
+      // An old error group must not evict the latest successful exchange. Keep
+      // its diagnostic, remove its whole oversized replay, then retry with one
+      // recent complete exchange before considering removal of that exchange.
+      if (retainedGroups === 1 && !summarizedErrors) {
+        summarizedErrors = true;
+        current = compactNativeReadHistory(history, 1, true); continue;
+      }
       if (retainedGroups > 0) {
         retainedGroups = retainedGroups === 4 ? 1 : 0;
-        current = compactNativeReadHistory(history, retainedGroups); continue;
+        current = compactNativeReadHistory(history, retainedGroups, summarizedErrors); continue;
       }
       if (!summarizedErrors) { summarizedErrors = true; current = compactNativeReadHistory(history, 0, true); continue; }
       if (!retained.length) { if (observations.length > 1) { observations.shift(); continue; } throw error; }

@@ -5,6 +5,14 @@ import { NativeConvergenceMonitor, nativeFinishingGuidance, nativeReadEvidence, 
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {
+  it("replaces old oversized error replay before discarding a newer useful exchange", () => {
+    const old = new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(18000) }] }, tool_calls: [{ id: "old", name: "inspect_native_part", args: { partId: "missing" } }] });
+    const recent = new AIMessage({ content: "", tool_calls: [{ id: "recent", name: "inspect_native_part", args: { partId: "bass" } }] });
+    const result = withNativeFinishingContext([new HumanMessage("Keep bass"), old, new ToolMessage({ tool_call_id: "old", content: "Error: Unknown part missing" }), recent, new ToolMessage({ tool_call_id: "recent", content: '{"documentHash":"current","notes":[{"pitch":41}]}' })], { documentHash: "current" }, [], 900, 8000);
+    expect(result).not.toContain(old);
+    expect(result).toContain(recent);
+    expect(JSON.stringify(result)).toContain("Unknown part missing");
+  });
   it("prefers the latest complete exchange over optional old guidance when that preserves continuity", () => {
     const current = new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(7000) }] }, tool_calls: [{ id: "inspect", name: "inspect_native_part", args: { partId: "bass" } }] });
     const reply = new ToolMessage({ tool_call_id: "inspect", content: '{"documentHash":"current","notes":[{"pitch":41}]}' });
