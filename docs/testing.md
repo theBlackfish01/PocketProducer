@@ -1,5 +1,7 @@
 # Verification record
 
+September 28 finishing-repair checkpoint: `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts tests/integration` passed **136/136 tests, 12 files (156.81 s)** against the isolated test database. Includes the new shared-processing critic-input and exhausted-review termination cases. No provider access. The fifth real Luna browser evaluation is separate evidence and was still running when this suite completed.
+
 September 28 goal attempt-4 follow-up: full unit **212/212** (37 files, 53.73 s), focused convergence/review/worker **36/36** (15.20 s), provider wire **9/9** (1.37 s), then final finishing suite **21/21** (12.77 s). Added coverage for complete text-only reasoning compaction, exact shared-bus critic inputs, strict Responses review schema/unchanged length rejection, and early exhausted-review stop with retained draft. Types/targeted lint pass. Earlier this pass: full integration **134/134**, application Chromium **18/18**, hosted **2/2**, visual **17/17** (1.6 min), production build pass with existing large-chunk warning. Those broad browser runs precede the critic/context-only changes; scripted tests do not establish live completion.
 
 ## Goal-loop task-menu regression (2026-09-28)

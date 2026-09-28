@@ -46,13 +46,19 @@ async function prepared(profile: "standard" | "extended" = "standard", model = "
 it("sends actual shared ambience settings to the focused critic, not only send IDs", async () => {
   const { job, session } = await prepared();
   const bus = { id: "room", name: "Small shared room", roomSize: 0.24, preDelayMs: 26, damp: 0.68 };
-  await session.apply("ambience", [{ kind: "setReverbBus", bus }, { kind: "setSend", partId: "lead", busId: "room", gain: 0.09 }]);
+  await session.apply("ambience", [{ kind: "setReverbBus", bus }, { kind: "setSend", partId: "lead", busId: "room", gain: 0.09 },
+    { kind: "setStructure", bars: 4, tempoBpm: 92, sections: [{ id: "first", name: "First", startBar: 0, endBar: 1, intent: "Start" }, { id: "middle", name: "Middle", startBar: 1, endBar: 2, intent: "Open" }, { id: "end", name: "End", startBar: 2, endBar: 4, intent: "Settle" }] },
+    { kind: "addAutomation", partId: "lead", automation: { id: "crossing-tone", target: "gain", points: [{ tick: 0, value: 0.1, interpolation: "linear" }, { tick: 11520, value: 0.7 }] } }
+  ]);
   const reviewer = fakeModel().respond(good());
   await focusedNativeReview({ job, direction, document: session.document, plan, attempt: 0, scriptedReviewer: reviewer });
   const payload = JSON.parse(reviewer.calls[0]!.messages.find((message) => message.type === "human")!.text);
   expect(payload.confirmedScore.sharedProcessing).toEqual({ reverbBus: bus, delayBus: null, groups: [], master: null });
   expect(payload.confirmedScore.soundEvidence[0].sends).toEqual([{ busId: "room", gain: 0.09 }]);
+  expect(payload.confirmedScore.sections[1].parts[0].automation[0].first).toBeCloseTo(0.3);
+  expect(payload.confirmedScore.sections[1].parts[0].automation[0].last).toBeCloseTo(0.5, 3);
   expect(reviewer.calls[0]!.messages.find((message) => message.type === "system")!.text).toContain('"maxLength":300');
+  expect(reviewer.calls[0]!.messages.find((message) => message.type === "system")!.text).toContain("absence of listening is a standing limitation, not a defect");
 });
 
 it("compacts final system/schema/reasoning input through the real producer before accounting dispatch", async () => {
@@ -179,6 +185,7 @@ it("keeps incremental scenes and recent inspection context after music, with foc
     .respondWithTools([{ name: "select_native_tools", args: { focus: "batch" } }])
     .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "mix", operations: [{ kind: "setMix", partId: "lead", pan: 0.1 }] } }])
     .respondWithTools([{ name: "select_native_tools", args: { focus: "none" } }])
+    .respondWithTools([{ name: "select_native_tools", args: { focus: "scene" } }])
     .respond(new AIMessage("Finished"));
   const menus: string[] = [];
   const bind = model.bindTools.bind(model);
@@ -195,6 +202,8 @@ it("keeps incremental scenes and recent inspection context after music, with foc
   expect(names(7)).toContain('"apply_native_batch"');
   expect(names(7)).not.toContain('"configure_native_sound"');
   expect(names(9)).toContain('"compose_native_scene"');
+  expect(model.calls[4]!.messages.map((message) => message.text).join("\n")).toContain('"activeToolMenu":{"focus":"sound","constructionTools":["configure_native_sound"]');
+  expect(model.calls[10]!.messages.map((message) => message.text).join("\n")).toContain('"alreadyActive":true');
   const envelopes = (await getPool().query("SELECT output->'inputReservationBytes'->>'envelope' AS bytes FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [job.id])).rows;
   expect(Number(envelopes[2]?.bytes)).toBeLessThan(50_000);
   expect(Number(envelopes[4]?.bytes)).toBeLessThan(50_000);

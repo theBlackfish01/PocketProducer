@@ -31,6 +31,27 @@ describe("grounded symbolic editor", () => {
     const bad = nativePlanSchema.parse({ ...plan, creativeState: { ...plan.creativeState, evidenceLinks: [{ promise: "Bass enters", partId: "missing-bass", firstBar: 0, lastBar: document.bars + 1 }] } });
     expect(nativePlanEvidenceIssues(bad, document)).toEqual(expect.arrayContaining([expect.stringContaining("missing part"), expect.stringContaining("invalid bar range")]));
   });
+  it("reports section-local automation even when a ramp has no point inside the section", () => {
+    const score = structuredClone(document);
+    score.sections = [
+      { id: "opening", name: "Opening", startBar: 0, endBar: 1, intent: "Start" },
+      { id: "middle", name: "Middle", startBar: 1, endBar: 2, intent: "Open tone" },
+      { id: "end", name: "End", startBar: 2, endBar: score.bars, intent: "Return" }
+    ];
+    score.parts[0]!.automation = [{ id: "tone", target: "gain", points: [{ tick: 0, value: 0.1, interpolation: "linear" }, { tick: 11520, value: 0.7 }] }];
+    const middle = symbolicNativeReview(score, null).sections[1]!.parts[0]!.automation[0]!;
+    expect(middle.first).toBeCloseTo(0.3);
+    expect(middle.last).toBeCloseTo(0.5, 3);
+    expect(middle.points.map((point) => point.tick)).toEqual([0, 11520]);
+    expect(middle.exactBoundaryValues).toBe(true);
+    score.parts[0]!.automation[0]!.points[0]!.interpolation = "sloped";
+    const sloped = symbolicNativeReview(score, null).sections[1]!.parts[0]!.automation[0]!;
+    expect(sloped.first).toBeNull();
+    expect(sloped.exactBoundaryValues).toBe(false);
+    // A step exactly at the next section belongs to that section, not this one.
+    score.parts[0]!.automation[0]!.points = [{ tick: 0, value: 0.2 }, { tick: 7680, value: 0.8 }];
+    expect(symbolicNativeReview(score, null).sections[1]!.parts[0]!.automation[0]!.last).toBe(0.2);
+  });
   it("shows unresolved kit identity and repeated default tonal cores to the reviewer", () => {
     const weak = applyNativeOperations(seedNativeDocument("Synth and disco"), [
       ...["bass", "chords"].map((id) => ({ kind: "addPart" as const, part: { id, name: id, role: id === "bass" ? "bass" as const : "harmony" as const, device: { type: "heisenberg" as const, parameters: { "filter.cutoffFrequencyHz": id === "bass" ? 300 : 3000 } }, gain: 0.6, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] } })),

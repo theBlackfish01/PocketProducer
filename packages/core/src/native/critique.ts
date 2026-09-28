@@ -2,6 +2,21 @@ import { z } from "zod";
 import { canonicalHash } from "../domain/hash.js";
 import { analyzeNativeSection, barTicks, materializedNotes, type NativeDocument } from "./model.js";
 import type { NativePlan } from "./plan.js";
+import { automationValueAt } from "./section.js";
+
+// A ramp may cross an entire section without a control point inside it. Give
+// the editor local boundary values and the enclosing keyframes, not unrelated
+// whole-song endpoints. Sloped interpolation is reported, never approximated.
+function sectionAutomation(curve: NativeDocument["parts"][number]["automation"][number], start: number, end: number) {
+  if (!curve.points.some((point) => point.tick < end)) return null;
+  const before = curve.points.findLast((point) => point.tick <= start);
+  const after = curve.points.find((point) => point.tick >= end);
+  const points = [...(before ? [before] : []), ...curve.points.filter((point) => point.tick > start && point.tick < end), ...(after ? [after] : [])];
+  const value = (tick: number) => { try { return automationValueAt(curve.points, tick); } catch { return null; } };
+  return { target: curve.target, first: value(start), last: value(end - 1), normalized: true,
+    points: points.slice(0, 8), omittedPoints: Math.max(0, points.length - 8),
+    exactBoundaryValues: !points.some((point) => point.interpolation === "sloped") };
+}
 
 export const nativeReviewSchema = z.object({
   documentHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -83,14 +98,14 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
     const partFacts = inspected.parts.map((part) => {
       const source = document.parts.find((item) => item.id === part.id)!;
       const onsets = materializedNotes(document, part.id).filter((note) => note.startTick >= start && note.startTick < end);
-      const activeCurves = source.automation.filter((curve) => curve.points.some((point) => point.tick >= start && point.tick <= end));
+      const activeCurves = source.automation.map((curve) => sectionAutomation(curve, start, end)).filter((curve) => curve !== null);
       return { id: part.id, role: part.role, device: source.device.type, preset: source.device.preset ? { name: source.device.preset.name, hash: source.device.preset.contentHash ?? null } : null,
         newOnsets: part.newOnsets, onsetsPerBar: part.onsetsPerBar, noteRange: part.noteRange, clips: part.sourceRegions.length + part.libraryRegions.length,
         // Relative rhythm, pitches and velocities distinguish genuine thematic
         // development from identical density/range in every section.
         onsetPreview: onsets.slice(0, 8).map((note) => [note.startTick - start, note.pitch, Number(note.velocity.toFixed(2))]),
         motifIds: [...new Set(part.placements.map((placement) => placement.motifId))].slice(0, 8),
-        automation: activeCurves.slice(0, 4).map((curve) => ({ target: curve.target, first: curve.points[0]?.value ?? null, last: curve.points.at(-1)?.value ?? null })) };
+        automation: activeCurves.slice(0, 4), omittedAutomation: Math.max(0, activeCurves.length - 4) };
     });
     return { id: section.id, name: section.name, firstBar: section.startBar, lastBar: section.endBar,
       intent: section.intent, totalOnsets: partFacts.reduce((sum, part) => sum + part.newOnsets, 0),
