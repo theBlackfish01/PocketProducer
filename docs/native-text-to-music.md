@@ -1,5 +1,7 @@
 # Text-to-native-music construction pass
 
+September 28: [robust request sizing and focused construction tools](producer-efficiency-implementation.md) supersede the older message-only sizing and always-advertised tool description below. Tick scenes, theme/section compounds, apply-and-inspect and on-demand specialist tools are connected to the same protected durable pipeline. Under-50-turn convergence remains an evaluation target, not a live-verified claim.
+
 Current producer selection: new directions/revisions can use OpenAI Sol, OpenAI Luna with xhigh reasoning, or Gemini Flash through the same validated Deep Agent workflow. Jobs retain their captured model except for the explicitly configured, durable Sol-to-Luna shared-demo handoff; original profiles and charges remain intact. Historical Gateway jobs are not rewritten. See [shared usage and provider boundaries](model-selection.md); neither model selection nor symbolic critique enables native listening.
 
 ## Current product boundary — 2026-09-27

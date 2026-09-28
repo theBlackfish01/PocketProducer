@@ -1,5 +1,9 @@
 # Architecture — native construction is the current path
 
+## Producer request envelope and tool surface (2026-09-28)
+
+Preflight and accounting share final-system/message/schema coverage. The byte guard is a conservative reservation, not measured token usage; effect settlement retains actual provider usage plus non-content sizing components. Complete replay groups compact locally before dispatch. Scoped compounds use the existing serialized `NativeToolSession.apply`; optional post-commit reads never turn a committed receipt into a failed write. Default scene/edit tools and on-demand specialist sets reduce advertised schema size without changing registration or authority. Inspection caching is invocation-local and exact-document-hash scoped. See [contracts and evidence boundaries](producer-efficiency-implementation.md).
+
 ## Hosted Audiotool sign-in (2026-09-28)
 
 Production defaults to open Audiotool registration (`HOSTED_AUTH_MODE=audiotool`); optional `invite` mode remains for private fixtures/previews. Server-side authorization-code PKCE uses the fixed endpoints from Nexus 0.0.17, a 10-minute HttpOnly browser verifier and a hashed single-use PostgreSQL state/binding (migration 027). The code is exchanged only after matching that binding. AuthService/GetWhoami, not a supplied username or public profile lookup, establishes the canonical `users/...` identity. A short serialized admission transaction creates/reuses one owner, saves encrypted Audiotool tokens and issues a hashed 7-day server session. No external call runs under that transaction. Revoked owners cannot re-register; reconnect cannot switch identities. No automatic display-name/session-token-based linking is allowed. Operators can prebind the original owner before its first hosted login, preserving music and accounting.

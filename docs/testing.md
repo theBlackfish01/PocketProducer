@@ -1,5 +1,28 @@
 # Verification record
 
+September 28 goal attempt-4 follow-up: full unit **212/212** (37 files, 53.73 s), focused convergence/review/worker **36/36** (15.20 s), provider wire **9/9** (1.37 s), then final finishing suite **21/21** (12.77 s). Added coverage for complete text-only reasoning compaction, exact shared-bus critic inputs, strict Responses review schema/unchanged length rejection, and early exhausted-review stop with retained draft. Types/targeted lint pass. Earlier this pass: full integration **134/134**, application Chromium **18/18**, hosted **2/2**, visual **17/17** (1.6 min), production build pass with existing large-chunk warning. Those broad browser runs precede the critic/context-only changes; scripted tests do not establish live completion.
+
+## Goal-loop task-menu regression (2026-09-28)
+
+On `c98eb41`, the same full unit command below passed **208/208 tests, 37 files (56.00 s)**; the full integration command passed **134/134, 12 files (156.10 s)**. Targeted `vitest run --config vitest.config.ts tests/integration/native-finishing-recovery.test.ts packages/core/src/native/construction-tools.test.ts packages/core/src/native/convergence.test.ts` passed **43/43 (17.08 s)**. `tsc -b` and targeted ESLint passed. The new production regression inspects the actual bound tool names and ledger envelope size, verifies retained opaque recent context, incremental scene notes, sound edits and replay, and continued access to the full operation menu. These are scripted/offline results; current real Luna attempt outcomes are separately recorded in STATUS.
+
+## Complete-envelope and compound construction pass (2026-09-28)
+
+Executed from the repository with pinned local binaries:
+
+| Command | Result |
+| --- | --- |
+| `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts --exclude tests/integration/** --exclude tests/e2e/** --exclude tests/visual/** --exclude tests/hosted/**` | 201 tests / 37 files; 87.39 s |
+| `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts tests/integration` | 130 tests / 12 files; 197.61 s |
+| `.\node_modules\.bin\playwright.cmd test --config tests/playwright.config.ts` | 18/18 journeys; 2.2 min |
+| `.\node_modules\.bin\playwright.cmd test --config tests/visual.playwright.config.ts` | 17/17 journeys; 2.5 min |
+| `.\node_modules\.bin\playwright.cmd test --config tests/hosted.playwright.config.ts` | 2/2 journeys; 31.1 s |
+| `.\node_modules\.bin\tsc.cmd -b` | Passed |
+| `.\node_modules\.bin\eslint.cmd . --max-warnings=0` | Passed |
+| From `apps/web`: `.\node_modules\.bin\vite.cmd build` | Passed; 2.67 s; existing chunk-size warning |
+
+Database suites run serially after guarded `node --import tsx packages/core/src/db/prepare-test.ts`; browser data additionally uses `node --import tsx scripts/prepare-e2e.ts`. Never point these suites at the user database. Test setup clears provider keys and tracing; generation is scripted, not a live quality evaluation. `construction-tools.test.ts` checks exact ticks, offline Nexus validation, protected transformations, normalized automation/endpoints, controls, cache invalidation and capability search. `native-finishing-recovery.test.ts` checks actual production model envelopes and same-key compound receipts, including an inspection failure after commit. Existing full suites retain restart, contention, unknown charges and ownership fences. Screenshots inspected: `.local/evidence/welcome-desktop.png`, `polish-phone.png`; physical phone, other browser engines and live native audio remain unverified.
+
 ## Focused finishing recovery (2026-09-27)
 
 New `packages/core/src/native/review-model.test.ts` covers JSON fences, malformed/schema-invalid responses, missing no-change reasons, invented musical IDs, truncation and semantic versus bookkeeping plan hashes. `convergence.test.ts` covers bounded complete-group compaction, exact brief/current plan/latest error/pending-call preservation and opaque message metadata. `tests/integration/native-finishing-recovery.test.ts` drives real producer tools/worker/ledger through bounded critic repair, reuse, changed-plan invalidation, late stale review rejection, input-stop continuation at unchanged caps, exhausted-review blocking, varied-inspection stagnation and interruption after settled recovery before plan attachment. That last boundary is simulated in durable state, not a separately killed process.
