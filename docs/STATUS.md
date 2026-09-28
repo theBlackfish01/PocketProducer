@@ -1,5 +1,15 @@
 # Live implementation status
 
+## Input-pressure review repairs — 2026-09-28
+
+Both findings reproduced before repair: the 96-bar/12-part/12-section critic request measured **229,091 > 128,000** including system/schema, and finishing context with one optional observation measured **128,362 > 128,000** although required context fit. These were gaps in the preceding goal-pass review, not provider credit failures.
+
+- Critique selects detailed evidence, lossless tuple encoding, then explicitly bounded selections against the **complete dispatch envelope**. Original brief, earlier findings, sound settings, section/represented-part coverage, timing, exact boundary values and document hash are retained. No larger allowance or bypass of the final review.
+- Finishing pressure can remove the final optional recalled observation, reports omission count, and preserves required context/pending exchanges. Irreducible input still fails before any reservation/dispatch.
+- Offline verification includes the large production critic path, a ~30k-character brief at a tighter 110k bound, prior findings, sloped automation/null boundary values, incomplete previews, shared automation omissions, unchanged source evidence, zero-dispatch failure, and existing receipt/recovery tests. Verification results are recorded in [testing](testing.md).
+- No paid call, user-job continuation, remote copy, UI change, credential/allowance change or push. Compact critic layouts are offline/scripted verified, **not newly live-quality-qualified**. No claim that every maximal document plus maximal brief can fit; mandatory overflows remain explicit errors.
+- Final checks: **216 unit tests**, **143 integration tests**, full lint, types and production build pass. The first concurrent integration run had one short-lease activity-test failure; the full rerun passed with unchanged assertions. Expanded focused assertions pass **15/15**. Diff reviewed for evidence fidelity, mandatory-input preservation and unchanged accounting/replay boundaries; no additional actionable defect identified.
+
 ## Goal-mode Luna reliability loop — 2026-09-28
 
 **Acceptance evidence established:** two consecutive fresh real Luna xhigh browser completions, independently inspected music and final reviews, followed by a protected revision/history journey. The revision required one diagnosed repair and explicit continuation; it was not a flawless first attempt. [Requirement-by-requirement audit, musical evidence and hands-on guide](luna-goal-completion-2026-09-28.md). Native audio/live Nexus fidelity remain unverified; no remote copy, deployment or push occurred. Existing allowances and unrelated liabilities remain unchanged.

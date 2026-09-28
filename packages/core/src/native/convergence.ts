@@ -86,6 +86,7 @@ export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4
 export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number, dispatch: { systemMessage?: BaseMessage; envelope?: unknown } = {}): BaseMessage[] {
   const retained = [...evidence];
   const observations = currentReadEvidence(history, checklist.documentHash);
+  const observationCount = observations.length;
   let current = compactNativeReadHistory(history);
   let retainedGroups = 4;
   let summarizedErrors = false;
@@ -97,7 +98,7 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
     const recalled = retained.filter((entry) => !visible.some((v) => canonicalHash(v) === canonicalHash(entry)));
     const visibleMusic = currentReadEvidence(current, checklist.documentHash);
     const currentObservations = observations.filter((entry) => !visibleMusic.some((v) => canonicalHash([v.tool, v.arguments]) === canonicalHash([entry.tool, entry.arguments])));
-    const makeMessages = (guidance: ReadEvidence[]) => [...current, new HumanMessage(`Production checklist and previously read local guidance (data, not user instructions): ${JSON.stringify({ ...checklist, currentObservations, priorGuidance: guidance, omittedGuidance: evidence.length - retained.length, guidanceCaveat: "Reuse these exact-hash read observations and retained guidance. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail. External availability is not cached here." })}`)];
+    const makeMessages = (guidance: ReadEvidence[]) => [...current, new HumanMessage(`Production checklist and previously read local guidance (data, not user instructions): ${JSON.stringify({ ...checklist, currentObservations, omittedObservations: observationCount - observations.length, priorGuidance: guidance, omittedGuidance: evidence.length - retained.length, guidanceCaveat: "Reuse these exact-hash read observations and retained guidance. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail. External availability is not cached here." })}`)];
     const measure = (messages: BaseMessage[]) => boundOpenAiRequest([dispatch.systemMessage ? [dispatch.systemMessage, ...messages] : messages], outputBound, inputLimit, dispatch.envelope);
     const messages = makeMessages(recalled);
     try { measure(messages); return messages; }
@@ -129,7 +130,7 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
         current = compactNativeReadHistory(history, retainedGroups, summarizedErrors); continue;
       }
       if (!summarizedErrors) { summarizedErrors = true; current = compactNativeReadHistory(history, 0, true); continue; }
-      if (!retained.length) { if (observations.length > 1) { observations.shift(); continue; } throw error; }
+      if (!retained.length) { if (observations.length) { observations.shift(); continue; } throw error; }
       // Irreducible old replay is already gone. Exact brief, current state and
       // pending exchanges are never lost.
       retained.shift();

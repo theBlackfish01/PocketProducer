@@ -8,6 +8,8 @@ import { nativeFormSchema } from "@pocket/core";
 import { boundOpenAiRequest } from "@pocket/core/test-support";
 import { listProjects, requireProject, abandonNativePartialJob } from "@pocket/core";
 import { completeProviderEffect, failProviderEffect, reconcileNativeStepConflict } from "@pocket/core";
+import { nativeDocumentSchema } from "@pocket/core";
+import { nativeReviewResponseFormat } from "@pocket/core/test-support";
 
 let owner = "";
 const config = getConfig(), originalConfig = { ...config };
@@ -126,6 +128,41 @@ it("sends meter, duration and incomplete-preview evidence in actual critic input
   expect(drums.rhythmWindow).toMatchObject({ endTick: 5760, totalOnsets: 12, omittedOnsets: 0 });
   expect(drums.rhythmWindow.notes).toContainEqual([5280, 38, 1, 240]);
   expect(reviewer.calls[0]!.messages[0]!.text).toContain("never infer missing later notes");
+});
+
+it.each([128000, 110000])("fits a large arranged score into the %i critic envelope without losing the brief or section coverage", async (limit) => {
+  const { job, session } = await prepared();
+  job.request._nativeRun = { ...(job.request._nativeRun as object), maxInputTokens: limit };
+  const document = nativeDocumentSchema.parse({ ...session.document, bars: 96,
+    sections: Array.from({ length: 12 }, (_, i) => ({ id: `s${i}`, name: `Section ${i + 1}`, startBar: i * 8, endBar: (i + 1) * 8 })),
+    parts: Array.from({ length: 12 }, (_, i) => ({ ...session.document.parts[0]!, id: `p${i}`, name: `Instrument ${i + 1}`,
+      notes: Array.from({ length: 384 }, (_, n) => ({ id: `n${n}`, startTick: n * 960, durationTicks: 480, pitch: 48 + i, velocity: 0.6 })),
+      automation: ["gain", "pan", "device.filter.cutoffFrequencyHz", "device.filter.resonance"].map((target, j) => ({ id: `curve${j}`, target, points: [{ tick: 0, value: 0.2, interpolation: "linear" }, { tick: 368639, value: 0.8 }] }))
+    })) });
+  const reviewer = fakeModel().respond(good());
+  const exactBrief = "A 96-bar ensemble with a developing middle and altered return. Keep every section." + (limit === 110000 ? " Preserve the theme.".repeat(1600) : "");
+  const previousReviews = [{ documentHash: canonicalHash(document), verdict: "The return needs development.", findings: [{ priority: "medium" as const, sectionId: "s11", partId: "p0", observation: "The return repeats the opening.", suggestedChange: "Change its rhythm." }], noChangeReason: null, modelUsed: true }];
+  const review = await focusedNativeReview({ job, direction: exactBrief, document, plan, previousReviews, attempt: 1, scriptedReviewer: reviewer });
+  expect(review.modelUsed).toBe(true);
+  const request = reviewer.calls[0]!;
+  expect(boundOpenAiRequest([request.messages], 1600, limit, { response_format: nativeReviewResponseFormat }).inputTokenBound).toBeLessThanOrEqual(limit);
+  const body = JSON.parse(request.messages[1]!.text) as { originalBrief: string; previousReviews: { findings: unknown }[]; confirmedScore: { documentHash: string; sections: { id: string; parts: unknown[] }[]; evidenceLayout: { mode: string } } };
+  expect(body.originalBrief).toBe(exactBrief);
+  expect(body.previousReviews[0]!.findings).toEqual(previousReviews[0]!.findings);
+  expect(body.confirmedScore.documentHash).toBe(canonicalHash(document));
+  expect(body.confirmedScore.sections.map((s: { id: string }) => s.id)).toEqual(document.sections.map(s => s.id));
+  expect(body.confirmedScore.sections.every((s: { parts: unknown[] }) => s.parts.length === 12)).toBe(true);
+  expect(body.confirmedScore.evidenceLayout).toBeDefined();
+  if (limit === 110000) expect(body.confirmedScore.evidenceLayout.mode).toBe("bounded-tuples");
+});
+
+it("rejects irreducible critic input before reserving or dispatching, without shortening the brief", async () => {
+  const { job, session } = await prepared();
+  const before = (await getPool().query("SELECT id FROM effect WHERE job_id=$1", [job.id])).rows;
+  const reviewer = fakeModel().respond(good());
+  await expect(focusedNativeReview({ job, direction: "x".repeat(128000), document: session.document, plan, attempt: 1, scriptedReviewer: reviewer })).rejects.toThrow("OPENAI_INPUT_LIMIT_EXCEEDED");
+  expect(reviewer.calls).toHaveLength(0);
+  expect((await getPool().query("SELECT id FROM effect WHERE job_id=$1", [job.id])).rows).toEqual(before);
 });
 
 it("replays a settled same-score critic receipt after evidence formatting changes, without a new paid call", async () => {

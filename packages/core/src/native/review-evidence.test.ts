@@ -1,0 +1,34 @@
+import { expect, it } from "vitest";
+import { seedNativeDocument } from "./producer.js";
+import { symbolicNativeReview } from "./critique.js";
+import { compactNativeReviewEvidence } from "./review-evidence.js";
+
+it("encodes section evidence losslessly before shortening explicitly optional detail", () => {
+  const document = seedNativeDocument("A phrase with a changing pulse");
+  const part = document.parts[0]!;
+  part.role = "percussion";
+  part.notes = Array.from({ length: 40 }, (_, i) => ({ id: `n${i}`, startTick: i * 120, durationTicks: 60, pitch: 42, velocity: .5 }));
+  part.automation = [{ id: "gain", target: "gain", points: [{ tick: 0, value: .1, interpolation: "sloped", slope: .4 }, { tick: 15000, value: .8 }] }];
+  document.groups = [{ id: "bus", name: "Shared space", gain: .7, pan: 0, automation: [{ id: "swell", target: "gain", points: [{ tick: 0, value: .1 }, { tick: 480, value: .9 }, { tick: 960, value: .1 }] }] }];
+  const summary = symbolicNativeReview(document, null);
+  const before = structuredClone(summary);
+  const compact = compactNativeReviewEvidence(summary);
+  const row = Object.fromEntries(compact.evidenceLayout.part.map((key, i) => [key, compact.sections[0]!.parts[0]![i]]));
+  const original = summary.sections[0]!.parts[0]!;
+  expect(row.onsetPreview).toEqual(original.onsetPreview);
+  expect(row.rhythmWindow).toEqual(original.rhythmWindow);
+  expect(compact.sharedProcessing.groups[0]!.automation![0]).toMatchObject({ ...document.groups[0]!.automation![0], omittedPoints: 0 });
+  expect(row.automation).toEqual(original.automation.map(curve => [curve.target, curve.first, curve.last, curve.exactBoundaryValues, curve.points.map(point => [point.tick, point.value, point.interpolation ?? null, point.slope ?? null]), curve.omittedPoints]));
+  const minimal = compactNativeReviewEvidence(summary, true);
+  const short = Object.fromEntries(minimal.evidenceLayout.part.map((key, i) => [key, minimal.sections[0]!.parts[0]![i]]));
+  expect(short.onsetPreview).toEqual(original.onsetPreview.slice(0, 2));
+  expect(short.omittedPreviewOnsets).toBe(original.newOnsets - 2);
+  expect(short.rhythmWindow).toMatchObject({ notes: original.rhythmWindow!.notes.slice(0, 8), omittedOnsets: original.rhythmWindow!.totalOnsets - 8 });
+  expect(short.automation).toEqual(original.automation.map(curve => [curve.target, curve.first, curve.last, curve.exactBoundaryValues, [], curve.points.length + curve.omittedPoints]));
+  expect(minimal.documentHash).toBe(summary.documentHash);
+  expect(minimal.soundEvidence).toEqual(summary.soundEvidence);
+  expect(minimal.sharedProcessing.groups[0]!.automation![0]).toMatchObject({ points: [{ tick: 0, value: .1 }, { tick: 960, value: .1 }], omittedPoints: 1 });
+  expect(minimal.evidenceLayout.caveat).toContain("Boundary values do not establish interior curve shape");
+  expect(minimal.arcEvidence).toEqual(summary.arcEvidence);
+  expect(summary).toEqual(before);
+});

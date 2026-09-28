@@ -5,6 +5,18 @@ import { NativeConvergenceMonitor, nativeFinishingGuidance, nativeReadEvidence, 
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {
+  it("omits the final optional observation before rejecting otherwise fitting mandatory context", () => {
+    const brief = new HumanMessage("Exact original brief");
+    const system = new SystemMessage("s".repeat(124500));
+    const history = [brief, new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(20000) }] }, tool_calls: [{ id: "read", name: "inspect_native_part", args: { partId: "bass" } }] }), new ToolMessage({ tool_call_id: "read", content: JSON.stringify({ documentHash: "current", part: { id: "bass", detail: "n".repeat(1800) } }) })];
+    const result = withNativeFinishingContext(history, { documentHash: "current" }, [], 900, 128000, { systemMessage: system });
+    expect(boundOpenAiRequest([[system, ...result]], 900, 128000).inputTokenBound).toBeLessThanOrEqual(128000);
+    expect(result).toContain(brief);
+    expect(result.at(-1)!.text).toContain('"omittedObservations":1');
+    expect(result.at(-1)!.text).toContain('"currentObservations":[]');
+    const pending = new AIMessage({ content: "", tool_calls: [{ id: "pending", name: "inspect_native_part", args: { detail: "p".repeat(20000) } }] });
+    expect(() => withNativeFinishingContext([...history, pending], { documentHash: "current" }, [], 900, 128000, { systemMessage: system })).toThrow("OPENAI_INPUT_LIMIT_EXCEEDED");
+  });
   it("compacts complete text-only reasoning responses across finishing passes", () => {
     const brief = new HumanMessage("Exact original musical brief");
     const history = [brief, ...Array.from({ length: 8 }, (_, i) => [new AIMessage({ content: `Unfinished response ${i}`, response_metadata: { output: [{ type: "reasoning", encrypted_content: `${i}:` + "x".repeat(20000) }] } }), new HumanMessage(`Complete missing requirement ${i}`)]).flat()];

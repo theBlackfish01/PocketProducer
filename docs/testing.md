@@ -1,5 +1,14 @@
 # Verification record
 
+## Input-pressure review follow-up — September 28
+
+Both new regressions failed on the original code: complete critic envelope **229,091 > 128,000**, and final optional observation **128,362 > 128,000**. Production `focusedNativeReview` now passes a valid 96-bar, 12-section, 12-part score with 4,608 notes and four automation curves per part through the actual injected reviewer. The tighter 110k case retains a ~30k-character brief and previous findings, while selecting the explicitly bounded layout. Unit coverage checks lossless encoding, sloped/null automation boundaries, shared-curve omissions, preview counts and source immutability. A mandatory-input overflow creates no new effect and never invokes the reviewer; a pending tool exchange is never sacrificed to fit finishing context.
+
+- Full unit command below: **216/216**, 38 files, 170.33s. Subsequent expanded evidence assertions plus convergence tests: **15/15**, 6.67s.
+- Full lint and TypeScript pass. Production build passes (4.01s), with the existing >500KB chunk warning.
+- First full integration run under concurrent unit/lint/type load: **142/143**, 335.86s. The activity worker assertion saw `running` rather than `succeeded` after 3.99s; test configuration has a three-second lease. No assertion/lease was weakened. Full integration rerun without concurrent heavy suites: **143/143**, 12 files, **166.81s**, including real-process restart/contention. The initial timing-sensitive failure remains recorded, not represented as a first-pass success.
+- No paid/provider access, browser run, live Nexus mutation or new heard-quality evidence in this backend-only pass. Existing browser evidence below is historical, not rerun here.
+
 ## Luna goal final verification — September 28
 
 Pinned local commands (repository root unless stated), fixture/scripted providers with tracing and provider credentials disabled:

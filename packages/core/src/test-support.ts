@@ -15,5 +15,5 @@ export { AIMessage } from "@langchain/core/messages";
 export { CompatibleProducerModel, producerChatModel } from "./providers/compatible-model.js";
 export { AccountedOpenAICalls, boundOpenAiRequest } from "./agent/runtime.js";
 export { sharedUsageBlock } from "./providers/limits.js";
-export { focusedNativeReview, nativeFormatRecoveryAvailable } from "./native/review-model.js";
+export { focusedNativeReview, nativeFormatRecoveryAvailable, nativeReviewResponseFormat } from "./native/review-model.js";
 export { createOfflineDocument } from "@audiotool/nexus/node";
