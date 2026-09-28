@@ -1,6 +1,16 @@
 # Repository publication readiness
 
-## Review — 2026-09-28
+## Current decision — 2026-09-28
+
+[CI run 36380822760](https://github.com/theBlackfish01/PocketProducer/actions/runs/36380822760) passed for `47057d1`. The repository remains **PRIVATE**. Apache-2.0 is now selected for original project code and documentation; upstream rights/notices remain separate in [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md).
+
+Current documentation omits private LangSmith links and replaces installation-specific evaluation IDs with placeholders while preserving findings and costs. The owner chose to retain Git history after discussing its discoverability: historical author email and trace identifiers remain accessible to anyone given repository access, and would become public with the history if visibility changes. Trace identifiers do not themselves authorize access to private traces. The credential scan found no configured-secret or credential-pattern matches; this is not an exhaustive security certification. No history rewrite or force push is needed for the accepted low-sensitivity exposure.
+
+The handoff records the selected mockup as AI-generated for this project and includes its prompt. External references are links, not bundled sample packs. The 35-file manifest validation passed. This documents provenance and integrity, not blanket rights clearance for third-party content. No credentials, data, accounting or repository visibility were changed.
+
+Before a later public release, update the private-clone/reporting instructions and source-link flag only when visibility actually changes. Deployment and paid generation remain separately authorized actions. The review below records the earlier state and is superseded by this decision.
+
+## Earlier review — 2026-09-28
 
 GitHub was queried read-only: `theBlackfish01/PocketProducer` is still **PRIVATE**, its default branch is `main`, and no project license is detected. This review does not authorize or perform a push, visibility change, deployment, or spending.
 

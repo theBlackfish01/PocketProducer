@@ -175,4 +175,8 @@ docs/              Architecture, design, evidence and project walkthrough
 
 ---
 
+## License
+
+Original project code and documentation are licensed under [Apache 2.0](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for dependency and asset provenance.
+
 <div align="center"><em>A little more intention. A little more room to make it yours.</em></div>

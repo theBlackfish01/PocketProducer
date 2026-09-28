@@ -1,5 +1,13 @@
 # Live implementation status
 
+## License and current-file privacy cleanup — 2026-09-28
+
+GitHub [CI run 36380822760](https://github.com/theBlackfish01/PocketProducer/actions/runs/36380822760) passed on `47057d1`; repository visibility remains **private**. Added the official Apache-2.0 license, project notice, package metadata and a concise README license section. Retained the shadcn MIT notice and documented handoff/asset provenance. Removed private trace links and replaced installation-specific identifiers in the tracked Sol evaluation report with placeholders; musical findings and historical costs are unchanged.
+
+The owner chose not to rewrite history: earlier author email and trace identifiers remain discoverable in earlier commits. They are not access credentials; no configured-secret/credential-pattern matches were found by the heuristic scan. Current cleanup does not erase history. No force push, visibility change, deployment, paid calls, credentials/application-configuration edits or application/data changes are part of this pass. Package provenance validation passed (35 files, 68 local links, 64 external links, manifest and image/contrast checks). Runtime tests need no rerun for these license/documentation-only changes; the green CI above is the code evidence.
+
+Final checks: official Apache plaintext matches the local license; private package guard and license metadata verified; static course and Git whitespace checks pass. Fresh scan covered 58 commits, 1,065 blobs, 356 nonignored working files and 70 ZIP-entry reads with no findings. Future commits use the verified GitHub no-reply address via repository-local Git configuration; historical commits are unchanged. Reviewed changes are limited to license, notices, package metadata and documentation.
+
 ## Commit and publication review — 2026-09-28
 
 Recorded the pending Responses replay repair as `6949c8b` and the shared funded-demo/hosted Audiotool implementation as `7b24ed3`; reviewed their diffs and included the associated migrations, offline tests, deployment packaging and runbook. Earlier entries' "uncommitted" wording describes their original execution time, not the current checkout. No user configuration, accepted data, credentials, spending allowance or lockfile changed in this review.
