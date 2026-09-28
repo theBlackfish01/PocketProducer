@@ -145,6 +145,54 @@ it("constructs, develops, shapes and inspects through compound tools with replay
   expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(3);
 }, 30_000);
 
+it("keeps incremental scenes and recent inspection context after music, with focused sound and full edits on demand", async () => {
+  const job = await create("standard", "gpt-6-luna");
+  const opening = { stepKey: "opening", replaceSeed: true, structure: { bars: 4, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 4 }] },
+    parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0 }],
+    patterns: [{ id: "opening", partId: "lead", name: "Opening", lengthTicks: 3840, events: [[0, 960, 64, 0.7]] }],
+    placements: [{ partId: "lead", placement: { id: "first", motifId: "opening", startTick: 0, repeats: 2, transpose: 0 } }] };
+  const sound = { stepKey: "sound", operations: [
+    { kind: "setMix", partId: "lead", gain: 0.5 },
+    { kind: "addAutomation", partId: "lead", automation: { id: "tone", target: "device.filter.cutoffFrequencyHz", points: [{ tick: 0, value: 0.2, interpolation: "linear" }, { tick: 15360, value: 0.6 }] } }
+  ], inspect: { sectionIds: ["whole"], soundPartIds: ["lead"] } };
+  const model = fakeModel().respondWithTools([{ name: "compose_native_scene", args: opening }])
+    .respond(new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "recent-inspection:" + "x".repeat(20000) }] }, tool_calls: [
+      { id: "part", name: "inspect_native_part", args: { partId: "lead", noteLimit: 12 } },
+      { id: "section", name: "inspect_native_section", args: { sectionId: "whole" } }
+    ] }))
+    .respondWithTools([{ name: "compose_native_scene", args: { stepKey: "answer", patterns: [{ id: "answer", partId: "lead", name: "Answer", lengthTicks: 3840, events: [[480, 1440, 67, 0.6]] }], placements: [{ partId: "lead", placement: { id: "last", motifId: "answer", startTick: 7680, repeats: 2, transpose: 0 } }] } }])
+    .respondWithTools([{ name: "select_native_tools", args: { focus: "sound" } }])
+    .respondWithTools([{ name: "configure_native_sound", args: sound }])
+    .respondWithTools([{ name: "configure_native_sound", args: sound }])
+    .respondWithTools([{ name: "select_native_tools", args: { focus: "batch" } }])
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "mix", operations: [{ kind: "setMix", partId: "lead", pan: 0.1 }] } }])
+    .respondWithTools([{ name: "select_native_tools", args: { focus: "none" } }])
+    .respond(new AIMessage("Finished"));
+  const menus: string[] = [];
+  const bind = model.bindTools.bind(model);
+  model.bindTools = (tools) => { menus.push(JSON.stringify(tools.map((entry) => "name" in entry ? entry.name : entry))); return bind(tools); };
+  await processJob(job, { scriptedModel: model, library: createNativeLibrary(null) });
+  const state = await jobSnapshot(owner, job.id);
+  expect(state.state, state.error_message ?? "").toBe("succeeded");
+  const names = (index: number) => menus[index];
+  expect(names(2)).toContain('"compose_native_scene"');
+  expect(names(2)).not.toContain('"apply_native_batch"');
+  expect(JSON.stringify(model.calls[2]!.messages)).toContain("recent-inspection:");
+  expect(names(4)).toContain('"configure_native_sound"');
+  expect(names(4)).not.toContain('"compose_native_scene"');
+  expect(names(7)).toContain('"apply_native_batch"');
+  expect(names(7)).not.toContain('"configure_native_sound"');
+  expect(names(9)).toContain('"compose_native_scene"');
+  const envelopes = (await getPool().query("SELECT output->'inputReservationBytes'->>'envelope' AS bytes FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [job.id])).rows;
+  expect(Number(envelopes[2]?.bytes)).toBeLessThan(50_000);
+  expect(Number(envelopes[4]?.bytes)).toBeLessThan(50_000);
+  const score = (await nativeSnapshot(owner, job.projectId)).current!.document;
+  expect(score.parts[0]).toMatchObject({ gain: 0.5, pan: 0.1 });
+  expect(score.parts[0]!.automation).toHaveLength(1);
+  expect(score.motifs.map((m) => m.id)).toEqual(["opening", "answer"]);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(4);
+}, 30_000);
+
 it("projects confirmed draft titles without renaming explicit titles or exposing another owner's work", async () => {
   const { job, session } = await prepared();
   expect((await requireProject(owner, job.projectId)).title).toBe("Finishing recovery test");

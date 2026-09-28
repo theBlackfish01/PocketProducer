@@ -55,6 +55,12 @@ export const themeDevelopmentSchema = z.object({ stepKey,
 export const sectionSoundSchema = z.object({ stepKey,
   operations: z.array(z.union([operation("editSectionAutomation"), operation("setSectionEffectFeedback"), operation("setSectionClipGain")])).min(1).max(24), inspect: inspectionScope.optional() });
 
+// A focused sound menu avoids advertising the entire source/note/routing union
+// merely to change a patch or connect ambience. These are the exact canonical
+// operations, not a parallel permissive implementation.
+export const soundBatchSchema = z.object({ stepKey,
+  operations: z.array(z.union([operation("setDevice"), operation("setMix"), operation("addEffect"), operation("replaceEffect"), operation("addAutomation"), operation("replaceAutomation"), operation("setReverbBus"), operation("setDelayBus"), operation("setSend"), operation("upsertGroup"), operation("routePart")])).min(1).max(32), inspect: inspectionScope.optional() });
+
 export const soundInspectionSchema = z.object({ partId: z.string(), query: z.string().max(120).default(""), offset: z.number().int().min(0).default(0) });
 export function inspectEditableSound(document: NativeDocument, partId: string, query = "", offset = 0) {
   const part = document.parts.find((item) => item.id === partId);
