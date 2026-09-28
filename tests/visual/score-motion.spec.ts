@@ -86,10 +86,17 @@ test.beforeAll(async () => { await mkdir(evidence, { recursive: true }) })
 test("desktop session rail stays viewport-height while the room and recent sessions scroll independently", async ({ page }) => {
   await mockRoom(page, { large: true, audiotool: true })
   await page.route("**/api/v1/projects", route => route.fulfill({ json: { projects: Array.from({ length: 40 }, (_, i) => ({ id: i ? `room-${i}` : projectId, title: i ? `Session ${i}` : "Night Drive", currentRevisionId: null, version: 1, createdAt: "2026-09-26" })) } }))
+  // Session navigation may arrive before the much larger arrangement response.
+  await page.route(`**/api/v1/projects/${projectId}/native`, async route => {
+    await new Promise(resolve => setTimeout(resolve, 500))
+    await route.fallback()
+  })
   await page.reload()
   await page.setViewportSize({ width: 1440, height: 800 })
   const rail = page.getByRole("complementary", { name: "Session navigation" })
   await expect(rail.getByRole("button", { name: "Session 39", exact: true })).toBeAttached()
+  await expect(page.getByRole("heading", { name: "Your arrangement", exact: true })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeGreaterThan(100)
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100)
   await expect.poll(async () => (await rail.boundingBox())!.y).toBe(0)
