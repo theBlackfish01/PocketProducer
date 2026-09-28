@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AudioLines, FolderOpen, Menu, Plus } from "lucide-react"
+import { AudioLines, Check, FolderOpen, LoaderCircle, Menu, Pause, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Brand } from "@/components/brand"
 import { ConnectedAccount } from "@/components/connected-account"
 import { RepositoryLink } from "@/components/repository-link"
+import { WelcomeRoom } from "@/components/welcome-room"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { NativeRoom } from "@/features/native/native-room"
 import { api, type AppStatus, type Project, type SessionSnapshot } from "@/lib/api"
@@ -20,12 +21,6 @@ export default function App({ onSignOut, listenerName, hostedAudiotool = false }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [navOpen, setNavOpen] = useState(false)
-  const [repositoryPublic, setRepositoryPublic] = useState(false)
-  useEffect(() => {
-    const controller = new AbortController()
-    void api.producerModels(controller.signal).then((data) => { if (!controller.signal.aborted) setRepositoryPublic(data.repository?.public === true) }).catch(() => undefined)
-    return () => controller.abort()
-  }, [])
   const activeProjectRef = useRef<string | null>(null)
   const requestRef = useRef(0)
   const mountedRef = useRef(false)
@@ -160,17 +155,21 @@ export default function App({ onSignOut, listenerName, hostedAudiotool = false }
     <Button className="w-full justify-start rail-new" onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button>
     <div className="rail-heading"><FolderOpen className="size-4" /> Sessions</div>
     <p className="rail-caption">Recent</p>
-    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === snapshot?.project.id ? "page" : undefined} title={project.title} onClick={() => void chooseProject(project.id)}><span>{project.title}</span>{project.workspaceStatus && project.workspaceStatus !== "new" ? <small>{project.workspaceStatus === "working" ? "Working" : project.workspaceStatus === "attention" ? "Paused" : "Ready"}</small> : null}</button>)}</div>
+    <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => {
+      const status = project.workspaceStatus && project.workspaceStatus !== "new" ? project.workspaceStatus === "working" ? "Working" : project.workspaceStatus === "attention" ? "Paused" : "Ready" : null
+      const StatusIcon = status === "Working" ? LoaderCircle : status === "Paused" ? Pause : Check
+      return <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === snapshot?.project.id ? "page" : undefined} title={`${project.title}${status ? ` · ${status}` : ""}`} onClick={() => void chooseProject(project.id)}><span className="rail-session-title">{project.title}</span>{status ? <><StatusIcon className={`rail-session-status${status === "Working" ? " is-working" : ""}`} size={14} aria-hidden="true" /><span className="sr-only"> · {status}</span></> : null}</button>
+    })}</div>
   </>
 
   return <div className="app-shell">
-    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}<RepositoryLink isPublic={repositoryPublic} />{account}{hostedAccount}</aside>
+    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}<RepositoryLink />{account}{hostedAccount}</aside>
     <main className="main-area"><div className="main-inner">
       <div className="mobile-topbar"><Brand /><Button variant="ghost" size="icon" aria-label="Open sessions" onClick={() => setNavOpen(true)}><Menu /></Button></div>
       <div className="topline"><span>Listening Room <span aria-hidden="true">/</span> <strong>{snapshot?.project.title ?? "Welcome"}</strong></span></div>
       {error ? <div className="job-status" role="alert"><strong>Something needs attention</strong><p>{error}</p><Button variant="ghost" onClick={() => setError(null)}>Dismiss</Button></div> : null}
-      {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot && nexus ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} audiotoolConnected={nexus.session.connected} audiotoolAvailable={Boolean(nexus.oauth)} onConnectAudiotool={() => void connectAudiotool()} onSourcesChanged={() => refreshSources(snapshot.project.id)} onProjectUpdated={() => { void refreshLabels().catch(() => undefined) }} /> : !error ? <div className="empty-surface"><h1>Your next piece starts here</h1><p>A mood, a moment or a detailed vision. What would you like to make?</p><Button onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button></div> : null}
+      {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot && nexus ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} audiotoolConnected={nexus.session.connected} audiotoolAvailable={Boolean(nexus.oauth)} onConnectAudiotool={() => void connectAudiotool()} onSourcesChanged={() => refreshSources(snapshot.project.id)} onProjectUpdated={() => { void refreshLabels().catch(() => undefined) }} /> : !error ? <WelcomeRoom busy={busy} onCreate={() => void createSession()} /> : null}
     </div></main>
-    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your sessions</SheetDescription></SheetHeader><div className="mobile-session-list p-4">{navigation}<RepositoryLink isPublic={repositoryPublic} />{account}{hostedAccount}</div></SheetContent></Sheet>
+    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your sessions</SheetDescription></SheetHeader><div className="mobile-session-list p-4">{navigation}<RepositoryLink />{account}{hostedAccount}</div></SheetContent></Sheet>
   </div>
 }

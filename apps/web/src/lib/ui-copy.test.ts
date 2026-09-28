@@ -7,6 +7,7 @@ describe("Listening Room copy", () => {
     expect(friendlyIssue("expected native head changed", "Fallback")).toMatch(/reopen it/i)
     expect(friendlyIssue("provider budget limit exceeded", "Fallback")).toMatch(/spending allowance.*draft is saved/i)
     expect(friendlyIssue("MODEL_CALL_LIMIT_EXCEEDED", "Fallback")).toMatch(/step limit/i)
+    expect(friendlyIssue("Increase the captured output allowance before continuing", "Fallback", false)).toBe("The producer could not finish its response. Your approach is saved; no music has been created yet.")
     expect(friendlyIssue("REPEATED_NO_PROGRESS", "Fallback")).toMatch(/repeated steps/i)
     expect(friendlyIssue("uncertain remote outcome", "Fallback")).toMatch(/check what happened/i)
     expect(friendlyIssue("unknown reservation outcome", "Fallback")).toMatch(/check what happened/i)

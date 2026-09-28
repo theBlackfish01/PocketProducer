@@ -37,6 +37,7 @@ interface NativeRoomProps {
 export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAvailable, onSourcesChanged, onConnectAudiotool, onProjectUpdated }: NativeRoomProps) {
   const menuRef = useRef<HTMLButtonElement>(null)
   const menuPanelRef = useRef(false)
+  const lastDisplayTitle = useRef<string | null>(null)
   const [snapshot, setSnapshotState] = useState<NativeSnapshot | null>(null)
   const snapshotRef = useRef(snapshot)
   const setSnapshot = useCallback((value: NativeSnapshot | null) => {
@@ -210,6 +211,14 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
     }, controller.signal).then((view) => { if (active) { setTentative((prior) => prior?.jobId === view.jobId && prior.stepCount > view.stepCount ? prior : view); setTentativeError(null) } }).catch(() => { if (active) setTentativeError("Work in progress is temporarily unavailable. Your saved arrangement is unchanged.") })
     return () => { active = false; controller.abort() }
   }, [projectId, activity.state?.job?.id, activity.state?.job?.state, activity.state?.draft?.hash, refreshReads])
+
+  // Refresh the existing sidebar projection only when confirmed music gets a title.
+  const displayTitle = snapshot?.current?.document.title ?? tentative?.document?.title ?? null
+  useEffect(() => {
+    if (!displayTitle || displayTitle === lastDisplayTitle.current) return
+    lastDisplayTitle.current = displayTitle
+    onProjectUpdated()
+  }, [displayTitle, onProjectUpdated])
 
   // Remote copying is deliberately separate from musical construction.
   useEffect(() => {
@@ -452,7 +461,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
 
   const producer = <section className="producer-panel" aria-label="Producer"><div className="producer-heading"><h2>Producer</h2></div>{current || tentative?.document ? <Button className="producer-view-arrangement" variant="ghost" onClick={() => setWorkspaceView("arrangement")}>View arrangement <ArrowRight size={14} /></Button> : null}<ProducerFeed events={activity.events} connection={activity.connection} older={activity.older} onOlder={() => void activity.loadOlder().catch(() => setError("Earlier activity could not be loaded."))} onLatest={activity.closeOlder} historyBusy={activity.historyBusy} onCompare={reviewActivityVersion} />{activeJob && activeJob.kind !== "native-sync" ? <div className="producer-current" role="status"><strong>{jobProgress(activeJob)}</strong><Button size="sm" variant="outline" disabled={!activity.state?.actions.canStop} onClick={() => void api.cancel(activeJob.id).then(() => api.job(activeJob.id)).then(setJob).catch(() => setError("Unable to stop the request. Check your connection and try again."))}>Stop</Button></div> : null}{job && job.kind !== "native-sync" && terminal.has(job.state) && job.state !== "succeeded" ? <div className="job-status" role="status">
       <strong>{job.state === "cancelled" ? "Stopped" : "Paused"}</strong>
-      <span>{friendlyIssue(tentative?.continuationReason ?? tentative?.stopReason ?? job.error_message, "The producer could not finish this request. Your draft is saved.")}</span>
+      <span>{friendlyIssue(tentative?.continuationReason ?? tentative?.stopReason ?? job.error_message, "The producer could not finish this request. Your draft is saved.", tentative?.stepCount !== 0)}</span>
       <details><summary>Details</summary><p>{tentative?.stopReason ?? job.error_message}</p></details>
       {job.error_code === "NATIVE_PARTIAL" ? <>
 {tentative?.canContinue ? <Button size="sm" disabled={busy} onClick={() => void continuePartial()}>Continue arrangement</Button> : canExtendCalls ? <Button size="sm" disabled={busy} onClick={() => setExtendOpen(true)}>Continue arrangement</Button> : null}{activity.state?.actions.canAbandon ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => setAbandonOpen(true)}>End this attempt…</Button> : null}

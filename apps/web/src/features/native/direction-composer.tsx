@@ -22,7 +22,6 @@ export function DirectionComposer(props: Props) {
   const [models, setModels] = useState<ProducerModelOption[]>([])
   const [modelsFailed, setModelsFailed] = useState(false)
   const [fallbackModel, setFallbackModel] = useState<string | null>(null)
-  const [repositoryPublic, setRepositoryPublic] = useState(false)
   useEffect(() => {
     let controller: AbortController | undefined
     const refresh = () => {
@@ -30,7 +29,7 @@ export function DirectionComposer(props: Props) {
       const request = new AbortController(); controller = request
       void api.producerModels(request.signal).then((data) => {
         if (!Array.isArray(data.models)) throw new Error("Model list unavailable")
-        if (!request.signal.aborted) { setModels(data.models); setFallbackModel(data.fallbackModel ?? null); setRepositoryPublic(data.repository?.public === true); setModelsFailed(false) }
+        if (!request.signal.aborted) { setModels(data.models); setFallbackModel(data.fallbackModel ?? null); setModelsFailed(false) }
       }).catch(() => { if (!request.signal.aborted) setModelsFailed(true) })
     }
     refresh()
@@ -113,7 +112,7 @@ export function DirectionComposer(props: Props) {
       </div>
       {!props.active ? <Button className="direction-submit" type="submit" disabled={pending || !props.canSubmit || modelUnavailable}><Sparkles size={16} />{props.busy ? "Starting…" : props.revision ? "Make this change" : "Create arrangement"}<ArrowRight size={16} /></Button> : null}
       </div>
-      {!props.active && (allUnavailable || fallbackModel) ? <div className="demo-availability" role="status"><p>{allUnavailable ? userLimited ? "You've reached your demo usage limit. Your saved arrangements are still available." : "The shared demo allowance is unavailable. Your saved arrangements are still available." : "Sol's shared allowance is unavailable. Luna is available."}</p>{allUnavailable ? <RepositoryLink isPublic={repositoryPublic} /> : null}</div> : null}
+      {!props.active && (allUnavailable || fallbackModel) ? <div className="demo-availability" role="status"><p>{allUnavailable ? userLimited ? "You've reached your demo usage limit. Your saved arrangements are still available." : "The shared demo allowance is unavailable. Your saved arrangements are still available." : "Sol's shared allowance is unavailable. Luna is available."}</p>{allUnavailable ? <RepositoryLink /> : null}</div> : null}
       {!props.active && modelUnavailable && !allUnavailable && !fallbackModel ? <p className="demo-availability" role="status">This model is unavailable. Choose another producer.</p> : null}
       {undo && props.direction !== undo.suggestion ? <details className="prompt-original"><summary>Original direction</summary><p>{undo.original || "The direction was empty."}</p></details> : null}
       {message ? <p className="prompt-helper-message" role="status">{message}</p> : null}

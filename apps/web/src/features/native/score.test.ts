@@ -159,5 +159,7 @@ describe("canonical score projection", () => {
     expect(overview.noteOnsets).toBe(24 * 512)
     expect(overview.lanes[0]?.density).toHaveLength(128)
     expect(materializedSectionNotes(document, "part-0", 0, 128 * 3840, 120)).toMatchObject({ total: 512, truncated: true })
+    document.parts[0].notes[511].pitch = 95
+    expect(materializedSectionNotes(document, "part-0", 0, 128 * 3840, 120).pitchRange).toEqual([36, 95])
   })
 })

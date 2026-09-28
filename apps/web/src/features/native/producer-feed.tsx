@@ -6,7 +6,7 @@ import { Button } from "../../components/ui/button"
 function MessageText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false)
   const id = useId()
-  return <><p id={id} className={!expanded && text.length > 280 ? "message-preview" : undefined}>{text}</p>{text.length > 280 ? <Button type="button" size="sm" variant="ghost" className="message-expand" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded((value) => !value)}>{expanded ? "Show less" : "Read more"}</Button> : null}</>
+  return <><p id={id} className={!expanded && text.length > 280 ? "message-preview" : undefined}>{text}</p>{text.length > 280 ? <Button type="button" size="xs" variant="link" className="message-expand" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded((value) => !value)}>{expanded ? "Show less" : "Read more"}</Button> : null}</>
 }
 
 function ActivityRow({ event, onCompare }: { event: Activity; onCompare(id: string): void }) {

@@ -48,7 +48,7 @@ async function closeSheet(page: Page, name: string) { await page.getByRole("dial
 
 test("home, inspiration and rewrite use the real offline API without creating music until asked", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Your next piece starts here" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Make room for your next idea." })).toBeVisible();
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
   await page.getByRole("button", { name: "Inspire me" }).click();
   await expect(direction(page)).not.toHaveValue("");
@@ -61,7 +61,7 @@ test("home, inspiration and rewrite use the real offline API without creating mu
   await page.getByRole("button", { name: "Undo rewrite" }).click();
   await expect(direction(page)).toHaveValue("Warm keys and a gentle pulse. No vocals.");
   await page.getByRole("link", { name: "Pocket Producer home" }).first().click();
-  await expect(page.getByRole("heading", { name: "Your next piece starts here" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Make room for your next idea." })).toBeVisible();
   await page.goBack();
   await expect(direction(page)).toHaveValue("Warm keys and a gentle pulse. No vocals.");
   await page.getByRole("button", { name: "Create arrangement" }).click();

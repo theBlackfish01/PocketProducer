@@ -34,7 +34,7 @@ test("public Audiotool sign-in, persistent identity, private projects, mobile an
     await page.goto(origin); await expect(page.getByRole("button",{name:"Sign in with Audiotool"})).toBeVisible();
     await page.screenshot({path:".local/evidence/audiotool-sign-in-desktop.png",fullPage:true});
     await page.getByRole("button",{name:"Sign in with Audiotool"}).focus(); await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading",{name:"Your next piece starts here"})).toBeVisible();
+    await expect(page.getByRole("heading",{name:"Make room for your next idea."})).toBeVisible();
     const first=await (await page.request.get(`${origin}/api/v1/auth/session`)).json();
     await page.getByRole("button",{name:"New session",exact:true}).last().click();
     await expect(page.getByRole("textbox",{name:"Describe your arrangement"})).toBeVisible();
@@ -51,7 +51,7 @@ test("public Audiotool sign-in, persistent identity, private projects, mobile an
     await expect(page.getByRole("button",{name:"Sign in with Audiotool"})).toBeVisible();
     expect((await page.request.get(`${origin}/api/v1/projects`)).status()).toBe(401);
     await page.getByRole("button",{name:"Sign in with Audiotool"}).click();
-    await expect(page.getByRole("heading",{name:"Your next piece starts here"})).toBeVisible();
+    await expect(page.getByRole("heading",{name:"Make room for your next idea."})).toBeVisible();
     expect((await (await page.request.get(`${origin}/api/v1/auth/session`)).json()).user.ownerId).toBe(first.user.ownerId);
     expect((await (await page.request.get(`${origin}/api/v1/projects`)).json()).projects).toHaveLength(1);
   } finally { await phone.close(); await server.close(); Object.assign(config,saved); await closePool(); }

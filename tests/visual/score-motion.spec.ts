@@ -83,6 +83,59 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
 
 test.beforeAll(async () => { await mkdir(evidence, { recursive: true }) })
 
+test("welcome explains the creative loop and compact session status stays accessible", async ({ page }) => {
+  const room = await mockRoom(page)
+  let creates = 0
+  await page.route("**/api/v1/projects", async (route) => {
+    if (route.request().method() === "POST") { creates++; await route.fulfill({ json: { project: { id: projectId } } }); return }
+    await route.fulfill({ json: { projects: [
+      { id: projectId, title: "Night Drive", workspaceStatus: "working" },
+      { id: "paused-room", title: "A long and spacious unfinished arrangement", workspaceStatus: "attention" },
+      { id: "ready-room", title: "Morning Light", workspaceStatus: "ready" },
+    ] } })
+  })
+  await page.goto("/")
+  await expect(page.getByRole("heading", { name: "Make room for your next idea." })).toBeVisible()
+  await expect(page.locator(".welcome-features article")).toHaveCount(3)
+  await expect(page.locator(".welcome-room")).toContainText("to Audiotool to listen")
+  await expectReadableText(page.locator(".welcome-deck"))
+  await expectReadableText(page.locator(".welcome-kicker"))
+  const rail = page.getByRole("complementary", { name: "Session navigation" })
+  const working = rail.getByRole("button", { name: "Night Drive · Working", exact: true })
+  await expect(working).toBeVisible()
+  await expect(working.locator("small")).toHaveCount(0)
+  const boxes = await working.evaluate((node) => {
+    const title = node.querySelector(".rail-session-title")!.getBoundingClientRect()
+    const icon = node.querySelector("svg")!.getBoundingClientRect()
+    return { separate: title.right < icon.left, sameRow: Math.abs((title.top + title.height / 2) - (icon.top + icon.height / 2)) < 2 }
+  })
+  expect(boxes).toEqual({ separate: true, sameRow: true })
+  await expect(rail.getByRole("button", { name: /unfinished arrangement · Paused/ })).toBeVisible()
+  await expect(rail.getByRole("button", { name: "Morning Light · Ready", exact: true })).toBeVisible()
+  const github = rail.getByRole("link", { name: "GitHub (opens in a new tab)", exact: true })
+  await expect(github).toHaveAttribute("href", "https://github.com/theBlackfish01/PocketProducer")
+  expect(await github.getAttribute("title")).toBeNull()
+  await expect(github).not.toContainText("private")
+  await page.screenshot({ path: `${evidence}/welcome-desktop.png`, fullPage: true })
+  await page.emulateMedia({ reducedMotion: "reduce" })
+  expect(await working.locator("svg").evaluate((node) => getComputedStyle(node).animationName)).toBe("none")
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await expect(page.getByRole("main").getByRole("button", { name: "New session" })).toBeInViewport()
+  await page.screenshot({ path: `${evidence}/welcome-phone.png`, fullPage: true })
+  await page.getByRole("button", { name: "Open sessions" }).click()
+  const menu = page.getByRole("dialog")
+  await expect(menu.getByRole("button", { name: "Night Drive · Working", exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(page.getByRole("button", { name: "Open sessions" })).toBeFocused()
+  const create = page.getByRole("main").getByRole("button", { name: "New session" })
+  await create.focus(); await page.keyboard.press("Enter")
+  await expect(page).toHaveURL(new RegExp(`/sessions/${projectId}`))
+  await expect(page.getByRole("heading", { name: "Night Drive", exact: true })).toBeVisible()
+  expect(creates).toBe(1)
+  expect(room.writes()).toBe(0)
+})
+
 test("start controls form one footer and early creation focuses on the conversation", async ({ page }) => {
   const room = await mockRoom(page)
   let working = false
@@ -116,6 +169,41 @@ test("start controls form one footer and early creation focuses on the conversat
   expect(room.writes()).toBe(0)
 })
 
+test("conversation expansion is a small link with a touch-friendly mobile target", async ({ page, browser }) => {
+  const direction = "Create a sparse, gently unfolding instrumental idea with a clear pulse implied by a few soft, widely spaced attacks rather than a busy beat. Let one warm synth tone carry a small, memorable motif; answer it with a thinner, slightly brighter tone that appears only in the gaps. Keep the low end restrained and leave generous space around each phrase. Develop the answer's timing and tone, then let the opening gesture stand alone."
+  async function setup(target: Page) {
+    await mockRoom(target)
+    await target.route("**/api/v1/projects/visual-room/activity*", async (route) => {
+      if (new URL(route.request().url()).pathname.endsWith("/stream")) { await route.abort(); return }
+      await route.fulfill({ json: { events: [{ cursor: 1, jobId: "visual-job", createdAt: "2026-09-28T06:28:00Z", payload: { version: 1, kind: "request", text: direction } }], cursor: 1, nextCursor: 1, hasOlder: false, job: null, headId: "version-2", draft: null, actions: { canSubmit: true, canStop: false, issue: null } } })
+    })
+    await target.reload()
+  }
+  await setup(page)
+  const message = page.locator(".producer-message-request")
+  await expect(message.getByRole("button", { name: "Read more" })).toBeVisible()
+  await page.screenshot({ path: `${evidence}/conversation-link-desktop.png`, fullPage: true })
+  await message.getByRole("button", { name: "Read more" }).click()
+  await expect(message.locator("p")).toHaveCount(1)
+  await expect(message.locator("p")).toHaveText(direction)
+  await message.getByRole("button", { name: "Show less" }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: `${evidence}/conversation-link-expanded.png`, fullPage: true })
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion: "reduce" })
+  try {
+    const mobile = await phone.newPage()
+    await setup(mobile)
+    await mobile.setViewportSize({ width: 390, height: 844 })
+    await mobile.getByRole("button", { name: "Producer", exact: true }).click()
+    const toggle = mobile.getByRole("button", { name: "Read more" })
+    await expect(toggle).toBeVisible()
+    expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    await toggle.tap()
+    await expect(mobile.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true")
+    expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await mobile.screenshot({ path: `${evidence}/conversation-link-phone.png`, fullPage: true })
+  } finally { await phone.close() }
+})
+
 test("full overview scrolls to its last bar and part, and the logo preserves an unsent direction", async ({ page }) => {
   const room = await mockRoom(page, { large: true })
   const scroll = page.getByRole("region", { name: "Saved arrangement overview" })
@@ -133,9 +221,9 @@ test("full overview scrolls to its last bar and part, and the logo preserves an 
   await page.screenshot({ path: `${evidence}/clarity-overview-desktop.png`, fullPage: true })
   await page.getByRole("link", { name: "Pocket Producer home" }).first().click()
   await expect(page).toHaveURL(/\/$/)
-  await expect(page.getByRole("heading", { name: "Your next piece starts here" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Make room for your next idea." })).toBeVisible()
   await page.reload()
-  await expect(page.getByRole("heading", { name: "Your next piece starts here" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Make room for your next idea." })).toBeVisible()
   await page.locator(".session-rail").getByRole("button", { name: "Night Drive" }).click()
   await expect(textbox).toHaveValue("Leave my next idea here")
   expect(room.writes()).toBe(0)
@@ -482,10 +570,17 @@ test("a next direction survives completion, while long activity stays bounded an
   await expect(page.locator(".producer-feed img")).toHaveCount(0)
   const requestMessage = page.locator(".producer-message-request")
   await expect(requestMessage.locator("p")).toHaveCount(1)
-  await requestMessage.getByRole("button", { name: "Read more" }).click()
+  const readMore = requestMessage.getByRole("button", { name: "Read more" })
+  await expect(readMore).toHaveAttribute("aria-expanded", "false")
+  expect(await readMore.evaluate((node) => parseFloat(getComputedStyle(node).fontSize))).toBeLessThanOrEqual(13)
+  expect((await readMore.boundingBox())!.height).toBeLessThanOrEqual(32)
+  await readMore.focus(); await page.keyboard.press("Enter")
   await expect(requestMessage.locator("p")).toHaveCount(1)
   await expect(requestMessage.locator(".message-preview")).toHaveCount(0)
-  await requestMessage.getByRole("button", { name: "Show less" }).click()
+  await expect(requestMessage.getByRole("button", { name: "Show less" })).toBeFocused()
+  await expect(requestMessage.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true")
+  await page.screenshot({ path: `${evidence}/conversation-expanded.png`, fullPage: true })
+  await page.keyboard.press("Enter")
   await expect(requestMessage.locator(".message-preview")).toHaveCount(1)
   const feed = page.locator(".producer-feed")
   await feed.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")) })

@@ -42,12 +42,13 @@ export function projectScoreOverview(document: NativeDocument): ScoreOverview {
   return { lanes, noteOnsets, bars: document.bars, truncated }
 }
 
-export function materializedSectionNotes(document: NativeDocument, partId: string, fromTick: number, toTick: number, limit = 320): { notes: ScoreNote[]; total: number; truncated: boolean } {
+export function materializedSectionNotes(document: NativeDocument, partId: string, fromTick: number, toTick: number, limit = 320): { notes: ScoreNote[]; total: number; truncated: boolean; pitchRange: [number, number] | null } {
   const part = document.parts.find((item) => item.id === partId)
-  if (!part) return { notes: [], total: 0, truncated: false }
+  if (!part) return { notes: [], total: 0, truncated: false, pitchRange: null }
   const notes: ScoreNote[] = []
   let total = 0
-  const add = (item: ScoreNote) => { if (!overlaps(item.startTick, item.startTick + item.durationTicks, fromTick, toTick)) return; total++; if (notes.length < limit) notes.push(item) }
+  let low = Infinity, high = -Infinity
+  const add = (item: ScoreNote) => { if (!overlaps(item.startTick, item.startTick + item.durationTicks, fromTick, toTick)) return; total++; low = Math.min(low, item.pitch); high = Math.max(high, item.pitch); if (notes.length < limit) notes.push(item) }
   for (const note of part.notes) add({ ...note, key: `${part.id}:free:${note.id}`, partId, origin: "free" })
   const motifs = new Map(document.motifs.map((motif) => [motif.id, motif]))
   for (const placement of part.placements) {
@@ -58,7 +59,7 @@ export function materializedSectionNotes(document: NativeDocument, partId: strin
     for (let repeat = first; repeat < last; repeat++) for (const note of motif.notes) add({ ...note, key: `${part.id}:${placement.id}:${repeat}:${note.id}`, partId, origin: "motif", motifId: motif.id, familyId: motifFamily(document, motif.id) ?? undefined, placementId: placement.id, repeat, startTick: placement.startTick + repeat * motif.lengthTicks + note.startTick, pitch: note.pitch + placement.transpose })
   }
   notes.sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch || a.key.localeCompare(b.key))
-  return { notes, total, truncated: total > notes.length }
+  return { notes, total, truncated: total > notes.length, pitchRange: total ? [low, high] : null }
 }
 
 export function automationAt(curve: NativeAutomation, tick: number): number | null {

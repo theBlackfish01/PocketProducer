@@ -16,7 +16,7 @@ test("shows quiet fallback and exhausted states without hiding saved sessions", 
   await expect(page.getByLabel("Producer model")).toHaveValue("gpt-6-luna");
   await expect(page.getByText("Sol's shared allowance is unavailable. Luna is available.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Create arrangement", exact: true })).toBeEnabled();
-  await expect(page.locator(".session-rail").getByRole("link", { name: /GitHub · private/ })).toHaveAttribute("href", "https://github.com/theBlackfish01/PocketProducer");
+  await expect(page.locator(".session-rail").getByRole("link", { name: /GitHub/ })).toHaveAttribute("href", "https://github.com/theBlackfish01/PocketProducer");
   await expect(page.locator(".demo-availability")).not.toContainText(/\$|50|budget/i);
   await page.screenshot({ path: "test-results/shared-demo-desktop.png", fullPage: true });
   exhausted = true; await page.evaluate(() => window.dispatchEvent(new Event("focus")));

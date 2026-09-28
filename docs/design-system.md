@@ -1,5 +1,17 @@
 # Listening Room design system
 
+## Confirmed musical clarity — September 28
+
+Title labels now reflect confirmed draft titles for otherwise untitled sessions, without overwriting explicit project names or selected versions. List/detail use the same owner-scoped server projection; one existing activity consumer triggers title refresh. Note labels report the complete relevant musical range, not padded plot axes or only the first displayed notes. Routine sample-capability diagnostics stay out of the Producer conversation. Input-length pauses identify conversation growth without implying a credit shortage. No new component family or visual redesign.
+
+## Welcome and quiet navigation — 2026-09-28
+
+The homepage now uses an editorial split hero with owned CSS artwork suggesting musical phrases, not a generated score or playable preview. Three brief feature explanations cover direction, scoped shaping and explicit Audiotool copying/listening. New session remains the sole primary action; the logo/home and existing score/section inspection flows are unchanged. The hero stacks on phones with its action before the artwork.
+
+Recent sessions use one-line titles with a right-aligned Working/Paused/Ready icon; status remains in screen-reader text and the button's full-title tooltip. Working rotation stops under reduced motion. No title/status overlap or second-line truncation. Long Producer messages keep their single paragraph and expanded-state/focus contract; Read more/Show less is a small underlined Base UI button (28px desktop target, 44px coarse pointer), not a bordered action card. GitHub is a neutral external link everywhere; the label does not change repository visibility or authentication.
+
+Sources: owned `components/welcome-room.tsx`/CSS, existing Base UI Button, Lucide, palette tokens and React components. No new dependency or primitive family. React/shadcn guidance informed small reusable composition, derived navigation state and removal of a homepage-only model-catalogue fetch. AI Elements was not introduced because its primitive/stream migration conflicts with the retained Base UI, plain-text public activity contract. Upgrade checks include homepage keyboard/mobile navigation, state-icon accessible names, reduced motion, text contrast, one-paragraph message expansion and the existing score/history/recovery journeys. Evidence uses isolated fixtures, not a live completed generation.
+
 ## Producer chooser (2026-09-27)
 
 The composer footer includes a labelled native select, styled with existing ivory/forest tokens; on phones it has a full-width row. No new primitive family or UI dependency. Selection belongs to the project-local unsent direction and applies only to new requests; active work hides the control rather than implying an in-flight model switch. Unconfigured options are disabled. Availability is configuration, not live credit verification. Preserve keyboard-native selection and readable labels; do not reintroduce a budget dashboard into the composer. Desktop/390px evidence: `.local/evidence/model-picker-{desktop,phone}.png`.

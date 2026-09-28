@@ -37,7 +37,7 @@ export function confirmedChanges(before: NativeDocument, after: NativeDocument) 
 export function scoreWindow(document: NativeDocument, reference: NativeDocument | undefined, partId: string, from: number, to: number) {
   const current = materializedSectionNotes(document, partId, from, to, 120)
   const prior = reference ? materializedSectionNotes(reference, partId, from, to, 120) : current
-  const pitches = [...current.notes, ...prior.notes].map((note) => note.pitch)
+  const pitches = [...(current.pitchRange ?? []), ...(prior.pitchRange ?? [])]
   const low = pitches.length ? Math.min(...pitches) - 1 : 59
   const high = pitches.length ? Math.max(...pitches) + 1 : 73
   const old = new Map(prior.notes.map((note) => [note.key, note]))

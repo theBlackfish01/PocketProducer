@@ -13,7 +13,7 @@ test("invite entry, real fixture construction, sign-out and separate phone accou
   await expect(page.getByRole("alert")).toContainText("invalid or expired");
   await page.getByLabel("Access code").fill(a.code);
   await page.keyboard.press("Tab"); await page.keyboard.press("Enter");
-  await expect(page.getByRole("heading",{name:"Your next piece starts here"})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Make room for your next idea."})).toBeVisible();
   await page.getByRole("button",{name:"New session",exact:true}).last().click();
   await page.getByRole("textbox",{name:"Describe your arrangement"}).fill("A warm sparse melody with restrained drums and a contrasting middle section.");
   await page.getByRole("button",{name:"Create arrangement"}).click();
