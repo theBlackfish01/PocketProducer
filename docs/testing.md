@@ -1,5 +1,21 @@
 # Verification record
 
+## Luna goal final verification — September 28
+
+Pinned local commands (repository root unless stated), fixture/scripted providers with tracing and provider credentials disabled:
+
+| Command | Final result |
+| --- | --- |
+| `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts --exclude "tests/integration/**" --exclude "tests/e2e/**" --exclude "tests/visual/**" --exclude "tests/hosted/**"` | **214/214**, 37 files, 74.12s |
+| `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts tests/integration` | **140/140**, 12 files, 163.85s |
+| `node --import tsx scripts/prepare-e2e.ts`, then `.\node_modules\.bin\playwright.cmd test --config tests/playwright.config.ts` | **18/18**, 1.4m |
+| `.\node_modules\.bin\playwright.cmd test --config tests/visual.playwright.config.ts` | **17/17**, 1.6m |
+| `.\node_modules\.bin\eslint.cmd . --max-warnings=0` | Passed |
+| `.\node_modules\.bin\tsc.cmd -b` | Passed |
+| From `apps/web`: `.\node_modules\.bin\vite.cmd build` | Passed, 1.44s; existing >500KB chunk warning |
+
+Earlier same-pass visual **17/17** (1.8m) and hosted **2/2** (31.3s) passed. New maintained tests inspect exact critic timing/coverage input and verify settled review replay after an evidence-format update without another model invocation or altered receipt. Unknown outcomes and changed review context fail closed. Full integration retains real child-process restart/contention and cancellation/ownership/accounting tests. Live Luna evidence, independent canonical inspections, phone/keyboard/reload checks and costs are separately recorded in the [completion audit](luna-goal-completion-2026-09-28.md); a scripted pass is not a paid quality evaluation.
+
 September 28 finishing-repair checkpoint: `.\node_modules\.bin\vitest.cmd run --config vitest.config.ts tests/integration` passed **136/136 tests, 12 files (156.81 s)** against the isolated test database. Includes the new shared-processing critic-input and exhausted-review termination cases. No provider access. The fifth real Luna browser evaluation is separate evidence and was still running when this suite completed.
 
 September 28 goal attempt-4 follow-up: full unit **212/212** (37 files, 53.73 s), focused convergence/review/worker **36/36** (15.20 s), provider wire **9/9** (1.37 s), then final finishing suite **21/21** (12.77 s). Added coverage for complete text-only reasoning compaction, exact shared-bus critic inputs, strict Responses review schema/unchanged length rejection, and early exhausted-review stop with retained draft. Types/targeted lint pass. Earlier this pass: full integration **134/134**, application Chromium **18/18**, hosted **2/2**, visual **17/17** (1.6 min), production build pass with existing large-chunk warning. Those broad browser runs precede the critic/context-only changes; scripted tests do not establish live completion.
