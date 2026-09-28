@@ -41,7 +41,7 @@ it("captures model choice, rejects changed-model replays, and ignores subsequent
 it.each(["gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"])("constructs through the real worker with the %s wire adapter (scripted transport)", async (model) => {
   Object.assign(config, { GEMINI_API_KEY: "test-only", AI_GATEWAY_API_KEY: "test-only", INITIAL_BUILD_API_BUDGET_USD: 100, MAX_JOB_COST_USD: 100, DEFAULT_USER_BUDGET_USD: 100, GEMINI_POOL_BUDGET_USD: 100, GATEWAY_POOL_BUDGET_USD: 100 });
   const selected = await job(owners[1]!, model);
-  const form = { title: "Wire-built phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
+  const form = { stepKey: "wire-scene", replaceSeed: true, title: "Wire-built phrase", parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, notes: [{ id: "n", startTick: 0, durationTicks: 960, pitch: 64, velocity: 0.7 }] }] };
   let turns = 0;
   const requests: { tools: { function: { name: string } }[]; messages: { role: string; tool_call_id?: string }[] }[] = [];
   const adapter = new CompatibleProducerModel(model, 1000, "low", 10000, async (url, init) => {
@@ -50,7 +50,7 @@ it.each(["gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"])("constructs throu
     if (typeof init?.body !== "string") throw new Error("Expected JSON body");
     const body = JSON.parse(init.body) as { tools: { function: { name: string } }[]; messages: { role: string; tool_call_id?: string }[] };
     requests.push(body);
-    const message = turns++ === 0 ? { role: "assistant", content: null, tool_calls: [{ id: "form-call", type: "function", function: { name: "compose_native_form", arguments: JSON.stringify(form) } }] } : { role: "assistant", content: "The phrase is ready." };
+    const message = turns++ === 0 ? { role: "assistant", content: null, tool_calls: [{ id: "form-call", type: "function", function: { name: "compose_native_scene", arguments: JSON.stringify(form) } }] } : { role: "assistant", content: "The phrase is ready." };
     return Response.json({ id: `test-${turns}`, choices: [{ message, finish_reason: turns === 1 ? "tool_calls" : "stop" }], usage: { prompt_tokens: 100, completion_tokens: 80 } });
   });
   await processJob(selected, { scriptedModel: adapter, library: createNativeLibrary(null) });
@@ -59,7 +59,7 @@ it.each(["gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"])("constructs throu
   const score = (await nativeSnapshot(selected.ownerId, selected.projectId)).current?.document;
   expect(score?.parts[0]?.notes[0]?.pitch).toBe(64);
   expect(turns).toBe(2);
-  expect(requests[0]?.tools.some((t) => t.function.name === "compose_native_form")).toBe(true);
+  expect(requests[0]?.tools.some((t) => t.function.name === "compose_native_scene")).toBe(true);
   expect(JSON.stringify(requests[1]?.messages)).toContain("Wire-built phrase");
 }, 30_000);
 

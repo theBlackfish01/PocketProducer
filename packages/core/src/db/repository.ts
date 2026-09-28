@@ -64,8 +64,19 @@ export async function devOwnerId(): Promise<string> {
   return id;
 }
 
+// One owner-scoped display projection shared by list and detail. Never rename a
+// user's explicit title or persist a draft title onto the accepted project.
+const displayTitleSql = `CASE WHEN p.title <> 'Untitled listening room' THEN p.title ELSE COALESCE(
+  (SELECT r.document->>'title' FROM native_revision r WHERE r.id=h.revision_id AND r.owner_id=p.owner_id),
+  (SELECT operation->>'title' FROM job j JOIN native_job_step s ON s.job_id=j.id,
+    jsonb_array_elements(s.operations) WITH ORDINALITY AS ops(operation,position)
+    WHERE j.project_id=p.id AND j.owner_id=p.owner_id AND j.kind IN ('native-generation','native-revision')
+      AND j.state IN ('queued','running','needs_attention','succeeded')
+      AND operation->>'kind'='setTitle'
+    ORDER BY j.created_at DESC,s.ordinal DESC,position DESC LIMIT 1), p.title) END`;
+
 export async function listProjects(ownerId: string): Promise<OwnedProject[]> {
-  const result = await getPool().query(`SELECT p.id,p.title,h.revision_id AS current_revision_id,p.version,p.created_at,p.updated_at,
+  const result = await getPool().query(`SELECT p.id,${displayTitleSql} AS title,h.revision_id AS current_revision_id,p.version,p.created_at,p.updated_at,
     CASE WHEN EXISTS(SELECT 1 FROM job j WHERE j.project_id=p.id AND j.kind IN ('native-generation','native-revision') AND j.state IN ('queued','running','cancel_requested')) THEN 'working'
     WHEN EXISTS(SELECT 1 FROM job j WHERE j.project_id=p.id AND j.kind IN ('native-generation','native-revision') AND j.state='needs_attention') THEN 'attention'
     WHEN EXISTS(SELECT 1 FROM native_project_head h WHERE h.project_id=p.id) THEN 'ready' ELSE 'new' END AS workspace_status
@@ -84,7 +95,7 @@ export async function createProject(ownerId: string, title: string): Promise<Own
 }
 
 export async function requireProject(ownerId: string, projectId: string) {
-  const result = await getPool().query("SELECT p.id,p.title,h.revision_id AS current_revision_id,p.version,p.created_at,p.updated_at FROM project p LEFT JOIN native_project_head h ON h.project_id=p.id WHERE p.id=$1 AND p.owner_id=$2 AND p.deleted_at IS NULL", [projectId, ownerId]);
+  const result = await getPool().query(`SELECT p.id,${displayTitleSql} AS title,h.revision_id AS current_revision_id,p.version,p.created_at,p.updated_at FROM project p LEFT JOIN native_project_head h ON h.project_id=p.id WHERE p.id=$1 AND p.owner_id=$2 AND p.deleted_at IS NULL`, [projectId, ownerId]);
   const row = result.rows[0];
   if (!row) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
   return { id: String(row.id), title: String(row.title), currentRevisionId: row.current_revision_id ? String(row.current_revision_id) : null, version: Number(row.version), createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString() } satisfies OwnedProject;

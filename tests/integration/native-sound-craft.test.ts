@@ -67,6 +67,6 @@ describe("scripted producer groove-to-rise production path", () => {
     const capabilities = await getPool().query<{ payload: Record<string, unknown> }>("SELECT payload FROM job_event WHERE job_id=$1 AND event_type='capabilities' ORDER BY sequence DESC LIMIT 1", [created.id]);
     expect(capabilities.rows[0]?.payload).toMatchObject({ model: "scripted", library: "injected-test-client", nativeMixListening: false, sourceAnalysis: false });
     const activity = await readProjectActivity(ownerId, projectId, { limit: 100 });
-    expect(activity.events.some((event) => event.payload.text.includes("source-sample listening is unavailable"))).toBe(true);
+    expect(activity.events.some((event) => event.payload.text.includes("source-sample listening is unavailable"))).toBe(false);
   }, 120_000);
 });

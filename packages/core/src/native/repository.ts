@@ -445,7 +445,7 @@ export async function saveNativeCreativeState(job: JobRecord, raw: NativeCreativ
     if (!prior.rows[0]) throw new Error("Record the durable production plan before saving creative decisions");
     const old = nativePlanSchema.parse(prior.rows[0].plan);
     const changed = nativeReviewPlanHash(old) !== nativeReviewPlanHash({ ...old, creativeState: state });
-    const updated = await client.query("UPDATE native_job_plan SET plan=jsonb_set(plan,'{creativeState}',$2::jsonb,true),creative_review=CASE WHEN $3 THEN NULL ELSE creative_review END,stage=CASE WHEN $3 THEN 'refining' ELSE stage END,updated_at=now() WHERE job_id=$1", [job.id, JSON.stringify(state), changed]);
+    const updated = await client.query("UPDATE native_job_plan SET plan=jsonb_set(plan,'{creativeState}',$2::jsonb,true),creative_review=CASE WHEN $3 THEN NULL ELSE creative_review END,stage=CASE WHEN $3 AND stage='reviewed' THEN 'refining' ELSE stage END,updated_at=now() WHERE job_id=$1", [job.id, JSON.stringify(state), changed]);
     if (!updated.rowCount) throw new Error("Record the durable production plan before saving creative decisions");
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }

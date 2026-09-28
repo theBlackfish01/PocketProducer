@@ -1,9 +1,64 @@
-import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
+import { boundOpenAiRequest } from "../agent/runtime.js";
 import { describe, expect, it } from "vitest";
 import { NativeConvergenceMonitor, nativeFinishingGuidance, nativeReadEvidence, withNativeFinishingContext, compactNativeReadHistory } from "./convergence.js";
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {
+  it("prefers the latest complete exchange over optional old guidance when that preserves continuity", () => {
+    const current = new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(7000) }] }, tool_calls: [{ id: "inspect", name: "inspect_native_part", args: { partId: "bass" } }] });
+    const reply = new ToolMessage({ tool_call_id: "inspect", content: '{"documentHash":"current","notes":[{"pitch":41}]}' });
+    const result = withNativeFinishingContext([new HumanMessage("Exact brief"), current, reply], { documentHash: "current" }, [{ tool: "read_native_example", arguments: {}, content: "g".repeat(6000), truncated: false }], 900, 12000);
+    expect(result).toContain(current);
+    expect(result).toContain(reply);
+    expect(result.at(-1)!.text).toContain('"omittedGuidance":1');
+  });
+  it("retains exact-hash inspection facts after removing their opaque exchanges, never stale score reads", () => {
+    const history = [new HumanMessage("Keep bass"), ...["old", "current"].flatMap((hash) => [new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(18000) }] }, tool_calls: [{ id: hash, name: "inspect_native_part", args: { partId: "bass" } }] }), new ToolMessage({ tool_call_id: hash, content: JSON.stringify({ documentHash: hash, part: { id: "bass", notes: [{ pitch: hash === "old" ? 30 : 41, startTick: 960 }] } }) })])];
+    const result = withNativeFinishingContext(history, { documentHash: "current" }, [], 900, 4000);
+    expect(result.some((m) => m instanceof ToolMessage)).toBe(false);
+    const text = result.at(-1)!.text;
+    expect(text).toContain("currentObservations");
+    expect(text).toContain('\\"pitch\\":41');
+    expect(text).not.toContain('\\"pitch\\":30');
+    expect(text).not.toContain("opaque");
+  });
+  it("recalls skill evidence after pressure evicts the exchange that formerly made it visible", () => {
+    const history = [new HumanMessage("Exact brief"), new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(18000) }] }, tool_calls: [{ id: "skill", name: "read_file", args: { file_path: "/skills/native-arrangement/SKILL.md" } }] }), new ToolMessage({ tool_call_id: "skill", content: "Use compose_native_scene with integer ticks; construct now, refine afterwards." })];
+    const evidence = nativeReadEvidence(history);
+    const compacted = withNativeFinishingContext(history, {}, evidence, 900, 6000);
+    expect(compacted.some((m) => m instanceof ToolMessage)).toBe(false);
+    expect(compacted.at(-1)!.text).toContain(evidence[0]!.content);
+    expect(compacted.at(-1)!.text).toContain('"omittedGuidance":0');
+    const roomy = withNativeFinishingContext(history, {}, evidence, 900, 40000);
+    expect(roomy.at(-1)!.text).toContain('"priorGuidance":[]');
+  });
+  it("summarizes an oversized complete error group without orphaning replay or pending calls", () => {
+    const group = new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "opaque".repeat(7000) }] }, tool_calls: [{ id: "bad", name: "advance_native_stage", args: { stage: "building" } }, { id: "sound", name: "inspect_editable_sound", args: { partId: "lead" } }] });
+    const pending = new AIMessage({ content: "", tool_calls: [{ id: "pending", name: "inspect", args: {} }] });
+    const result = withNativeFinishingContext([new HumanMessage("Keep the bass"), group, new ToolMessage({ tool_call_id: "bad", content: "Error: Producer stage cannot move backwards" }), new ToolMessage({ tool_call_id: "sound", content: "x".repeat(13000) }), pending], { current: "exact score" }, [], 900, 12000);
+    expect(result).not.toContain(group);
+    expect(result).toContain(pending);
+    expect(result.some((m) => m instanceof ToolMessage)).toBe(false);
+    expect(JSON.stringify(result)).toContain("cannot move backwards");
+    expect(JSON.stringify(result)).toContain("Keep the bass");
+    expect(JSON.stringify(result)).not.toContain("opaque");
+  });
+  it("measures the final system, opaque replay and schemas before dispatch, preserving whole groups", () => {
+    const systemMessage = new SystemMessage("system".repeat(960));
+    const envelope = { tools: [{ schema: "schema".repeat(1000) }] };
+    const brief = new HumanMessage("Exact user brief");
+    const groups = Array.from({ length: 4 }, (_, i) => [new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(22000) }] }, tool_calls: [{ id: `r${i}`, name: "inspect", args: {} }] }), new ToolMessage({ tool_call_id: `r${i}`, content: "facts" })]);
+    const history = [brief, ...groups.flat()];
+    expect(() => boundOpenAiRequest([history], 900, 100000)).not.toThrow();
+    expect(() => boundOpenAiRequest([[systemMessage, ...history]], 900, 100000, envelope)).toThrow(/INPUT_LIMIT/);
+    const compacted = withNativeFinishingContext(history, {}, [], 900, 100000, { systemMessage, envelope });
+    expect(() => boundOpenAiRequest([[systemMessage, ...compacted]], 900, 100000, envelope)).not.toThrow();
+    expect(compacted).toContain(brief);
+    expect(compacted).toContain(groups[3]![0]);
+    expect(compacted).not.toContain(groups[0]![0]);
+    expect(groups[3]![0]!.response_metadata.output).toBeDefined();
+  });
   it("bounds long read phases without orphaning mixed calls, losing the brief or hiding the latest error", () => {
     const brief = new HumanMessage("Exact direction: keep the bass unchanged.");
     const messages = [brief];

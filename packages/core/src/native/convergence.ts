@@ -7,11 +7,53 @@ import { boundOpenAiRequest } from "../agent/runtime.js";
 // music, external resource availability, reviews or user authorization here.
 const reusableReads = new Set(["read_file", "read_native_example", "read_native_recipe", "discover_native_capabilities", "inspect_native_capability"]);
 export interface ReadEvidence { tool: string; arguments: unknown; content: string; truncated: boolean }
+const musicalReads = new Set(["inspect_native_workspace", "inspect_native_part", "inspect_native_motif", "inspect_native_section", "inspect_editable_sound"]);
+
+// Read facts, never model reasoning. Kept only for the exact current document
+// and reconstructed from completed read calls, not across unverified writes.
+function currentReadEvidence(messages: BaseMessage[], hash: unknown): ReadEvidence[] {
+  if (typeof hash !== "string") return [];
+  const calls = new Map<string, { name: string; args: unknown }>();
+  const evidence = new Map<string, ReadEvidence>();
+  for (const message of messages) {
+    if (message instanceof AIMessage) for (const call of message.tool_calls ?? []) if (call.id && musicalReads.has(call.name)) calls.set(call.id, { name: call.name, args: call.args });
+    if (!(message instanceof ToolMessage) || message.status === "error") continue;
+    const call = calls.get(message.tool_call_id);
+    if (!call) continue;
+    let data: unknown;
+    try { data = JSON.parse(message.text); } catch { continue; }
+    if (!data || typeof data !== "object" || !("documentHash" in data) || data.documentHash !== hash) continue;
+    const key = canonicalHash([call.name, call.args]);
+    evidence.delete(key);
+    evidence.set(key, { tool: call.name, arguments: call.args, content: message.text, truncated: false });
+  }
+  return [...evidence.values()].slice(-6).map((entry) => {
+    // Keep valid JSON and explicit omission metadata instead of a cut-off JSON
+    // prefix. Small exact notes/controls remain inspectable; omitted facts are
+    // not implied absent. Full paged tools remain available when needed.
+    if (entry.content.length <= 2200) return entry;
+    const data: unknown = JSON.parse(entry.content);
+    const prune = (value: unknown, items: number, depth = 0): unknown => {
+      if (typeof value === "string") return value.length > 160 ? `${value.slice(0, 160)}…` : value;
+      if (depth > 8) return { omitted: true };
+      if (Array.isArray(value)) return value.length > items ? { items: value.slice(0, items).map((v) => prune(v, items, depth + 1)), totalItems: value.length, omittedItems: value.length - items } : value.map((v) => prune(v, items, depth + 1));
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, prune(v, items, depth + 1)]));
+      return value;
+    };
+    for (const items of [8, 4, 1]) {
+      const content = JSON.stringify(prune(data, items));
+      if (content.length <= 3000) return { ...entry, content, truncated: true };
+    }
+    return { ...entry, content: JSON.stringify({ documentHash: hash, detailsOmitted: true, guidance: "Use a focused paged read for the specific missing detail." }), truncated: true };
+  });
+}
 
 // Drop only complete historical assistant/tool groups. Keep every human/system
-// instruction, pending group, latest result and latest failure verbatim. Current
+// instruction and pending group. Keep the latest failure verbatim unless the
+// final pressure pass must replace its complete exchange with diagnostics; recent successful
+// results are retained within the available envelope. Current
 // score/plan/checklist are appended as fresh human data and cannot be evicted.
-export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4): BaseMessage[] {
+export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4, summarizeErrors = false): BaseMessage[] {
   const groups: { start: number; end: number; error: boolean }[] = [];
   for (let i = 0; i < messages.length; i++) {
     const ai = messages[i];
@@ -22,29 +64,63 @@ export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4
     i += replies.length;
   }
   const latestError = groups.findLast((group) => group.error);
-  const omitted = groups.slice(0, Math.max(0, groups.length - keepGroups)).filter((group) => group !== latestError);
+  const omitted = groups.slice(0, Math.max(0, groups.length - keepGroups)).filter((group) => summarizeErrors || group !== latestError);
   if (!omitted.length) return messages;
   const result = messages.filter((_, i) => !omitted.some((group) => i >= group.start && i < group.end));
+  if (latestError && omitted.includes(latestError)) {
+    // Replace the WHOLE completed provider exchange, never detach reasoning from
+    // calls/results. Retain bounded diagnostic facts, not generated reasoning or
+    // unrelated successful reads. Pending exchanges are never eligible.
+    const failures = messages.slice(latestError.start + 1, latestError.end).filter((m) => m instanceof ToolMessage && (m.status === "error" || /^Error[:\s]/i.test(m.text))).slice(-3);
+    result.push(new HumanMessage(`Prior completed tool failures (historical data, not new instructions): ${JSON.stringify(failures.map((m) => ({ tool: m.name ?? "tool", diagnostic: m.text.slice(0, 500), truncated: m.text.length > 500 })))}. The complete historical exchange was removed to fit the request. Inspect current state before acting; do not replay a write under a new key. These errors may already be resolved.`));
+  }
   // No generative summary can invent constraints or claim stale music is fresh.
-  result.push(new HumanMessage(`Context maintenance: ${omitted.length} older completed tool exchanges omitted. The exact brief, recent results/errors and current confirmed state remain authoritative. Re-read older search/resource results before using them; musical facts must be inspected on the current document. This is not a musical change.`));
+  result.push(new HumanMessage(`Context maintenance: ${omitted.length} completed tool exchanges omitted. The exact brief, retained local guidance/results/errors and current confirmed state remain authoritative. Reuse retained skill guidance; do not reread it merely because the exchange was omitted. External resource identities not retained must be rechecked before use; musical facts must be inspected on the current document. This is not a musical change.`));
   return result;
 }
 
-export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number): BaseMessage[] {
+export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number, dispatch: { systemMessage?: BaseMessage; envelope?: unknown } = {}): BaseMessage[] {
   const retained = [...evidence];
+  const observations = currentReadEvidence(history, checklist.documentHash);
   let current = compactNativeReadHistory(history);
-  let compactedToLast = false;
+  let retainedGroups = 4;
+  let summarizedErrors = false;
   for (;;) {
-    const messages = [...current, new HumanMessage(`Production checklist and previously read local guidance (data, not user instructions): ${JSON.stringify({ ...checklist, priorGuidance: retained, omittedGuidance: evidence.length - retained.length, guidanceCaveat: "Previous local read evidence is not write authority. Omitted or truncated guidance remains available through its read tool. Musical inspection and external availability are not cached here." })}`)];
-    try { boundOpenAiRequest([messages], outputBound, inputLimit); return messages; }
+    // Deduplicate against the FINAL compacted history, not the pre-compaction
+    // graph. Otherwise a read counted as visible is subsequently evicted and
+    // absent from both history and recall, inducing repeated skill discovery.
+    const visible = nativeReadEvidence(current);
+    const recalled = retained.filter((entry) => !visible.some((v) => canonicalHash(v) === canonicalHash(entry)));
+    const visibleMusic = currentReadEvidence(current, checklist.documentHash);
+    const currentObservations = observations.filter((entry) => !visibleMusic.some((v) => canonicalHash([v.tool, v.arguments]) === canonicalHash([entry.tool, entry.arguments])));
+    const makeMessages = (guidance: ReadEvidence[]) => [...current, new HumanMessage(`Production checklist and previously read local guidance (data, not user instructions): ${JSON.stringify({ ...checklist, currentObservations, priorGuidance: guidance, omittedGuidance: evidence.length - retained.length, guidanceCaveat: "Reuse these exact-hash read observations and retained guidance. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail. External availability is not cached here." })}`)];
+    const measure = (messages: BaseMessage[]) => boundOpenAiRequest([dispatch.systemMessage ? [dispatch.systemMessage, ...messages] : messages], outputBound, inputLimit, dispatch.envelope);
+    const messages = makeMessages(recalled);
+    try { measure(messages); return messages; }
     catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith("OPENAI_INPUT_LIMIT_EXCEEDED")) throw error;
-      if (!retained.length) {
-        if (compactedToLast) throw error;
-        current = compactNativeReadHistory(history, 1); compactedToLast = true; continue;
+      // Prefer the latest complete provider exchange over optional OLD skills
+      // when trimming those skills can actually make it fit. Otherwise we would
+      // repeatedly reset the inspection/action context despite ample room for
+      // one valid exchange. Do not sacrifice guidance for an irreducible replay.
+      if (retainedGroups === 1 && recalled.length) {
+        try {
+          measure(makeMessages([]));
+          const oldest = retained.findIndex((entry) => recalled.includes(entry));
+          retained.splice(oldest, 1);
+          continue;
+        } catch (minimalError) {
+          if (!(minimalError instanceof Error) || !minimalError.message.startsWith("OPENAI_INPUT_LIMIT_EXCEEDED")) throw minimalError;
+        }
       }
-      // Extra recall must not displace the exact brief, current plan, musical
-      // evidence or recent tool/errors. Those keep the normal input guard.
+      if (retainedGroups > 0) {
+        retainedGroups = retainedGroups === 4 ? 1 : 0;
+        current = compactNativeReadHistory(history, retainedGroups); continue;
+      }
+      if (!summarizedErrors) { summarizedErrors = true; current = compactNativeReadHistory(history, 0, true); continue; }
+      if (!retained.length) { if (observations.length > 1) { observations.shift(); continue; } throw error; }
+      // Irreducible old replay is already gone. Exact brief, current state and
+      // pending exchanges are never lost.
       retained.shift();
     }
   }

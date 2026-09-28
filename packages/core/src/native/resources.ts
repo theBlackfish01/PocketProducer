@@ -74,9 +74,13 @@ export function readNativeRecipe(id: string) {
 
 export function searchNativeResources(query: string, sources: Array<{ assetId: string; name?: string; assetHash: string; durationSeconds: number; rights: string; profile?: NativeSourceProfile }>) {
   const normalized = query.trim().toLowerCase();
+  const terms = [...new Set(normalized.match(/[a-z0-9]+/g) ?? [])].filter((term) => !["a", "the", "for", "with", "and", "sound", "sounds", "synth"].includes(term));
+  const score = (text: string) => { const haystack = text.toLowerCase(); return (normalized && haystack.includes(normalized) ? 10 : 0) + terms.filter((term) => haystack.includes(term)).length; };
+  const recipes = nativePresetRecipes.map((value) => ({ value, score: score(`${value.name} ${value.id} ${value.character} ${value.role} ${value.device.type}`) })).filter((item) => !terms.length || item.score > 0).sort((a, b) => b.score - a.score || a.value.id.localeCompare(b.value.id)).slice(0, 6);
   return {
     ownedSamples: sources.filter((value) => !normalized || `${value.name ?? ""} ${value.assetId}`.toLowerCase().includes(normalized)).slice(0, 16).map((value) => ({ ...value, provenance: "selected owned source", state: "local-ready/remote-unverified" as const })),
-    presetRecipes: nativePresetRecipes.filter((value) => !normalized || `${value.name} ${value.id} ${value.character} ${value.role} ${value.device.type}`.toLowerCase().includes(normalized)).map((value) => ({ ...value, ...recipeEvidence(value), heard: false })),
+    presetRecipes: recipes.map(({ value }) => ({ ...value, ...recipeEvidence(value), heard: false })),
+    guidance: recipes.length ? "Choose one relevant recipe, adapt its mapped settings and construct. Recipes are not heard evidence." : "No matching local recipe. Try bass, harmony, lead or drums; built-in devices remain available.",
     remoteLibrary: "not queried; an Audiotool catalogue result is not an owned or selected source"
   };
 }

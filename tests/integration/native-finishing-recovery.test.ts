@@ -5,6 +5,8 @@ import { AIMessage, fakeModel, focusedNativeReview, nativeFormatRecoveryAvailabl
 import { canonicalHash, claimJobById, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, getPool, jobSnapshot, loadNativePlan, nativeDraftView, nativeSnapshot, nativePlanSchema, nativeCreativeStateSchema, nativeReviewContextHash, NativeToolSession, seedNativeDocument, nativeFormOperations, saveNativePlan, saveNativeCreativeState, saveNativeReview, advanceNativePlan, reserveProviderEffect, markEffectDispatched, needsAttentionJob, resumeNativePartialJob, type JobRecord } from "@pocket/core";
 import { processJob } from "@pocket/worker";
 import { nativeFormSchema } from "@pocket/core";
+import { boundOpenAiRequest } from "@pocket/core/test-support";
+import { listProjects, requireProject, abandonNativePartialJob } from "@pocket/core";
 
 let owner = "";
 const config = getConfig(), originalConfig = { ...config };
@@ -40,6 +42,121 @@ async function prepared(profile: "standard" | "extended" = "standard", model = "
   await session.apply("initial", nativeFormOperations(nativeFormSchema.parse(form), []));
   return { job, session };
 }
+
+it("compacts final system/schema/reasoning input through the real producer before accounting dispatch", async () => {
+  const job = await create();
+  const model = fakeModel().respondWithTools([{ name: "record_native_plan", args: plan }]);
+  for (let i = 0; i < 5; i++) model.respond(new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: `opaque-${i}:` + "x".repeat(24000) }] }, tool_calls: [{ id: `read-${i}`, name: "discover_native_capabilities", args: { query: "heisenberg parameter ranges" } }] }));
+  model.respondWithTools([{ name: "compose_native_form", args: form }]).respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: model, library: createNativeLibrary(null) });
+  const state = await jobSnapshot(owner, job.id);
+  expect(state.state, state.error_message ?? "").toBe("succeeded");
+  const finalRead = model.calls[6]!.messages;
+  expect(JSON.stringify(finalRead)).toContain("opaque-4:");
+  expect(JSON.stringify(finalRead)).not.toContain("opaque-0:");
+  expect(finalRead.some((message) => message.type === "system")).toBe(true);
+  expect(() => boundOpenAiRequest([finalRead], 900, 128000)).not.toThrow();
+  const effects = (await getPool().query("SELECT state FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows;
+  expect(effects).toHaveLength(model.callCount);
+  expect(effects.every((effect) => effect.state === "succeeded")).toBe(true);
+}, 30_000);
+
+it("keeps initial creative bookkeeping out of refining in either parallel tool order", async () => {
+  for (const creativeFirst of [true, false]) {
+    const job = await create();
+    await saveNativePlan(job, plan);
+    const save = () => saveNativeCreativeState(job, nativeCreativeStateSchema.parse({ identity: "Amber idea", palette: [], decisions: ["Choose a compact ensemble"] }));
+    const hash = canonicalHash(seedNativeDocument(direction));
+    if (creativeFirst) { await save(); await advanceNativePlan(job, "building", hash); }
+    else { await advanceNativePlan(job, "building", hash); await save(); }
+    expect((await loadNativePlan(job.id))?.stage).toBe("building");
+  }
+});
+
+it("retains actual current musical observations when production compaction evicts inspection replay", async () => {
+  const job = await create();
+  const model = fakeModel().respondWithTools([{ name: "compose_native_form", args: form }])
+    .respond(new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "inspection-opaque:" + "x".repeat(100000) }] }, tool_calls: [
+      { id: "part-facts", name: "inspect_native_part", args: { partId: "lead" } },
+      { id: "section-facts", name: "inspect_native_section", args: { sectionId: "whole" } }
+    ] }))
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "refine", operations: [{ kind: "setMix", partId: "lead", gain: 0.55 }] } }])
+    .respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: model, library: createNativeLibrary(null) });
+  const state = await jobSnapshot(owner, job.id);
+  expect(state.state, state.error_message ?? "").toBe("succeeded");
+  const checklist = model.calls[2]!.messages.findLast((message) => message.text.startsWith("Production checklist"))!;
+  const context = JSON.parse(checklist.text.slice(checklist.text.indexOf("{"))) as { currentObservations: { tool: string; content: string }[] };
+  const partRead = context.currentObservations.find((entry) => entry.tool === "inspect_native_part")!;
+  expect(JSON.parse(partRead.content)).toMatchObject({ part: { id: "lead", notes: [{ pitch: 64 }] }, totalMaterializedNotes: 1 });
+  expect(JSON.stringify(model.calls[2]!.messages)).not.toContain("inspection-opaque");
+  const afterEdit = model.calls[3]!.messages.findLast((message) => message.text.startsWith("Production checklist"))!;
+  expect(afterEdit.text).toContain('"currentObservations":[]');
+  expect((await nativeSnapshot(owner, job.projectId)).current!.document.parts[0]!.gain).toBe(0.55);
+}, 30_000);
+
+it("survives a mixed oversized error exchange followed by selecting batch before initial music", async () => {
+  const job = await create();
+  const model = fakeModel().respondWithTools([{ name: "record_native_plan", args: plan }])
+    .respond(new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(60000) }] }, tool_calls: [
+      { id: "bad", name: "inspect_native_section", args: { sectionId: "missing" } }, { id: "sound", name: "inspect_editable_sound", args: { partId: "starting-voice" } },
+      { id: "skill", name: "read_file", args: { file_path: "/skills/native-arrangement/SKILL.md", limit: 1000 } }
+    ] }))
+    .respondWithTools([{ name: "select_native_tools", args: { focus: "batch" } }])
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "build", operations: nativeFormOperations(nativeFormSchema.parse(form), []) } }])
+    .respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: model, library: createNativeLibrary(null) });
+  const state = await jobSnapshot(owner, job.id);
+  expect(state.state, state.error_message ?? "").toBe("succeeded");
+  const messages = JSON.stringify(model.calls[3]?.messages);
+  expect(messages).toContain("Prior completed tool failures");
+  expect(messages).not.toContain("x".repeat(1000));
+  expect(messages).toContain("Prefer `compose_native_scene`");
+  expect(messages).toContain("priorGuidance");
+  const rows = (await getPool().query("SELECT output->'inputReservationBytes' AS bounds FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows;
+  expect(rows.every((row) => row.bounds.envelope < 80000)).toBe(true);
+}, 30_000);
+
+it("constructs, develops, shapes and inspects through compound tools with replay-safe receipts", async () => {
+  const job = await create();
+  const scene = { stepKey: "scene", replaceSeed: true, title: "Tick scene", structure: { bars: 4, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 4 }] },
+    parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0,
+      automation: [{ id: "gain-curve", target: "gain", points: [{ tick: 0, value: 0.5 }, { tick: 15360, value: 0.5 }] }] }],
+    patterns: [{ id: "theme", partId: "lead", name: "Theme", lengthTicks: 3840, events: [[691, 1201, 64, 0.7]] }],
+    placements: [{ partId: "lead", placement: { id: "first", motifId: "theme", startTick: 0, repeats: 2, transpose: 0 } }, { partId: "lead", placement: { id: "last", motifId: "theme", startTick: 7680, repeats: 2, transpose: 0 } }],
+    inspect: { sectionIds: ["not-there"] } };
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_scene", args: scene }])
+    .respondWithTools([{ name: "compose_native_scene", args: { ...scene, inspect: { sectionIds: ["whole"], soundPartIds: ["lead"] } } }])
+    .respondWithTools([{ name: "inspect_editable_sound", args: { partId: "lead" } }, { name: "apply_native_batch", args: { stepKey: "wrong", operations: [{ kind: "setMix", partId: "missing", gain: 0.5 }] } }])
+    .respondWithTools([{ name: "develop_native_theme", args: { stepKey: "develop", operations: [{ kind: "varyMotifInstance", partId: "lead", placementId: "last", newMotifId: "answer", name: "Answer", pitchShiftSemitones: 7 }], inspect: { sectionIds: ["whole"] } } }])
+    .respondWithTools([{ name: "shape_native_sections", args: { stepKey: "shape", operations: [{ kind: "editSectionAutomation", partId: "lead", sectionId: "whole", automationId: "gain-curve", points: [{ tick: 0, value: 0.5, interpolation: "linear" }, { tick: 15000, value: 0.7 }, { tick: 15360, value: 0.5 }] }], inspect: { sectionIds: ["whole"] } } }])
+    .respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: producer, library: createNativeLibrary(null) });
+  const snapshot = await jobSnapshot(owner, job.id);
+  expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
+  expect(JSON.stringify(producer.calls[1]?.messages)).toContain('committed');
+  expect(JSON.stringify(producer.calls[1]?.messages)).toContain('inspectionError');
+  expect(JSON.stringify(producer.calls[2]?.messages)).toContain('replayed');
+  expect(JSON.stringify(producer.calls[3]?.messages)).toContain('Unknown part missing');
+  expect(JSON.stringify(producer.calls[3]?.messages)).toContain('automationValueRange');
+  const current = (await nativeSnapshot(owner, job.projectId)).current!.document;
+  expect(current.motifs.find((m) => m.id === "answer")?.notes[0]?.pitch).toBe(71);
+  expect(current.motifs.find((m) => m.id === "theme")?.notes[0]?.startTick).toBe(691);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(3);
+}, 30_000);
+
+it("projects confirmed draft titles without renaming explicit titles or exposing another owner's work", async () => {
+  const { job, session } = await prepared();
+  expect((await requireProject(owner, job.projectId)).title).toBe("Finishing recovery test");
+  await getPool().query("UPDATE project SET title='Untitled listening room' WHERE id=$1", [job.projectId]);
+  expect((await requireProject(owner, job.projectId)).title).toBe(session.document.title);
+  expect((await listProjects(owner)).find((p) => p.id === job.projectId)?.title).toBe(session.document.title);
+  expect(await listProjects(randomUUID())).toEqual([]);
+  await expect(requireProject(randomUUID(), job.projectId)).rejects.toThrow("Project not found");
+  await needsAttentionJob(job, "NATIVE_PARTIAL", "OPENAI_INPUT_LIMIT_EXCEEDED:131409:128000");
+  await abandonNativePartialJob(owner, job.projectId, job.id);
+  expect((await requireProject(owner, job.projectId)).title).toBe("Untitled listening room");
+});
 
 it("repairs invalid critic JSON once through production tools, preserves bookkeeping and reuses the review", async () => {
   const job = await create();

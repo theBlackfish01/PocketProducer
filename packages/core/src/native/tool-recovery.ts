@@ -15,9 +15,9 @@ export class NativeUnexpectedToolError extends Error {
 /** LangChain may turn schema exceptions into verbose ToolMessages before middleware sees them. */
 export function nativeToolArgumentFeedback(schema: unknown, args: unknown): NativeToolFeedback | null {
   if (!schema || typeof schema !== "object" || !("safeParse" in schema) || typeof schema.safeParse !== "function") return null;
-  const result = (schema as { safeParse: (value: unknown) => { success: boolean } }).safeParse(args);
+  const result = (schema as { safeParse: (value: unknown) => { success: boolean; error?: { issues: { path: PropertyKey[]; message: string }[] } } }).safeParse(args);
   return result.success ? null : {
-    code: "INVALID_ARGUMENTS", message: "The tool arguments do not match its required fields or limits.",
+    code: "INVALID_ARGUMENTS", message: `The tool arguments do not match its required fields or limits. ${result.error?.issues.slice(0, 4).map((issue) => `${issue.path.map(String).join(".") || "arguments"}: ${issue.message.slice(0, 180)}`).join("; ") ?? ""}`,
     next: "Correct the arguments using the tool schema and the current workspace, then try once more."
   };
 }
@@ -42,7 +42,7 @@ export function nativeToolFeedback(toolName: string, error: unknown): NativeTool
     code: "OPTIONAL_LIBRARY_UNAVAILABLE", message: "The Audiotool library is unavailable for this request.",
     next: "Continue with local native devices and selected owned sources; do not invent a library result."
   };
-  if (error instanceof Error && /^Unknown (?:part|motif|section|group|target section)\b/.test(error.message) && toolName.startsWith("inspect_native_")) return {
+  if (error instanceof Error && /^Unknown (?:part|motif|section|group|target section)\b/.test(error.message) && (toolName.startsWith("inspect_native_") || toolName === "inspect_editable_sound")) return {
     code: "UNKNOWN_DOCUMENT_ID", message: "That identifier is not in the current document.",
     next: "Read inspect_native_workspace and use an exact current identifier."
   };

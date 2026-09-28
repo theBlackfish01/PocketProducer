@@ -65,9 +65,24 @@ async function schemaRoots(): Promise<string[]> {
 }
 
 export async function discoverNativeCapabilities(query = "", limit = 24) {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const ignored = new Set(["the", "a", "an", "for", "with", "and", "of", "in", "to", "parameter", "parameters", "ranges", "range", "mapping", "native", "device"]);
+  const words = (text: string) => text.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const terms = [...new Set(words(query).filter((term) => !ignored.has(term)))];
   const roots = await schemaRoots();
-  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length, pathExample: "/beatbox8Pattern/length", pathFormat: "/entity/field; use a root returned in matches and slash-separated schema fields", matches: roots.filter((type) => terms.every((term) => `${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""}`.toLowerCase().includes(term))).slice(0, Math.max(1, Math.min(64, limit))).map((type) => ({ type, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), operationContract: nativeOperationContract(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
+  const named = roots.filter((root) => query.toLowerCase().includes(root.toLowerCase()));
+  const ranked = roots.map((type) => {
+    const contract = nativeOperationContract(type);
+    const text = words(`${type} ${musicalMeaning[type]?.family ?? ""} ${musicalMeaning[type]?.purpose ?? ""} ${Object.keys(contract.mappedParameters ?? {}).join(" ")}`).join(" ");
+    const exact = named.some((root) => type.toLowerCase().startsWith(root.toLowerCase()));
+    const score = (exact ? 100 : 0) + terms.reduce((sum, term) => sum + (text.includes(term) ? 2 : 0), 0);
+    return { type, score, exact };
+  }).filter((item) => !terms.length || (named.length ? item.exact : item.score > 0))
+    .sort((a, b) => b.score - a.score || a.type.localeCompare(b.type));
+  return { version: NATIVE_CATALOG_VERSION, totalEntities: roots.length,
+    guidance: ranked.length ? "Use inspect_editable_sound for canonical controls on an existing part. SDK slash paths are discovery only, never write paths."
+      : "No matching capability. Try an instrument name (heisenberg, beatbox8), filter, reverb, routing or automation; inspect_editable_sound returns writable controls for an existing part.",
+    pathExample: "/beatbox8Pattern/length", pathFormat: "/entity/field; use a root returned in matches and slash-separated schema fields",
+    matches: ranked.slice(0, Math.max(1, Math.min(64, limit))).map(({ type, score }) => ({ type, relevance: score, family: musicalMeaning[type]?.family ?? "other", purpose: musicalMeaning[type]?.purpose ?? "SDK entity; inspect schema before using it", caveat: musicalMeaning[type]?.caveat ?? null, discoverable: true, writableInPocketProducer: writable.has(type), operationContract: nativeOperationContract(type), offlineValidated: writable.has(type), liveSynchronized: false, audioVerified: false })) };
 }
 
 export async function inspectNativeCapability(path: string) {

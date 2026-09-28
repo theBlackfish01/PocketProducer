@@ -208,13 +208,15 @@ describe("audio-independent native job lifecycle", () => {
     expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts[0]?.gain).toBe(0.61);
   }, 120_000);
   it("pauses after a known paid batch, extends the same run and completes without duplicate accounting", async () => {
+    // Synthetic output-only pricing isolates the pause/recovery invariant from
+    // evolving advertised schema size. Production pricing/budgets are untouched.
     const scratchId = (await createProject(ownerId, "Financial pause and continuation")).id;
     extraProjects.push(scratchId);
     const direction = "Four-bar melody with bass";
     const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "financial-pause-same-job", request: { direction, profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
     const original = (await getPool().query<{ request: Record<string, unknown> }>("SELECT request FROM job WHERE id=$1", [accepted.id])).rows[0]!.request;
     const priceScale = ((original._nativeRun as { pricing: { outputUsdPerMillion: number } }).pricing.outputUsdPerMillion / 50);
-    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 * priceScale } })]);
+    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 * priceScale, pricing: { ...(original._nativeRun as { pricing: Record<string, unknown> }).pricing, inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, cacheWriteUsdPerMillion: 0 } } })]);
     const form = { title: "Known first phrase", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
     const costlyMessage = new AIMessage({ content: "", tool_calls: [{ id: "form-first", name: "compose_native_form", args: form }] });
     Object.assign(costlyMessage, { usage_metadata: { input_tokens: 1_000, output_tokens: 10_000, total_tokens: 11_000 } });
@@ -227,7 +229,7 @@ describe("audio-independent native job lifecycle", () => {
     expect(draft.stepCount).toBe(1);
     expect(draft.canContinue).toBe(false);
     expect(draft.canExtend).toBe(true);
-    expect(draft.budget.spentUsd).toBeGreaterThan(0.5 * priceScale);
+    expect(draft.budget.spentUsd).toBeGreaterThanOrEqual(0.5 * priceScale);
     expect((await nativeSnapshot(ownerId, scratchId)).current).toBeNull();
     await expect(resumeNativePartialJob(ownerId, scratchId, accepted.id)).rejects.toThrow(/allowance/);
     await extendNativePartialJob(ownerId, scratchId, accepted.id, { maxJobCostUsd: 2 });
@@ -241,7 +243,7 @@ describe("audio-independent native job lifecycle", () => {
     const effects = await getPool().query<{ step: string; state: string; actual_cost_microusd: string; reservation_microusd: string }>("SELECT step,state,actual_cost_microusd::text,reservation_microusd::text FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [accepted.id]);
     expect(effects.rows).toHaveLength(3);
     expect(Number(effects.rows[1]!.reservation_microusd)).toBeLessThan(Number(effects.rows[0]!.reservation_microusd));
-    expect(effects.rows.reduce((sum, row) => sum + Number(row.actual_cost_microusd), 0)).toBeGreaterThan(500_000 * priceScale);
+    expect(effects.rows.reduce((sum, row) => sum + Number(row.actual_cost_microusd), 0)).toBe(500_000 * priceScale);
     expect((await nativeDraftView(ownerId, scratchId, accepted.id)).stepCount).toBe(2);
   }, 120_000);
   it("continues a known zero-step financial pause without inventing a musical draft or replaying the first call", async () => {
@@ -251,7 +253,7 @@ describe("audio-independent native job lifecycle", () => {
     const accepted = await createNativeJob({ ownerId, projectId: scratchId, kind: "native-generation", idempotencyKey: "zero-step-financial-pause", request: { direction, profile: "standard", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
     const original = (await getPool().query<{ request: Record<string, unknown> }>("SELECT request FROM job WHERE id=$1", [accepted.id])).rows[0]!.request;
     const priceScale = ((original._nativeRun as { pricing: { outputUsdPerMillion: number } }).pricing.outputUsdPerMillion / 50);
-    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 * priceScale } })]);
+    await getPool().query("UPDATE job SET request=$2::jsonb WHERE id=$1", [accepted.id, JSON.stringify({ ...original, _nativeRunCurrent: { ...original._nativeRun as Record<string, unknown>, maxJobCostUsd: 0.9 * priceScale, pricing: { ...(original._nativeRun as { pricing: Record<string, unknown> }).pricing, inputUsdPerMillion: 0, cachedInputUsdPerMillion: 0, cacheWriteUsdPerMillion: 0 } } })]);
     const plan = { intent: "A restrained question and answer", sections: [{ name: "Whole", purpose: "Introduce and answer one motif" }], soundGoals: ["Dry, close lead"], hardConstraints: ["Four bars"], developmentTasks: ["Write the answer"] };
     const costlyPlan = new AIMessage({ content: "", tool_calls: [{ id: "first-plan", name: "record_native_plan", args: plan }] });
     Object.assign(costlyPlan, { usage_metadata: { input_tokens: 1_000, output_tokens: 10_000, total_tokens: 11_000 } });

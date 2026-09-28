@@ -80,6 +80,8 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   name = "pocket-producer-accounting";
   private readonly effects = new Map<string, string>();
   private currentOutputTokenBound: number;
+  private requestEnvelope: unknown;
+  private readonly inputBounds = new Map<string, ReturnType<typeof boundOpenAiRequest>["inputComponents"]>();
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   costMicrousd = 0;
 
@@ -89,6 +91,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   }
 
   setOutputTokenBound(bound: number): void { this.currentOutputTokenBound = Math.min(this.outputTokenBound, bound); }
+  setRequestEnvelope(envelope: unknown): void { this.requestEnvelope = envelope; }
 
   private cost(usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheWriteTokens?: number }): number {
     const capturedPrice = jobNativeRunLimits(this.job.request)?.pricing;
@@ -98,7 +101,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   }
 
   override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
-    const request = boundOpenAiRequest(messages, this.currentOutputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens);
+    const request = boundOpenAiRequest(messages, this.currentOutputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens, this.requestEnvelope);
     // A handoff can reconstruct identical musical context for a different model.
     // Keep prior Sol identities stable, but never collide with them for Luna.
     const originalModel = jobNativeRunLimits({ _nativeRun: this.job.request._nativeRun })?.model;
@@ -118,6 +121,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
     if (!reservation.created) throw new Error(`OPENAI_EFFECT_${reservation.state.toUpperCase()}`);
     await markEffectDispatched(reservation.id, this.job);
     this.effects.set(runId, reservation.id);
+    this.inputBounds.set(runId, request.inputComponents);
   }
 
   override async handleLLMEnd(output: LLMResult, runId: string): Promise<void> {
@@ -133,7 +137,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
       throw new Error("PROVIDER_USAGE_UNKNOWN: reconcile the observed response before continuing");
     }
     const actualCostMicrousd = gatewayCost ?? this.cost(usage);
-    const state = await completeProviderEffect({ effectId, job: this.job, output: { usage }, actualCostMicrousd, ...(providerRequestId ? { providerRequestId } : {}) });
+    const state = await completeProviderEffect({ effectId, job: this.job, output: { usage, inputReservationBytes: this.inputBounds.get(runId) }, actualCostMicrousd, ...(providerRequestId ? { providerRequestId } : {}) });
     if (state !== "succeeded") throw new Error("OPENAI_EFFECT_OUTCOME_UNCERTAIN");
     this.usage.inputTokens += usage.inputTokens;
     this.usage.outputTokens += usage.outputTokens;
@@ -152,10 +156,11 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   }
 }
 
-export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound = 900, inputLimit = getConfig().MAX_OPENAI_INPUT_TOKENS): {
+export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound = 900, inputLimit = getConfig().MAX_OPENAI_INPUT_TOKENS, envelope?: unknown): {
   normalizedMessages: unknown;
   inputTokenBound: number;
   outputTokenBound: number;
+  inputComponents: { messages: number; envelope: number; framing: number };
 } {
   const normalizedMessages = messages.map((batch) => batch.map((message) => ({
     type: message.type,
@@ -168,15 +173,17 @@ export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound =
     toolCalls: message instanceof AIMessage ? message.tool_calls : undefined
   })));
   const serialized = JSON.stringify(normalizedMessages);
-  // The callback sees the complete graph message payload. The fixed allowance covers
-  // Responses/tool framing and the bounded palette/structured-response schemas.
+  // Shared by preflight and accounting: actual bound tool schemas are additional
+  // input, not part of the fixed framing allowance. This is a byte reservation
+  // guard, NOT a measurement of provider tokens (settlement uses reported usage).
   // UTF-8 bytes are a conservative tokenizer-independent upper bound for the
   // selected text-only request. This intentionally admits less than an
   // approximate chars/4 estimate rather than risking an under-reservation.
-  const inputTokenBound = Buffer.byteLength(serialized, "utf8") + 768;
+  const inputComponents = { messages: Buffer.byteLength(serialized, "utf8"), envelope: envelope === undefined ? 0 : Buffer.byteLength(JSON.stringify(envelope), "utf8"), framing: 768 };
+  const inputTokenBound = inputComponents.messages + inputComponents.envelope + inputComponents.framing;
   const configuredLimit = Math.min(inputLimit, getConfig().MAX_OPENAI_INPUT_TOKENS);
   if (inputTokenBound > configuredLimit) {
     throw new Error(`OPENAI_INPUT_LIMIT_EXCEEDED:${inputTokenBound}:${configuredLimit}`);
   }
-  return { normalizedMessages, inputTokenBound, outputTokenBound };
+  return { normalizedMessages, inputTokenBound, outputTokenBound, inputComponents };
 }
