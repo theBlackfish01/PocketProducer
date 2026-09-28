@@ -701,7 +701,7 @@ export async function selectNativeRevision(ownerId: string, projectId: string, r
   finally { client.release(); }
 }
 
-export interface NativeRemoteCheckpoint { state: "create_in_flight" | "created" | "apply_in_flight" | "verified" | "conflict" | "uncertain" | "failed"; createdNow: boolean; remoteProjectName: string | null; remoteUrl: string | null; expectedDocumentHash: string; observedHash: string | null; errorMessage: string | null }
+export interface NativeRemoteCheckpoint { state: "create_in_flight" | "created" | "apply_in_flight" | "verified" | "conflict" | "uncertain" | "failed"; createdNow: boolean; remoteProjectName: string | null; remoteUrl: string | null; expectedDocumentHash: string; observedHash: string | null; errorMessage: string | null; mappingVersion: string }
 
 export async function beginOwnedSampleUpload(job: JobRecord, assetId: string, assetHash: string): Promise<{ state: "in_flight" | "ready" | "uncertain"; createdNow: boolean; sampleName: string | null; durationSeconds: number | null }> {
   const client = await getPool().connect();
@@ -748,14 +748,14 @@ export async function beginNativeSync(job: JobRecord, revisionHash: string): Pro
     const revisionId = String(job.request.baseNativeRevisionId);
     const current = await head(client, job.ownerId, job.projectId, true);
     if (current !== revisionId) throw new JobControlError("LEASE_LOST", "Selected native version changed before synchronization");
-    const prior = await client.query("SELECT state,remote_project_name,remote_url,expected_document_hash,observed_hash,error_message FROM native_revision_sync WHERE revision_id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [revisionId, job.ownerId, job.projectId]);
+    const prior = await client.query("SELECT state,remote_project_name,remote_url,expected_document_hash,observed_hash,error_message,mapping_version FROM native_revision_sync WHERE revision_id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [revisionId, job.ownerId, job.projectId]);
     if (!prior.rows[0]) {
-      await client.query("INSERT INTO native_revision_sync(owner_id,project_id,revision_id,state,expected_document_hash) VALUES($1,$2,$3,'create_in_flight',$4)", [job.ownerId, job.projectId, revisionId, revisionHash]);
+      await client.query("INSERT INTO native_revision_sync(owner_id,project_id,revision_id,state,expected_document_hash,mapping_version) VALUES($1,$2,$3,'create_in_flight',$4,$5)", [job.ownerId, job.projectId, revisionId, revisionHash, NATIVE_MAPPING_VERSION]);
       await client.query("UPDATE native_sync SET state='applying',error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3", [job.ownerId, job.projectId, revisionId]);
     } else if (prior.rows[0].expected_document_hash !== revisionHash) throw new Error("Native revision hash changed unexpectedly");
     await client.query("COMMIT");
     const row = prior.rows[0];
-    return { state: row?.state ?? "create_in_flight", createdNow: !row, remoteProjectName: row?.remote_project_name ?? null, remoteUrl: row?.remote_url ?? null, expectedDocumentHash: revisionHash, observedHash: row?.observed_hash ?? null, errorMessage: row?.error_message ?? null };
+    return { state: row?.state ?? "create_in_flight", createdNow: !row, remoteProjectName: row?.remote_project_name ?? null, remoteUrl: row?.remote_url ?? null, expectedDocumentHash: revisionHash, observedHash: row?.observed_hash ?? null, errorMessage: row?.error_message ?? null, mappingVersion: row ? row.mapping_version ?? "nexus-native-v8" : NATIVE_MAPPING_VERSION };
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
 }
@@ -784,9 +784,9 @@ export async function finishNativeSync(job: JobRecord, remoteProjectName: string
     await client.query("BEGIN");
     await assertSyncLease(client, job);
     const revisionId = String(job.request.baseNativeRevisionId);
-    const updated = await client.query("UPDATE native_revision_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$8,verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND state=$7 RETURNING revision_id", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, expectedState, NATIVE_MAPPING_VERSION]);
+    const updated = await client.query("UPDATE native_revision_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=COALESCE(mapping_version,'nexus-native-v8'),verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND state=$7 RETURNING revision_id,mapping_version", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, expectedState]);
     if (updated.rowCount !== 1) throw new Error("NATIVE_SYNC_CHECKPOINT_CONFLICT");
-    await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$7,verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, NATIVE_MAPPING_VERSION]);
+    await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$7,verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, updated.rows[0].mapping_version]);
     await client.query("UPDATE job SET state='succeeded',stage=NULL,lease_owner=NULL,attempt_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [job.id]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence-1,'succeeded',$2 FROM job WHERE id=$1", [job.id, { nativeRevisionId: revisionId, remoteProjectName, synchronization: "verified" }]);
@@ -814,14 +814,15 @@ export async function reconcileNativeSyncReadback(input: { ownerId: string; proj
     if (!saved || saved.expected_document_hash !== revision.rows[0].document_hash || saved.remote_project_name !== input.remoteProjectName) throw new Error("Native copy identity or accepted hash changed during reconciliation");
     const job = await client.query<{ state: string; kind: string; request: Record<string, unknown> }>("SELECT state,kind,request FROM job WHERE id=$1 AND owner_id=$2 AND project_id=$3 FOR UPDATE", [input.jobId, input.ownerId, input.projectId]);
     if (job.rows[0]?.kind !== "native-sync" || job.rows[0].request.baseNativeRevisionId !== input.revisionId) throw new Error("Native copy command does not match this version");
-    if (saved.state === "verified" && saved.observed_hash === input.observedHash && saved.mapping_version === NATIVE_MAPPING_VERSION && job.rows[0].state === "succeeded") {
+    const mappingVersion = saved.mapping_version ?? "nexus-native-v8";
+    if (saved.state === "verified" && saved.observed_hash === input.observedHash && job.rows[0].state === "succeeded") {
       await appendPublicActivity(client, { ownerId: input.ownerId, projectId: input.projectId, jobId: input.jobId }, `native-sync:${input.jobId}:verified`, { version: 1, kind: "audiotool", text: "Editable Audiotool copy confirmed for this saved version.", revisionId: input.revisionId });
       await client.query("COMMIT");
       return;
     }
     if (!["conflict", "uncertain"].includes(saved.state) || job.rows[0].state !== "needs_attention") throw new Error("Native copy is not in a reconcilable state");
-    await client.query("UPDATE native_revision_sync SET state='verified',remote_url=$4,observed_hash=$5,mapping_version=$6,verified_at=now(),error_message=NULL,updated_at=now() WHERE revision_id=$1 AND project_id=$2 AND owner_id=$3", [input.revisionId, input.projectId, input.ownerId, input.remoteUrl, input.observedHash, NATIVE_MAPPING_VERSION]);
-    const mirror = await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$7,verified_at=now(),error_message=NULL,updated_at=now() WHERE revision_id=$1 AND project_id=$2 AND owner_id=$3", [input.revisionId, input.projectId, input.ownerId, input.remoteProjectName, input.remoteUrl, input.observedHash, NATIVE_MAPPING_VERSION]);
+    await client.query("UPDATE native_revision_sync SET state='verified',remote_url=$4,observed_hash=$5,mapping_version=$6,verified_at=now(),error_message=NULL,updated_at=now() WHERE revision_id=$1 AND project_id=$2 AND owner_id=$3", [input.revisionId, input.projectId, input.ownerId, input.remoteUrl, input.observedHash, mappingVersion]);
+    const mirror = await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$7,verified_at=now(),error_message=NULL,updated_at=now() WHERE revision_id=$1 AND project_id=$2 AND owner_id=$3", [input.revisionId, input.projectId, input.ownerId, input.remoteProjectName, input.remoteUrl, input.observedHash, mappingVersion]);
     if (mirror.rowCount !== 1) throw new Error("Native copy status mirror is missing");
     await client.query("UPDATE job SET state='succeeded',stage=NULL,error_code=NULL,error_message=NULL,updated_at=now(),next_event_sequence=next_event_sequence+1 WHERE id=$1", [input.jobId]);
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence-1,'succeeded',$2 FROM job WHERE id=$1", [input.jobId, { nativeRevisionId: input.revisionId, remoteProjectName: input.remoteProjectName, synchronization: "verified", reconciled: true }]);

@@ -32,7 +32,7 @@ function documentFixture(): NativeDocument {
   }
 }
 
-async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean; paused?: boolean; audiotool?: boolean; ownedSound?: boolean } = {}) {
+async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean; paused?: boolean; audiotool?: boolean; ownedSound?: boolean; verifiedMapping?: string } = {}) {
   const before = documentFixture(), after = structuredClone(before)
   after.parts[0]!.notes[0]!.pitch += 12; after.parts[0]!.notes[0]!.startTick += 480; after.parts[0]!.notes[0]!.durationTicks += 240
   after.parts[0]!.notes.splice(1, 1)
@@ -58,7 +58,7 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
     else if (path.endsWith(`/projects/${projectId}`)) json = { project: { id: projectId, title: "Night Drive", currentRevisionId: null }, assets: options.ownedSound ? [{ id: "owned-fixture", name: "Own sound", audioUrl: "/api/v1/assets/fixture/audio", durationSeconds: 8, sampleRate: 8_000, channels: 2 }] : [], revisions: [], analyses: [], latestJob: null, currentRevision: null }
     else if (path.endsWith("/activity/stream")) { await route.abort(); return }
     else if (path.endsWith("/activity")) json = { events: [], cursor: 0, nextCursor: 0, hasOlder: false, job: options.draft ? job() : null, headId: completed ? "version-3" : "version-2", draft: options.draft ? { step, hash: `draft-${step}` } : null, actions: { canSubmit: abandoned || completed || !options.draft, canStop: Boolean(options.draft && !options.paused), canAbandon: options.paused && !abandoned, issue: options.paused && !abandoned ? "paused" : null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } }
-    else if (path.endsWith("/native")) json = { currentRevisionId: completed ? "version-3" : "version-2", headVersion: completed ? 3 : 2, current: completed ? version(after, 3) : versions[0], versions: completed ? [version(after, 3), ...versions] : versions, context: null, comparisons: {}, synchronization: { state: "local_only", projectId: null, revisionId: null, url: null }, playback: "deferred" }
+    else if (path.endsWith("/native")) json = { currentRevisionId: completed ? "version-3" : "version-2", headVersion: completed ? 3 : 2, current: completed ? version(after, 3) : versions[0], versions: completed ? [version(after, 3), ...versions] : versions, context: null, comparisons: {}, synchronization: options.verifiedMapping ? { state: "verified", mappingVersion: options.verifiedMapping, projectId: "projects/fixture", revisionId: "version-2", url: "https://offline.invalid/studio" } : { state: "local_only", projectId: null, revisionId: null, url: null }, playback: "deferred" }
     else if (path.endsWith("/preservation-preview")) json = { revisionId: "version-2", sectionId: null, namedParts: [], theme: null, unresolved: [] }
     else if (path.endsWith("/capabilities")) json = { matches: [], totalEntities: 0, version: "test" }
     else if (path.endsWith("/sound-recipes")) json = { version: "local-palette-v2", recipes: [{ id: "rubber-pulse", name: "Rubber pulse", character: "Short syncopated bass with upper harmonics", role: "bass", provenance: "Original parameter recipe; unheard", version: "local-palette-v2", configurationHash: "b".repeat(64), auditionStatus: "unheard", guidance: { register: "Low register", articulation: "Short syncopated notes", usefulMotion: "Open the filter", failureMode: "Too much low sustain" }, device: { type: "heisenberg", parameters: {} }, effects: [], heard: false }] }
@@ -625,6 +625,20 @@ test("a next direction survives completion, while long activity stays bounded an
   await page.screenshot({ path: `${evidence}/workspace-long-feed.png`, fullPage: true })
   expect(room.writes()).toBe(0)
 })
+
+for (const mappingVersion of ["nexus-native-v7", "nexus-native-v8", "nexus-native-v9"]) {
+  test(`verified ${mappingVersion} copy remains openable without a new export`, async ({ page }) => {
+    const room = await mockRoom(page, { audiotool: true, verifiedMapping: mappingVersion })
+    await expect(page.getByRole("button", { name: "Open in Audiotool", exact: true })).toBeVisible()
+    await expect(page.getByRole("button", { name: "Copy to Audiotool", exact: true })).toHaveCount(0)
+    await page.getByRole("button", { name: "Session options" }).click()
+    await page.getByRole("menuitem", { name: "Audiotool connection" }).click()
+    await expect(page.getByRole("button", { name: "Recheck Audiotool copy", exact: true })).toBeVisible()
+    await page.keyboard.press("Escape")
+    if (mappingVersion === "nexus-native-v9") await page.screenshot({ path: `${evidence}/v9-copy-confirmed.png` })
+    expect(room.writes()).toBe(0)
+  })
+}
 
 test("history and Audiotool use compact dialogs with focus return and no implicit copy", async ({ page }) => {
   const room = await mockRoom(page, { audiotool: true })

@@ -6,7 +6,14 @@ import { canonicalHash } from "../domain/hash.js";
 import { nativePresetFingerprint, type LibrarySample, type NativePreset } from "./library.js";
 import { assertNativeDeviceMapping, materializedNotes, nativeDocumentSchema, type NativeDocument, type NativePart } from "./model.js";
 
-export const NATIVE_MAPPING_VERSION = "nexus-native-v8";
+export const NATIVE_MAPPING_VERSION = "nexus-native-v9";
+export type NativeMappingVersion = "nexus-native-v8" | typeof NATIVE_MAPPING_VERSION;
+/** Null checkpoints predate version capture at dispatch and used the v8 layout. */
+export function nativeMappingVersion(version: string | null): NativeMappingVersion {
+  if (version === null || version === "nexus-native-v8") return "nexus-native-v8";
+  if (version === NATIVE_MAPPING_VERSION) return version;
+  throw new Error(`Unsupported native mapping checkpoint: ${version}; inspect before retrying`);
+}
 export const NEXUS_TICKS_PER_CANONICAL_TICK = Ticks.Beat / 960;
 export function toNexusTicks(canonicalTicks: number): number {
   const value = canonicalTicks * NEXUS_TICKS_PER_CANONICAL_TICK;
@@ -41,7 +48,8 @@ function nativeField(root: unknown, path: string): { location: { entityId: strin
   return value && typeof value === "object" && "location" in value ? value as ReturnType<typeof nativeField> : null;
 }
 
-export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocument, sourceSamples: NativeSampleResources = {}, presets: Record<string, NativePreset> = {}, librarySamples: Record<string, LibrarySample> = {}): Promise<{ mappedParts: number; noteEntities: number; patternRegions: number; automationEvents: number; unresolvedSources: string[] }> {
+export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocument, sourceSamples: NativeSampleResources = {}, presets: Record<string, NativePreset> = {}, librarySamples: Record<string, LibrarySample> = {}, mappingVersion: NativeMappingVersion = NATIVE_MAPPING_VERSION): Promise<{ mappedParts: number; noteEntities: number; patternRegions: number; automationEvents: number; unresolvedSources: string[] }> {
+  nativeMappingVersion(mappingVersion);
   const document = nativeDocumentSchema.parse(raw);
   assertNativeDeviceMapping(document);
   const unresolvedSources: string[] = [];
@@ -225,8 +233,12 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
           }
         }
         if (part.notes.length) {
+          // A song-length supplemental clip otherwise obscures phrase regions.
+          // Share the player, not a second instrument/channel or audio route.
+          const notesTrack = part.placements.length && mappingVersion === "nexus-native-v9"
+            ? t.create("noteTrack", { player: instrument.location, orderAmongTracks: index + 0.5 }) : track;
           const collection = t.create("noteCollection", {});
-          t.create("noteRegion", { track: track.location, collection: collection.location, region: { displayName: `${part.name} free notes`, positionTicks: 0, durationTicks: duration, loopDurationTicks: duration } });
+          t.create("noteRegion", { track: notesTrack.location, collection: collection.location, region: { displayName: `${part.name} ${notesTrack === track ? "free notes" : "additional notes"}`, positionTicks: 0, durationTicks: duration, loopDurationTicks: duration } });
           for (const value of part.notes) { t.create("note", { collection: collection.location, positionTicks: toNexusTicks(value.startTick), durationTicks: toNexusTicks(value.durationTicks), pitch: value.pitch, velocity: value.velocity }); noteEntities += 1; }
         }
       }
@@ -307,11 +319,11 @@ export async function applyNativeSnapshot(doc: WritableDocument, raw: NativeDocu
   return { mappedParts, noteEntities, patternRegions, automationEvents, unresolvedSources };
 }
 
-export async function validateNativeOffline(document: NativeDocument, sourceSamples: NativeSampleResources = {}, presets: Record<string, NativePreset> = {}, librarySamples: Record<string, LibrarySample> = {}) {
+export async function validateNativeOffline(document: NativeDocument, sourceSamples: NativeSampleResources = {}, presets: Record<string, NativePreset> = {}, librarySamples: Record<string, LibrarySample> = {}, mappingVersion: NativeMappingVersion = NATIVE_MAPPING_VERSION) {
   const offline = await createOfflineDocument({ validated: true });
-  const mapped = await applyNativeSnapshot(offline, document, sourceSamples, presets, librarySamples);
+  const mapped = await applyNativeSnapshot(offline, document, sourceSamples, presets, librarySamples, mappingVersion);
   return {
-    mappingVersion: NATIVE_MAPPING_VERSION, nexusTicksPerBeat: Ticks.Beat,
+    mappingVersion, nexusTicksPerBeat: Ticks.Beat,
     ...mapped,
     readback: {
       synths: offline.queryEntities.ofTypes("heisenberg", "pulverisateur", "gakki").get().length,

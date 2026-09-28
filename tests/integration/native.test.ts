@@ -1046,7 +1046,7 @@ describe("audio-independent native job lifecycle", () => {
       const synchronized = await nativeSnapshot(ownerId, scratchId);
       expect(uploads).toBe(2);
       expect(opens).toBe(2);
-      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v8", revisionId: nativeRevisionId });
+      expect(synchronized.synchronization).toMatchObject({ state: "verified", mappingVersion: "nexus-native-v9", revisionId: nativeRevisionId });
       expect(synchronized.synchronization.verifiedAt).toBeTruthy();
       expect((await readyOwnedSampleResources(ownerId, scratchId, [firstId, secondId]))[firstId]?.sampleName).toBe("samples/offline-source-1");
       expect((await jobSnapshot(ownerId, syncJob.id)).state).toBe("succeeded");
@@ -1198,7 +1198,7 @@ describe("audio-independent native job lifecycle", () => {
     expect((await nativeSnapshot(ownerId, scratchId)).synchronization.state).toBe("conflict");
     await reconcileNativeSyncReadback(details);
     await reconcileNativeSyncReadback(details);
-    expect((await nativeSnapshot(ownerId, scratchId)).synchronization).toMatchObject({ state: "verified", revisionId: current.id, mappingVersion: "nexus-native-v8" });
+    expect((await nativeSnapshot(ownerId, scratchId)).synchronization).toMatchObject({ state: "verified", revisionId: current.id, mappingVersion: "nexus-native-v9" });
     expect((await jobSnapshot(ownerId, job.id)).state).toBe("succeeded");
     expect((await getPool().query("SELECT count(*)::int AS count FROM job_event WHERE job_id=$1 AND event_type='succeeded'", [job.id])).rows[0].count).toBe(1);
     expect((await getPool().query("SELECT count(*)::int AS count FROM project_activity WHERE job_id=$1 AND origin=$2", [job.id, `native-sync:${job.id}:verified`])).rows[0].count).toBe(1);

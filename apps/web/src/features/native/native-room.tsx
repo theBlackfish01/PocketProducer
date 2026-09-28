@@ -119,7 +119,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const visibleParts = filteredParts.slice(0, partLimit)
   // Existing v7 copies remain verified for their immutable score. A new copy
   // uses v8, but changing the local mapper does not revoke a prior readback.
-  const currentRemoteVerification = snapshot?.synchronization.state === "verified" && snapshot.synchronization.revisionId === current?.id && ["nexus-native-v7", "nexus-native-v8"].includes(snapshot.synchronization.mappingVersion ?? "")
+  const currentRemoteVerification = snapshot?.synchronization.state === "verified" && snapshot.synchronization.revisionId === current?.id && ["nexus-native-v7", "nexus-native-v8", "nexus-native-v9"].includes(snapshot.synchronization.mappingVersion ?? "")
   const receiptKey = `pocket-producer:native-receipt:${projectId}`
 
   useEffect(() => {

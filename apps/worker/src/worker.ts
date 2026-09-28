@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
-import { handoffNativeToLuna } from "@pocket/core";
+import { handoffNativeToLuna, nativeMappingVersion } from "@pocket/core";
 import {
   appendAttemptEvent, canonicalHash, claimNextJob, closePool, commitCancelled, createAudiotoolServerClient, dispatchOutbox, expireJob, failJob, getConfig, heartbeat, isCancelled, jobNativeRunLimits, needsAttentionJob, providerAvailability, readProjectActivity, requeueJob, profileOwnedSourceWav, safeStoragePath, AudiotoolSessionExpiredError, JobControlError, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeHasMaterial, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type JobRecord, type NativeLibrary, type NativeLibraryClient, type NativeRemoteClient, type NativeSource
 } from "@pocket/core";
@@ -209,18 +209,17 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
   }
   const sourceSamples = await readyOwnedSampleResources(job.ownerId, job.projectId, sourceIds);
   if (Object.keys(sourceSamples).length !== sourceIds.length) throw new Error("Not all selected owned sources have a ready Audiotool sample identity");
-  const local = await validateNativeOffline(revision.document, sourceSamples, presets, librarySamples);
-  if (local.unresolvedSources.length) throw new Error("Native source mapping remained incomplete after ready uploads");
-  const expectedHash = canonicalHash(local.structuralReadback);
   if (saved.state === "verified") {
     if (!saved.remoteProjectName || !saved.remoteUrl) throw new Error("Verified native checkpoint lacks remote identity");
+    if (!saved.observedHash) throw new Error("Verified native checkpoint lacks its original readback hash");
     const fresh = await client.open(saved.remoteProjectName);
     await fresh.start();
     let observed: string;
     let url: string;
     try { observed = canonicalHash(nativeStructuralReadback(fresh)); url = fresh.dawUrl; }
     finally { await fresh.stop(); await connection.awaitTokenPersistence(); }
-    if (observed !== expectedHash) {
+    // Compare to the verified export, not a newly deployed mapper's layout.
+    if (observed !== saved.observedHash) {
       await advanceNativeSync(job, "verified", "conflict", { remoteUrl: url, observedHash: observed, errorMessage: "Fresh Studio readback differs from the saved native version; no overwrite was attempted." });
       await needsAttentionJob(job, "NATIVE_REMOTE_CONFLICT", "Fresh Studio readback differs from the saved native version; no overwrite was attempted.");
       return;
@@ -228,6 +227,10 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
     await finishNativeSync(job, saved.remoteProjectName, url, observed, "verified");
     return;
   }
+  const mappingVersion = nativeMappingVersion(saved.mappingVersion);
+  const local = await validateNativeOffline(revision.document, sourceSamples, presets, librarySamples, mappingVersion);
+  if (local.unresolvedSources.length) throw new Error("Native source mapping remained incomplete after ready uploads");
+  const expectedHash = canonicalHash(local.structuralReadback);
   await stage(job, "synchronizing", "Writing notes, patterns, effects and routing to the isolated project");
   const remote = await client.open(remoteName);
   await remote.start();
@@ -251,7 +254,7 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
         return;
       }
       await advanceNativeSync(job, "created", "apply_in_flight", { remoteUrl });
-      try { await applyNativeSnapshot(remote, revision.document, sourceSamples, presets, librarySamples); }
+      try { await applyNativeSnapshot(remote, revision.document, sourceSamples, presets, librarySamples, mappingVersion); }
       catch {
         await advanceNativeSync(job, "apply_in_flight", "uncertain", { remoteUrl, errorMessage: "Native document mutation may have committed; inspect before retrying." });
         await needsAttentionJob(job, "NATIVE_APPLY_OUTCOME_UNKNOWN", "Native document mutation may have committed; automatic retry is fenced.");

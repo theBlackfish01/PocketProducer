@@ -1,5 +1,13 @@
 # Nexus / Audiotool integration contract
 
+## September 28 note-lane layout repair
+
+New exports use mapper `nexus-native-v9`: a part's supplementary individual notes use a separate timeline lane when phrase placements also exist, targeting the same player with no duplicate instrument or mixer channel. The existing note data and phrase loops remain exact. This avoids the full-song supplementary clip obscuring the regular pattern clips. No automatic rewriting of existing Audiotool projects occurs.
+
+`native_revision_sync.mapping_version` is now captured before the first remote effect. Null historical checkpoints use v8 layout on recovery. Verified copies keep their saved mapper and compare fresh readback to their original verified hash, not a regenerated v9 layout. Unrecognized unfinished mapper versions fail closed. Structural readback format itself is unchanged. Production-worker contract tests use offline SDK documents, not live Studio playback.
+
+## Earlier integration evidence (historical)
+
 Pinned SDK: `@audiotool/nexus@0.0.17`. Current mapper `nexus-native-v7` covers grouped channels, shared sends, presets, library/owned-source intervals, expressive parameters, effect automation, and parallel processing. The explicit native-sync command has per-version create/apply/readback and per-source upload checkpoints. On September 27 the source-free *Midnight Escalator* score was created in a live Audiotool project and verified by a fresh SDK readback after correcting an enumeration-order false conflict; this is one supported structural case, not a general editability or listening verdict. The connected sample/preset and owned-WAV paths still rely on offline/contract-double evidence. A distinct earlier legacy path creates an editable-stem project from rendered audio; its contract follows below. A historical native-render probe accepted two `RenderAudio` requests but could not retrieve results; [evidence](../spikes/nexus-audio/RESULTS-2026-09-23.md). Do not rerun it for native-construction work.
 
 ## Native synchronization contract
