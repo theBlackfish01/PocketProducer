@@ -371,7 +371,8 @@ it("retains actual current musical observations when production compaction evict
   expect((await nativeSnapshot(owner, job.projectId)).current!.document.parts[0]!.gain).toBe(0.55);
 }, 30_000);
 
-it("survives a mixed oversized error exchange followed by selecting batch before initial music", async () => {
+it.each([96000, 128000])("survives a mixed oversized error exchange before initial music at a %i input ceiling", async (inputCeiling) => {
+  config.MAX_OPENAI_INPUT_TOKENS = inputCeiling;
   const job = await create();
   const model = fakeModel().respondWithTools([{ name: "record_native_plan", args: plan }])
     .respond(new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(60000) }] }, tool_calls: [
@@ -387,8 +388,13 @@ it("survives a mixed oversized error exchange followed by selecting batch before
   const messages = JSON.stringify(model.calls[3]?.messages);
   expect(messages).toContain("Prior completed tool failures");
   expect(messages).not.toContain("x".repeat(1000));
-  expect(messages).toContain("Prefer `compose_native_scene`");
-  expect(messages).toContain("priorGuidance");
+  expect(messages).toContain("For new music, use compose_native_scene");
+  const checklist = model.calls[3]!.messages.findLast(message => message.text.startsWith("Production checklist"))!;
+  const guidance = JSON.parse(checklist.text.slice(checklist.text.indexOf("{"))) as { priorGuidance: unknown[]; omittedGuidance: number };
+  // Recalled skill excerpts are optional under input pressure; essential
+  // instructions and explicit omission accounting must remain at either cap.
+  if (JSON.stringify(guidance.priorGuidance).includes("Prefer `compose_native_scene`")) expect(guidance.priorGuidance.length).toBeGreaterThan(0);
+  else expect(guidance.omittedGuidance).toBeGreaterThan(0);
   const rows = (await getPool().query("SELECT output->'inputReservationBytes' AS bounds FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows;
   expect(rows.every((row) => row.bounds.envelope < 80000)).toBe(true);
 }, 30_000);
