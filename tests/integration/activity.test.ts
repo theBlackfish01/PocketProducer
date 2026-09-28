@@ -47,8 +47,10 @@ it("recovers the same feed after a real killed process and two contending worker
   const children: ChildProcess[] = [];
   const start = (mode: string) => {
     const child = spawn(process.execPath, ["--import", "tsx", "scripts/test-native-process.ts", accepted.id, mode], {
-      cwd: process.cwd(), stdio: ["ignore", "ignore", "pipe", "ipc"],
-      env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL, APP_ENV: "test", FIXTURE_MODE: "true", DEV_LOCAL_AUTH: "true", OPENAI_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "", LANGSMITH_TRACING: "false", LANGSMITH_API_KEY: "", JOB_LEASE_SECONDS: "3" },
+      cwd: process.cwd(), windowsHide: true, stdio: ["ignore", "ignore", "pipe", "ipc"],
+      // Only the deliberately killed checkpoint needs a short lease. Finishing
+      // performs synchronous SDK validation, just like the production worker.
+      env: { ...process.env, DATABASE_URL: process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL, APP_ENV: "test", FIXTURE_MODE: "true", DEV_LOCAL_AUTH: "true", OPENAI_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "", LANGSMITH_TRACING: "false", LANGSMITH_API_KEY: "", JOB_LEASE_SECONDS: mode === "checkpoint" ? "3" : "45" },
     });
     children.push(child); return child;
   };
