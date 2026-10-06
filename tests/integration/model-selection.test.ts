@@ -38,6 +38,15 @@ it("captures model choice, rejects changed-model replays, and ignores subsequent
   config.OPENAI_MODEL = "gpt-6-astra";
   expect((await getPool().query("SELECT request FROM job WHERE id=$1", [selected.id])).rows[0].request._nativeRun.model).toBe("gemini-3.7-flash");
 });
+it("captures the public Luna default without rewriting omitted-model receipts", async () => {
+  const ownerId = owners[0]!, project = await createProject(ownerId, "Public default");
+  const input = { ownerId, projectId: project.id, kind: "native-generation" as const, idempotencyKey: randomUUID(), request: { direction: "A small melodic sketch" }, expectedHeadId: null, defaultModel: "gpt-6-luna" };
+  const result = await createNativeJob(input);
+  const saved = (await getPool().query("SELECT request FROM job WHERE id=$1", [result.id])).rows[0].request;
+  expect(saved.model).toBeUndefined();
+  expect(saved._nativeRun).toMatchObject({ model: "gpt-6-luna", reasoningEffort: "xhigh" });
+  expect(await createNativeJob({ ...input, defaultModel: "gpt-6-sol" })).toEqual({ ...result, duplicate: true });
+});
 it.each(["gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"])("constructs through the real worker with the %s wire adapter (scripted transport)", async (model) => {
   Object.assign(config, { GEMINI_API_KEY: "test-only", AI_GATEWAY_API_KEY: "test-only", INITIAL_BUILD_API_BUDGET_USD: 100, MAX_JOB_COST_USD: 100, DEFAULT_USER_BUDGET_USD: 100, GEMINI_POOL_BUDGET_USD: 100, GATEWAY_POOL_BUDGET_USD: 100 });
   const selected = await job(owners[1]!, model);

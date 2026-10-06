@@ -1,12 +1,16 @@
 # Producer choice and shared usage
 
-September 27, 2026. Existing Deep Agents/LangGraph construction, canonical score, protected revisions and explicit Audiotool copy remain unchanged.
+Updated October 6, 2026. Existing Deep Agents/LangGraph construction, canonical score, protected revisions and explicit Audiotool copy remain unchanged.
 
 ## Choosing a producer
 
-The prompt footer has a labelled model chooser on desktop and phone. It applies to a new construction or revision, not an arbitrary change to a paused/running job. Selection persists with the project-local direction draft. The API allowlists IDs and captures the model, billing provider and price with the job. Retries/continuations retain that snapshot except for the explicit, recorded Sol-to-Luna shared-demo policy below. Missing credentials reject live work instead of generating a fixture silently. Fixture mode is explicit.
+New public constructions and revisions use **GPT-6 Luna** only. There is no one-option dropdown or reasoning-effort label. Luna still captures xhigh internally; this is not a reasoning downgrade. Retired model IDs are rejected by the public API, and an omitted model uses Luna without changing the submitted request's idempotency identity. Unsent drafts migrate their model field to Luna while preserving their words, scope and other settings. Missing/failed availability disables new paid actions and offers a read-only retry; saved work remains accessible.
 
-## Shared demo policy — September 27
+Captured historical jobs, prices, ledger entries, adapters and the existing guarded Sol-to-Luna handoff remain readable and unchanged. No paused job is silently switched or resumed. Missing credentials reject live work instead of generating a fixture silently. Fixture mode is explicit. No allowance, key, model reasoning setting or deployment configuration was changed by this update.
+
+## Historical shared demo policy — September 27
+
+The following records the original multi-model rollout and its configuration at that time, not today's balances or selectable models. New public work now uses Luna directly; the accounting and historical-job handoff contracts below still apply. Hosted Audiotool sign-in is implemented; see [deployment](RAILWAY-DEPLOYMENT.md). The current sidebar link is simply **GitHub**, without a visibility explanation.
 
 `SOL_POOL_BUDGET_USD` and `LUNA_POOL_BUDGET_USD` are optional **cumulative installation caps**, not monthly resets, API-key balances or per-job grants. Set both to enable new-request routing. This installation was explicitly configured for Sol $5 and Luna $50. OpenAI's combined cap is $58.774889: the two model caps plus $3.774889 of already committed historical other-model charges. The installation cap is $63.774889, including the existing Gemini $5. That historical offset is not new credit and is not automatically recalculated. Historical effects continue to count; no ledger reset or provider call accompanied the configuration change. Default per-owner lifetime allowance remains $13; existing overrides and captured job limits still apply. Lower job/user/provider/installation limits take precedence. Unknown effects count at the greater of their reservation and observed cost. Helpers and symbolic reviews count against their actual model; Gemini remains separate and is never an automatic fallback.
 

@@ -3,7 +3,7 @@ import { getConfig } from "../config.js";
 
 // Keep historical job models readable; only current choices enter through the public API.
 export const producerModelSchema = z.enum(["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"]);
-export const selectableProducerModelSchema = z.enum(["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash"]);
+export const selectableProducerModelSchema = z.enum(["gpt-6-luna"]);
 export type ModelProvider = "openai" | "gemini" | "gateway";
 export function modelProvider(model: string): ModelProvider {
   if (model.startsWith("gpt-")) return "openai";
@@ -19,7 +19,7 @@ export function modelCredentials(model: string) {
 }
 export function producerModels() {
   return selectableProducerModelSchema.options.map((id) => ({ id,
-    label: id === "gpt-6-sol" ? "GPT-6 Sol" : id === "gpt-6-luna" ? "GPT-6 Luna · xhigh" : "Gemini 3.7 Flash",
+    label: "GPT-6 Luna",
     provider: modelProvider(id), available: getConfig().FIXTURE_MODE || Boolean(modelCredentials(id).apiKey),
   }));
 }

@@ -11,7 +11,7 @@ export function compactNativeReviewEvidence(summary: Summary, minimal = false) {
     timing: { ...summary.timing, previewCoverage: "onsetPreview is a bounded leading selection; finalOnsets is an overlapping tail, not additional notes. Coverage/omission counts accompany each selection. Missing preview events do not imply silence. rhythmWindow describes only its stated interval." },
     evidenceLayout: {
       mode: minimal ? "bounded-tuples" : "lossless-tuples",
-      part: ["id", "newOnsets", "onsetsPerBar", "noteRange", "clips", "onsetPreview", "omittedPreviewOnsets", "finalOnsets", "omittedTailSelection", "rhythmWindow", "motifIds", "automation", "omittedAutomation", "preset"],
+      part: ["id", "newOnsets", "onsetsPerBar", "noteRange", "clips", "onsetPreview", "omittedPreviewOnsets", "finalOnsets", "omittedTailSelection", "rhythmWindow", "motifIds", "automation", "omittedAutomation", "preset", "soundingNotes", "clipIntervals", "omittedClipIntervals"],
       automation: ["target", "first", "last", "exactBoundaryValues", "points", "omittedPoints"],
       point: ["tick", "value", "interpolation", "slope"],
       caveat: "Part role/device/settings are in soundEvidence by id. Automation values are normalized; points use absolute ticks. Null interpolation/slope means canonical default. Boundary values do not establish interior curve shape. Omitted facts are unknown, not absent. Preview/tail/window selections can overlap; never add their counts. All represented sections and parts are retained."
@@ -26,7 +26,7 @@ export function compactNativeReviewEvidence(summary: Summary, minimal = false) {
         window ? { ...window, notes, omittedOnsets: window.totalOnsets - (notes?.length ?? 0) } : null,
         part.motifIds, part.automation.map(curve => [curve.target, curve.first, curve.last, curve.exactBoundaryValues,
           minimal ? [] : curve.points.map(point => [point.tick, point.value, point.interpolation ?? null, point.slope ?? null]),
-          curve.omittedPoints + (minimal ? curve.points.length : 0)]), part.omittedAutomation, part.preset];
+          curve.omittedPoints + (minimal ? curve.points.length : 0)]), part.omittedAutomation, part.preset, part.soundingNotes, part.clipIntervals, part.omittedClipIntervals];
     }) })),
     sharedProcessing: { ...summary.sharedProcessing, groups: summary.sharedProcessing.groups.map(group => ({ ...group,
       automation: group.automation?.map(curve => {

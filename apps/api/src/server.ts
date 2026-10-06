@@ -190,7 +190,7 @@ app.post("/api/v1/projects/:projectId/native/constructions", async (request, rep
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null() }).parse(request.body);
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
-  const job = await createNativeJob({ ownerId: request.ownerId, projectId, kind: "native-generation", idempotencyKey, request: body, expectedHeadId: null });
+  const job = await createNativeJob({ ownerId: request.ownerId, projectId, kind: "native-generation", idempotencyKey, request: body, expectedHeadId: null, defaultModel: "gpt-6-luna" });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
 });
 
@@ -200,7 +200,7 @@ app.post("/api/v1/projects/:projectId/native/revisions", async (request, reply) 
   const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: partId.optional(), targetSectionId: partId.optional(), protectedPartIds: z.array(partId).max(24).optional(), protectionChange: z.object({ expectedPartIds: z.array(partId).max(24), desiredPartIds: z.array(partId).max(24) }).optional(), sourceAssetIds: z.array(idSchema).max(24).default([]) }).parse(request.body);
   if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("Revise the currently selected native version; restore an older one first"), { statusCode: 409 });
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
-  const job = await createNativeJob({ ownerId: request.ownerId, projectId, kind: "native-revision", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId });
+  const job = await createNativeJob({ ownerId: request.ownerId, projectId, kind: "native-revision", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId, defaultModel: "gpt-6-luna" });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
 });
 

@@ -31,8 +31,7 @@ export async function fundedProducerModels(ownerId: string) {
     const blocked = model.available && !unmeteredFixture ? await sharedUsageBlock(getPool(), ownerId, model.provider, Math.ceil(minimumNextNativeReservationUsd(limits) * 1e6), model.id) : null;
     return { ...model, available: model.available && !blocked, reason: !model.available ? "configuration" : blocked?.toLowerCase() ?? null };
   }));
-  const sol = models.find((model) => model.id === "gpt-6-sol")!;
-  const luna = models.find((model) => model.id === "gpt-6-luna")!;
-  return { models, fallbackModel: sol.reason === "model" && luna.available ? luna.id : null,
+  // Historical Sol jobs can still use selectFundedRoute; new public work is Luna-only.
+  return { models, fallbackModel: null,
     repository: { url: "https://github.com/theBlackfish01/PocketProducer", public: getConfig().SOURCE_REPOSITORY_PUBLIC } };
 }
