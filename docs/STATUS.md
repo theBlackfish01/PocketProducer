@@ -1,5 +1,11 @@
 # Live implementation status
 
+## Welcome-page sound-wave contours — 2026-10-06
+
+Added original, lightweight SVG contour linework behind the welcome page, following the user's visual reference. This is a static CSS background only: no additional DOM/interaction layer, JavaScript, animation, dependency or layout change. It is scoped to the welcome page, cropped for phones, and omitted in forced-colour and print modes. The existing hero, feature copy, sidebar and arrangement workspace remain unchanged by this pass. The user requested a separate contour commit; earlier uncommitted work is preserved outside its scope. No push or deployment was requested.
+
+Verification on the combined working tree: **23/23 visual journeys pass** (`playwright test --config tests/visual.playwright.config.ts`), including desktop/phone screenshots, 320px overflow and CTA visibility, high-contrast fallback, absence of new main-content animation, and keyboard session creation with the contours removed on the workspace route. Tests use UI fixtures with tracing/provider access disabled, not live generation or Audiotool. `tsc -b`, targeted visual-test ESLint, Vite production build and `git diff --check` pass; the existing >500 kB bundle warning remains. Desktop and phone screenshots were visually inspected. The initial filename-based background assertion was corrected to allow Vite's inlined SVG before the passing rerun; no runtime workaround was needed.
+
 ## Useful completion rather than repeated finishing — 2026-09-29
 
 Inspected hosted Railway logs and imported the latest failed job's LangSmith spans read-only. The final stop was `NATIVE_INCOMPLETE:REVIEW_EXHAUSTED`: repeated finishing passes were followed by more inspections/edits, leaving no valid current final review and no remaining recovery. This was not another demonstrated credit or response-size failure. Historical payloads remain redacted, so the precise original missing requirements and musical findings are unknown; no listening claim is made.
