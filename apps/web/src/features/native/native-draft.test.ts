@@ -7,5 +7,7 @@ const snapshot: NativeSnapshot = { currentRevisionId: null, headVersion: 0, curr
 it("retains Luna in an unsent draft and replaces the removed DeepSeek choice without losing direction", () => {
   const saved = { headId: null, direction: "Warm keys", model: "gpt-6-luna" }
   expect(reconcileNativeDraft(saved, snapshot, []).draft).toMatchObject(saved)
-  expect(reconcileNativeDraft({ ...saved, model: "deepseek/deepseek-v4-pro-0813" }, snapshot, []).draft).toMatchObject({ direction: "Warm keys", model: "gpt-6-sol" })
+  for (const model of ["gpt-6-sol", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"]) {
+    expect(reconcileNativeDraft({ ...saved, model }, snapshot, []).draft).toMatchObject({ direction: "Warm keys", model: "gpt-6-luna" })
+  }
 })

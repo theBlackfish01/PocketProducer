@@ -6,28 +6,51 @@ const evidence = process.env.E2E_EVIDENCE_DIR ?? ".local/evidence";
 test.beforeAll(async () => { await mkdir(evidence, { recursive: true }); });
 const direction = (page: Page) => page.getByRole("textbox", { name: "Describe your arrangement" });
 
-test("producer selection persists and reaches the real job without changing a running job", async ({ page }) => {
+test("Luna-only creation migrates old drafts and rejects retired models at the API", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto("/");
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
   const chooser = page.getByRole("combobox", { name: "Producer model" });
-  await expect(chooser).toBeEnabled();
-  await expect(chooser.locator("option")).toHaveText(["GPT-6 Sol", "GPT-6 Luna · xhigh", "Gemini 3.7 Flash"]);
+  await expect(chooser).toHaveCount(0);
+  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible();
   const projectId = new URL(page.url()).pathname.split("/")[2]!;
-  const rejected = await page.request.post(`/api/v1/projects/${projectId}/native/constructions`, { headers: { "Idempotency-Key": `removed-model-${Date.now()}` }, data: { direction: "A small warm melody", model: "deepseek/deepseek-v4-pro-0813", expectedNativeHeadId: null } });
-  expect(rejected.status()).toBe(422);
-  await chooser.selectOption("gpt-6-luna");
+  const options = await (await page.request.get("/api/v1/producer-models")).json();
+  expect(options.models).toMatchObject([{ id: "gpt-6-luna", label: "GPT-6 Luna" }]);
+  expect(options.models).toHaveLength(1);
+  for (const model of ["gpt-6-sol", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"]) {
+    const headers = { "Idempotency-Key": `removed-model-${model}-${Date.now()}` };
+    const rejected = await page.request.post(`/api/v1/projects/${projectId}/native/constructions`, { headers, data: { direction: "A small warm melody", model, expectedNativeHeadId: null } });
+    expect(rejected.status()).toBe(422);
+    const revision = await page.request.post(`/api/v1/projects/${projectId}/native/revisions`, { headers, data: { direction: "A small warm melody", model, baseNativeRevisionId: projectId, expectedNativeHeadId: projectId } });
+    expect(revision.status()).toBe(422);
+  }
   await direction(page).fill("A small warm melody over a soft pulse");
+  await page.evaluate((id) => { const key = `pocket-producer:native-draft:${id}`; const saved = JSON.parse(localStorage.getItem(key)!); localStorage.setItem(key, JSON.stringify({ ...saved, model: "gemini-3.7-flash" })); }, projectId);
   await page.reload();
-  await expect(chooser).toHaveValue("gpt-6-luna");
+  await expect(direction(page)).toHaveValue("A small warm melody over a soft pulse");
   await page.screenshot({ path: resolve(evidence, "model-picker-desktop.png"), fullPage: true });
   const sent = page.waitForRequest((r) => r.url().endsWith("/native/constructions") && r.method() === "POST");
   await page.getByRole("button", { name: "Create arrangement" }).click();
   expect((await sent).postDataJSON()).toMatchObject({ model: "gpt-6-luna" });
   await expect(page.locator(".producer-workspace-header")).toContainText("Version 1", { timeout: 90_000 });
+  const saved = await native(page, projectId);
+  const coherence = "Add more things in but keep it coherent";
+  const sections = saved.current.document.sections as Array<{ id: string }>;
+  for (const targetSectionId of [null, sections[0]!.id]) {
+    const preview = await page.request.post(`/api/v1/projects/${projectId}/native/preservation-preview`, { data: { direction: coherence, targetSectionId, expectedNativeHeadId: saved.currentRevisionId } });
+    expect(preview.status()).toBe(200);
+    expect(await preview.json()).toMatchObject({ namedParts: [], theme: null, unresolved: [] });
+  }
+  await producer(page);
+  // The fixture has a deterministic variation operation, not a natural-language
+  // composer. Keep the regression clause while selecting that supported edit.
+  await direction(page).fill(`Add variation from section to section. ${coherence}`);
+  await page.getByRole("button", { name: "Make this change" }).click();
+  await expect(page.locator(".producer-workspace-header")).toContainText("Version 2", { timeout: 90_000 });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(chooser).toBeVisible();
-  await chooser.selectOption("gemini-3.7-flash");
+  await producer(page);
+  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible();
+  await expect(chooser).toHaveCount(0);
   await page.screenshot({ path: resolve(evidence, "model-picker-phone.png"), fullPage: true });
 });
 async function producer(page: Page) { await expect(page.locator(".producer-workspace-header")).toBeVisible(); const tab = page.getByRole("button", { name: "Producer", exact: true }); if (await tab.isVisible()) await tab.click(); }

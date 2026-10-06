@@ -1,5 +1,13 @@
 # Native finishing and recovery — 2026-09-27
 
+## Incremental clarity and efficiency — 2026-10-06
+
+Preservation parsing separates `but`/`then` clauses so “add more things in but keep it coherent” no longer invents a section called `but`. Coherence, recognizability and retaining musical character are qualitative guidance, not an inferred exact-note lock. Explicit unchanged instructions, real named parts/phrases, selected scope and UI protections remain enforced. Real unresolved targets still require clarification; the UI explains how to name the target or remove unintended preservation wording.
+
+Repeated `finish_native_arrangement` calls with identical music and blockers now return targeted edit guidance and no longer count as fresh discovery evidence. They do not spend critic allowance before objective preflight succeeds. Existing stagnation, review, input, deadline and financial limits remain in place; no new quality gate or automatic retry was added. Tool descriptions give exact Beatbox8 boolean steps and motif-root identities up front. Producer guidance recommends explicit sound settings and one focused qualitative refinement rather than repeated optional reviews.
+
+Critic evidence distinguishes intersecting source-clip intervals, new note onsets, notes sustained into a section and automation-only activity. Detailed and compact forms retain bounded clip intervals and explicit omission counts; neither placement nor symbolic analysis proves heard audio. Missing explicit synth patches produce advisory sound evidence, not a hard veto. A stopped request has neutral cancellation copy; absent technical details no longer produce an empty disclosure. Unknown-charge fences are unchanged.
+
 ## Bounded useful completion — 2026-09-29
 
 Read-only hosted logs and LangSmith imports identified a later `REVIEW_EXHAUSTED` stop, not a demonstrated credit or output-token failure. The same logical job ran through repeated normal final responses, then continued into additional inspections and edits after its ordinary review attempts were consumed. Its final score no longer had a valid current review. Historical inputs/outputs were redacted, so the precise original completion checklist and musical findings cannot be reconstructed from those traces. Raw imports remain in ignored local storage.

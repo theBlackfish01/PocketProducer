@@ -17,12 +17,12 @@ Open `http://127.0.0.1:5173`. New session → describe an idea → Create arrang
 
 ## Enable paid production deliberately
 
-1. Add `OPENAI_API_KEY` for Sol/Luna, or `GEMINI_API_KEY` for Gemini Flash, to the server-only root `.env`.
+1. Add `OPENAI_API_KEY` for Luna to the server-only root `.env`.
 2. Set `FIXTURE_MODE=false`.
 3. Set an intentional `INITIAL_BUILD_API_BUDGET_USD` and `MAX_JOB_COST_USD`, plus the relevant provider cap and `DEFAULT_USER_BUDGET_USD`. All limits apply together. A zero cap blocks paid work.
-4. Restart the API and worker. Choose the producer when submitting a new direction or revision.
+4. Restart the API and worker. New directions and revisions use Luna automatically.
 
-Luna captures xhigh producer reasoning. Rewrite/Inspire uses a separate low-effort Luna request; each explicit helper click is accounted for. The small symbolic critic has its own bounded low-effort role. DeepSeek is no longer a new-request choice; its existing jobs and ledger remain readable. See [model selection](model-selection.md) for limits and historical provider observations. Configured keys do not prove model access or remaining provider credit.
+Luna still captures xhigh producer reasoning internally; the interface simply calls it GPT-6 Luna. Rewrite/Inspire uses a separate low-effort Luna request; each explicit helper click is accounted for. The small symbolic critic has its own bounded low-effort role. Sol, Gemini Flash and DeepSeek are no longer new-request choices; their existing jobs and ledger remain readable. The separate optional Gemini source-analysis adapter is unchanged. See [model selection](model-selection.md) for limits and historical provider observations. Configured keys do not prove model access or remaining provider credit.
 
 `pnpm budget:status` reads the local ledger. Usage is cumulative, not reset by a new session. Never clear the ledger or repeat an uncertain external request to make a paused job proceed. Saved drafts can continue only when ownership, version head, effect state and remaining limits permit it.
 
@@ -56,4 +56,4 @@ The separate Gemini source-analysis adapter does not enable native composition l
 
 ## Before sharing an installation
 
-The current loopback session uses one development owner. Per-owner limits are implemented, but independent public user sign-in is not. Do not expose this server publicly. Keep `.env`, the database, local audio, OAuth keys and raw traces private. Repository sharing is separate from deployment; see [security guidance](../SECURITY.md).
+The loopback development session uses one owner and must not be exposed publicly. Hosted deployments use server-verified Audiotool sign-in and separate owners; follow [Railway deployment](RAILWAY-DEPLOYMENT.md). Keep `.env`, the database, local audio, OAuth keys and raw traces private. Repository sharing is separate from deployment; see [security guidance](../SECURITY.md).

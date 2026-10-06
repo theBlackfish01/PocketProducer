@@ -29,6 +29,14 @@ Create/select the correct workspace, then create:
 
 The default start command is the image CMD. Do not override it with `pnpm start` on Railway: the image entrypoint also initializes volume permissions and drops privileges.
 
+### Memory and hosting costs
+
+Railway bills actual consumption, not the configured CPU/RAM ceiling. Check service metrics before lowering limits: a limit below the observed working set can interrupt generation without fixing its memory use. Keep the database, persistent volumes and worker availability intact.
+
+The hosted demo uses `NODE_OPTIONS=--max-old-space-size=1536` (September 30 cost-tuning trial, increased from 1,024 MiB at the user's request for more headroom). This bounds V8 old-space to 1,536 MiB **per Node process** and can encourage earlier garbage collection than the original uncapped configuration; it is not a total container-memory limit. The supervisor, API and worker are separate processes, and buffers/native allocations need additional headroom. Unit, integration, hosted fixture and build checks pass at the stricter 768 MiB bound; long-running real generation still needs post-change observation. No model context/output limits or financial allowances change.
+
+Apply or revert only while generation/copy is idle, since variable updates restart the app. Roll back this trial by removing `NODE_OPTIONS` (or restoring its previous value) and redeploying. Compare memory after representative jobs and an idle period, not just immediately after restart. Do not promise savings from a fresh-process reading alone. Leave serverless sleeping disabled while this deployment uses continuous durable-job polling.
+
 ## 3. Exact service variables
 
 Copy the template in `deploy/railway.env.example` into **service variables**, replacing placeholders. Never commit your real values. No secret gets a `VITE_` prefix. Railway supplies `PORT` automatically.

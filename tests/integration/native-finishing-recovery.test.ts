@@ -90,6 +90,22 @@ it("defers review for missing objective requirements and bounds identical incomp
   expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(0);
 });
 
+it("explains repeated finish blockers and still accepts the targeted correction without extra reviews", async () => {
+  const { job, session } = await prepared("standard", "gpt-6-luna");
+  await session.apply("wrong-length", [{ kind: "setStructure", bars: 8, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 8, intent: "A short statement" }] }]);
+  const producer = fakeModel().respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "correct-length", operations: [{ kind: "setStructure", bars: 4, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 4, intent: "A short statement" }] }] } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  const reviewer = fakeModel().respond(good());
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(JSON.stringify(producer.calls[2]!.messages)).toContain("Calling finish again or changing metadata will not resolve");
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  expect(producer.callCount).toBe(4);
+  expect(reviewer.callCount).toBe(1);
+  expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(1);
+});
+
 it("preserves the last current review against optional edits but allows exact confirmed-step replay", async () => {
   const { job, session } = await prepared();
   await session.apply("confirmed-mix", [{ kind: "setMix", partId: "lead", gain: 0.5 }]);
