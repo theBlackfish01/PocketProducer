@@ -83,9 +83,6 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
     parallel: part.parallel ? { wetMix: part.parallel.wetMix, effects: part.parallel.effects.map((effect) => ({ type: effect.type, parameters: effect.parameters })) } : null
   }));
   const soundWarnings: string[] = [];
-  for (const part of soundEvidence.filter((part) => ["heisenberg", "pulverisateur"].includes(part.device) && !part.presetHash && !Object.keys(part.patchParameters).length)) {
-    soundWarnings.push(`No explicit patch or pinned preset on ${part.id}; its name alone does not establish the intended timbre. Defaults may be intentional; this is a suggestion, not a completion blocker.`);
-  }
   const bareGakki = soundEvidence.filter((part) => part.device === "gakki" && !part.presetHash);
   if (bareGakki.length) soundWarnings.push(`Unresolved Gakki instrument/kit identity on ${bareGakki.map((part) => part.id).join(", ")}; note pitches do not establish a sound.`);
   const skeletons = new Map<string, string[]>();
@@ -105,13 +102,8 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
       const rhythmEnd = Math.min(end, start + 2 * barTicks(document));
       const rhythm = part.role === "percussion" ? onsets.filter(note => note.startTick < rhythmEnd) : [];
       const activeCurves = source.automation.map((curve) => sectionAutomation(curve, start, end)).filter((curve) => curve !== null);
-      const clipIntervals = [...source.sourceRegions.map(clip => ({ ...clip, kind: "owned" })), ...(source.libraryRegions ?? []).map(clip => ({ ...clip, kind: "library" }))]
-        .filter(clip => clip.startTick < end && clip.startTick + clip.durationTicks > start)
-        .map(clip => ({ id: clip.id, kind: clip.kind, startTick: clip.startTick - start, endTick: clip.startTick + clip.durationTicks - start,
-          sourceStartSeconds: clip.sourceStartSeconds, sourceDurationSeconds: clip.sourceDurationSeconds, playbackMode: clip.playbackMode ?? "once", gain: clip.gain }));
       return { id: part.id, role: part.role, device: source.device.type, preset: source.device.preset ? { name: source.device.preset.name, hash: source.device.preset.contentHash ?? null } : null,
         newOnsets: part.newOnsets, onsetsPerBar: part.onsetsPerBar, noteRange: part.noteRange, clips: part.sourceRegions.length + part.libraryRegions.length,
-        soundingNotes: part.soundingNotes, clipIntervals: clipIntervals.slice(0, 8), omittedClipIntervals: Math.max(0, clipIntervals.length - 8),
         // Relative rhythm, pitches and velocities distinguish genuine thematic
         // development from identical density/range in every section.
         onsetPreview: onsets.slice(0, 8).map(noteFact),
@@ -124,14 +116,14 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
     });
     return { id: section.id, name: section.name, firstBar: section.startBar, lastBar: section.endBar,
       intent: section.intent, totalOnsets: partFacts.reduce((sum, part) => sum + part.newOnsets, 0),
-      parts: partFacts.filter((part) => part.soundingNotes || part.clips || part.automation.length).slice(0, 12),
-      additionalActiveParts: Math.max(0, partFacts.filter((part) => part.soundingNotes || part.clips || part.automation.length).length - 12) };
+      parts: partFacts.filter((part) => part.newOnsets || part.clips || part.automation.length).slice(0, 12),
+      additionalActiveParts: Math.max(0, partFacts.filter((part) => part.newOnsets || part.clips || part.automation.length).length - 12) };
   });
-  const emptySections = sections.filter((section) => section.parts.every((part) => part.soundingNotes === 0 && part.clips === 0)).map((section) => section.id);
+  const emptySections = sections.filter((section) => section.parts.every((part) => part.newOnsets === 0 && part.clips === 0)).map((section) => section.id);
   const sameSectionSignatures = sections.length > 1 && new Set(sections.map((section) => canonicalHash(section.parts.map((part) => ({ role: part.role, onsetsPerBar: part.onsetsPerBar, noteRange: part.noteRange, clips: part.clips, onsetPreview: part.onsetPreview.map(([tick, pitch, velocity]) => [Number(tick) / (section.lastBar - section.firstBar), pitch, velocity]), motifIds: part.motifIds }))))).size === 1;
   return { documentHash: canonicalHash(document), title: document.title, tempoBpm: document.tempoBpm, bars: document.bars,
     timing: { meter: document.meter, ticksPerQuarter: document.ppq, ticksPerBar: barTicks(document), sectionBars: "zero-based, lastBar exclusive",
-      noteTuple: "[section-relative startTick, MIDI pitch, velocity, durationTicks]", clipTiming: "clipIntervals are section-relative; negative starts and ends beyond the section indicate crossing clips. Clips need no MIDI onsets. soundingNotes includes notes sustained into this section. Automation alone does not establish note or clip activity. Placement is structural evidence, not proof of heard audio.", previewCoverage: "onsetPreview is only the first eight events; finalOnsets is an overlapping tail, not additional notes. Missing preview events do not imply silence. rhythmWindow describes only its stated interval." },
+      noteTuple: "[section-relative startTick, MIDI pitch, velocity, durationTicks]", previewCoverage: "onsetPreview is only the first eight events; finalOnsets is an overlapping tail, not additional notes. Missing preview events do not imply silence. rhythmWindow describes only its stated interval." },
     soundEvidence, soundWarnings, sections,
     // Sends alone do not describe the shared processing. Keep the actual
     // bounded canonical settings so a reviewer does not mistake an omitted

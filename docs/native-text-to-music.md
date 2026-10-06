@@ -6,7 +6,7 @@ September 28 review follow-up: focused critique now sizes the **complete** reque
 
 September 28: [robust request sizing and focused construction tools](producer-efficiency-implementation.md) supersede the older message-only sizing and always-advertised tool description below. Tick scenes, theme/section compounds, apply-and-inspect and on-demand specialist tools are connected to the same protected durable pipeline. Under-50-turn convergence remains an evaluation target, not a live-verified claim.
 
-Current producer policy (October 6): new public directions/revisions use OpenAI Luna through the same validated Deep Agent workflow. The interface says GPT-6 Luna without a picker; internal xhigh reasoning is unchanged. Older jobs retain their captured model except for the existing explicitly configured, durable Sol-to-Luna shared-demo handoff; original profiles and charges remain intact. Historical adapters are not removed. See [shared usage and provider boundaries](model-selection.md); neither model selection nor symbolic critique enables native listening.
+Current producer selection: new directions/revisions can use OpenAI Sol, OpenAI Luna with xhigh reasoning, or Gemini Flash through the same validated Deep Agent workflow. Jobs retain their captured model except for the explicitly configured, durable Sol-to-Luna shared-demo handoff; original profiles and charges remain intact. Historical Gateway jobs are not rewritten. See [shared usage and provider boundaries](model-selection.md); neither model selection nor symbolic critique enables native listening.
 
 ## Current product boundary — 2026-09-27
 
@@ -21,7 +21,7 @@ The chosen **Standard** or **Extended** profile is captured with each new native
 
 September 29 response recovery: completed model-call receipts retain bounded completion reason, actual response allowance and available output/reasoning usage, never payload text. New output-limit pauses require a genuinely larger effective response allowance before either UI or API continuation. The exact older generic stop can be explicitly continued when the existing captured allowance exceeds its former hidden phase cap; its historical reason remains unknown. Filtering/unknown new incomplete reasons are not assumed repairable by more output. No automatic retry, new spending pool, partial-tool execution or accepted-version bypass is introduced.
 
-These engineering envelopes are **not permission to spend** either proposed amount. New public jobs use GPT-6 Luna as of October 6; existing jobs retain their captured model and price. Normal tests clear keys or use injected models and do not contact providers. A future live creative comparison needs a separate numeric allowance and no unresolved accounting liability. `pnpm budget:status` reads the ledger without spending.
+These engineering envelopes are **not permission to spend** either proposed amount. New jobs default to GPT-6 Sol as of September 27; existing jobs retain their captured Astra or other configured model and price. Normal tests clear keys or use injected models and do not contact providers. A future live creative comparison needs a separate numeric allowance and no unresolved accounting liability. `pnpm budget:status` reads the ledger without spending.
 
 ## Producer and durable truth
 

@@ -121,17 +121,6 @@ describe("bounded native finishing", () => {
     expect(monitor.observeState({ music: "same", missing: ["Final review"] }).guidance).toContain("apply one targeted batch now");
     expect(monitor.observeState({ music: "changed", missing: ["Final review"] }).guidance).toBe("");
   });
-  it("gives actionable repeated-finish feedback without treating it as fresh evidence or bypassing blockers", () => {
-    const monitor = new NativeConvergenceMonitor();
-    expect(monitor.finishFeedback("music-a", ["Keep bass unchanged"])).toMatchObject({ repeated: false });
-    expect(monitor.finishFeedback("music-a", ["Keep bass unchanged"])).toMatchObject({ repeated: true, next: expect.stringContaining("Never remove a genuine user protection") });
-    expect(monitor.finishFeedback("music-b", ["Keep bass unchanged"])).toMatchObject({ repeated: false });
-    monitor.observeState("same");
-    for (let i = 0; i < 5; i++) {
-      monitor.observeTool("finish_native_arrangement", { attempt: i });
-      expect(monitor.observeState("same").stagnantTurns).toBe(i + 1);
-    }
-  });
   it("drops only extra recalled guidance under input pressure, retaining exact current evidence", () => {
     const brief = new HumanMessage("Exact brief and musical facts " + "x".repeat(1000));
     const messages = withNativeFinishingContext([brief], { outstandingRequirements: ["Inspect final sections"] }, [{ tool: "read_native_example", arguments: { id: "old" }, content: "g".repeat(6000), truncated: false }], 400, 3000);

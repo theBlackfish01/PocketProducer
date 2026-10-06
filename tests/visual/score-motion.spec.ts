@@ -52,7 +52,7 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
     let json: unknown
     if (path.endsWith("/auth/session")) json = { mode: "development", user: { ownerId: "fixture", displayName: "Fixture" } }
     else if (path.endsWith("/integrations/audiotool/profile")) json = { profile: { userName: "fixture", displayName: "Fixture musician", avatarUrl: null } }
-    else if (path.endsWith("/producer-models")) json = { models: [{ id: "gpt-6-luna", label: "GPT-6 Luna", provider: "openai", available: true }] }
+    else if (path.endsWith("/producer-models")) json = { models: [{ id: "gpt-6-sol", label: "GPT-6 Sol", provider: "openai", available: true }, { id: "gpt-6-luna", label: "GPT-6 Luna · xhigh", provider: "openai", available: true }, { id: "gemini-3.7-flash", label: "Gemini 3.7 Flash", provider: "gemini", available: true }] }
     else if (path.endsWith("/status")) json = { providers: { openai: false, gemini: false, audiotool: Boolean(options.audiotool) }, uploadFormats: ["audio/wav"], nexus: { sdk: "fixture", liveExportVerified: false, connection: options.audiotool ? "authorized" : "unconfigured", oauth: options.audiotool ? { clientId: "fixture", redirectUrl: "http://127.0.0.1:15174/auth/audiotool/callback", scope: "project:write" } : null, session: { connected: Boolean(options.audiotool), userName: options.audiotool ? "fixture" : null, expiresAt: null } } }
     else if (path.endsWith("/projects")) json = { projects: [{ id: projectId, title: "Night Drive", currentRevisionId: null, version: 1, createdAt: "2026-09-26" }] }
     else if (path.endsWith(`/projects/${projectId}`)) json = { project: { id: projectId, title: "Night Drive", currentRevisionId: null }, assets: options.ownedSound ? [{ id: "owned-fixture", name: "Own sound", audioUrl: "/api/v1/assets/fixture/audio", durationSeconds: 8, sampleRate: 8_000, channels: 2 }] : [], revisions: [], analyses: [], latestJob: null, currentRevision: null }
@@ -316,73 +316,14 @@ test("rewrite is editable, undoable and never overwrites newer typing or submits
   await page.screenshot({ path: `${evidence}/clarity-composer-desktop.png`, fullPage: true })
 })
 
-test("creation availability fails closed and recovers without losing the direction", async ({ page }) => {
-  const room = await mockRoom(page)
-  let availability: "failed" | "missing" | "available" = "failed"
-  await page.route("**/api/v1/producer-models", route => availability === "failed"
-    ? route.fulfill({ status: 503, json: { message: "Offline fixture" } })
-    : route.fulfill({ json: { models: availability === "missing" ? [] : [{ id: "gpt-6-luna", label: "GPT-6 Luna", provider: "openai", available: true }] } }))
-  await page.reload()
-  const input = page.getByRole("textbox", { name: "Describe your arrangement" })
-  await input.fill("More movement, but keep it coherent.")
-  const submit = page.getByRole("button", { name: "Make this change" })
-  await expect(page.getByText("Could not check creation availability. Your words are unchanged.")).toBeVisible()
-  await expect(submit).toBeDisabled()
-  availability = "missing"
-  await page.getByRole("button", { name: "Check again" }).click()
-  await expect(page.getByRole("button", { name: "Check again" })).toBeVisible()
-  await expect(submit).toBeDisabled()
-  availability = "available"
-  await page.getByRole("button", { name: "Check again" }).click()
-  await expect(submit).toBeEnabled()
-  await expect(input).toHaveValue("More movement, but keep it coherent.")
-  await expect(page.getByRole("combobox", { name: "Producer model" })).toHaveCount(0)
-  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible()
-  expect(room.writes()).toBe(0)
-})
-
 test("connected identity is quiet, supports missing avatars and remains keyboard accessible", async ({ page }) => {
   await mockRoom(page, { audiotool: true })
-  await page.route("**/api/v1/auth/session", route => route.fulfill({ json: { mode: "audiotool", user: { ownerId: "fixture", displayName: "Fixture musician" } } }))
-  await page.reload()
   const account = page.getByRole("button", { name: "Audiotool account: Fixture musician" }).first()
   await expect(account).toBeVisible()
-  await expect(account).toContainText("Connected")
-  await expect(account).not.toContainText("Audiotool connected")
-  const rail = page.locator(".session-rail")
-  expect((await rail.textContent())!.match(/Fixture musician/g)).toHaveLength(1)
-  const signOut = rail.getByRole("button", { name: "Sign out", exact: true })
-  const accountBox = (await account.boundingBox())!, signOutBox = (await signOut.boundingBox())!
-  expect(signOutBox.y - accountBox.y - accountBox.height).toBeGreaterThanOrEqual(8)
-  await page.screenshot({ path: `${evidence}/incremental-account-desktop.png`, fullPage: true })
   await account.focus(); await page.keyboard.press("Enter")
   await expect(page.getByRole("menuitem", { name: "Disconnect Audiotool" })).toBeVisible()
   await page.keyboard.press("Escape"); await expect(account).toBeFocused()
   await expect(page.getByText("Your private music workspace")).toHaveCount(0)
-})
-
-test("sample actions align despite long titles and wrap without phone overflow", async ({ page }) => {
-  await mockRoom(page, { audiotool: true })
-  await page.route("**/library/samples?**", route => route.fulfill({ json: { samples: ["Glass", "A much longer glass title with a different owner and detail", "Glass two"].map((name, i) => ({ name: `samples/fixture-${i}`, displayName: name, ownerName: `Fixture artist ${i}`, durationSeconds: i + 0.4, bpm: 120, sampleKind: "one-shot", tags: [] })), nextPageToken: "", provenance: "Fixture" } }))
-  await page.getByRole("button", { name: "Sounds", exact: true }).click()
-  const sheet = page.getByRole("dialog", { name: "Sounds" })
-  await sheet.getByLabel("Sound or mood").fill("glass")
-  await sheet.getByRole("button", { name: "Search library" }).click()
-  const actions = sheet.locator(".native-library-actions")
-  await expect(actions).toHaveCount(3)
-  const x = await actions.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x))
-  expect(Math.max(...x) - Math.min(...x)).toBeLessThan(1)
-  const results = sheet.locator(".native-library-results").filter({ has: page.getByRole("button", { name: "Inspect slices" }) })
-  await results.scrollIntoViewIfNeeded()
-  await page.screenshot({ path: `${evidence}/incremental-library-desktop.png` })
-  await page.setViewportSize({ width: 390, height: 844 })
-  await results.scrollIntoViewIfNeeded()
-  await expect(actions.first().getByRole("button", { name: "Inspect slices" })).toBeVisible()
-  const firstRow = results.locator("li").first()
-  const metadata = (await firstRow.locator(":scope > div").first().boundingBox())!, buttons = (await actions.first().boundingBox())!
-  expect(buttons.y).toBeGreaterThanOrEqual(metadata.y + metadata.height)
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
-  await page.screenshot({ path: `${evidence}/incremental-library-phone.png` })
 })
 test("sound ideas and an original sample audition lead to a saved listening note", async ({ page }) => {
   const room = await mockRoom(page, { audiotool: true, ownedSound: true })
@@ -481,8 +422,6 @@ test("leaving a safe draft requires confirmation and unlocks a fresh direction",
   await expect(page.getByRole("button", { name: "Make this change", exact: true })).toBeEnabled({ timeout: 20_000 })
   await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toHaveValue("A different idea")
   await expect(page.locator(".producer-workspace-header")).toContainText("Version 2")
-  await expect(page.getByText("This request was stopped. Your saved versions are unchanged.")).toBeVisible()
-  await expect(page.locator(".job-status").getByText("Details", { exact: true })).toHaveCount(0)
   expect(room.writes()).toBe(1)
 })
 

@@ -15,13 +15,9 @@ it("bounds replayed Responses output and tool arguments even without assistant p
   for (const message of [opaque, call]) expect(() => boundOpenAiRequest([[message]], 100, 3000)).toThrow(/OPENAI_INPUT_LIMIT_EXCEEDED/);
 });
 
-it("offers only Luna without reasoning jargon while retaining captured historical jobs", () => {
-  expect(producerModels().map(({ id, label }) => ({ id, label }))).toEqual([{ id: "gpt-6-luna", label: "GPT-6 Luna" }]);
-  for (const model of ["gpt-6-sol", "gemini-3.7-flash", "deepseek/deepseek-v4-pro-0813"]) {
-    expect(selectableProducerModelSchema.safeParse(model).success).toBe(false);
-    const historical = nativeRunLimits("extended", model);
-    expect(jobNativeRunLimits({ _nativeRun: historical })).toEqual(historical);
-  }
+it("offers Luna xhigh instead of DeepSeek while retaining captured historical jobs", () => {
+  expect(producerModels().map((model) => model.id)).toEqual(["gpt-6-sol", "gpt-6-luna", "gemini-3.7-flash"]);
+  expect(selectableProducerModelSchema.safeParse("deepseek/deepseek-v4-pro-0813").success).toBe(false);
   const luna = nativeRunLimits("standard", "gpt-6-luna");
   expect(luna).toMatchObject({ provider: "openai", model: "gpt-6-luna", reasoningEffort: "xhigh", pricing: { inputUsdPerMillion: 0.1, outputUsdPerMillion: 0.5 } });
   config.NATIVE_REASONING_EFFORT = "low";

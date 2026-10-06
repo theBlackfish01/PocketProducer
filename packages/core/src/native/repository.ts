@@ -41,10 +41,8 @@ async function head(client: pg.PoolClient, ownerId: string, projectId: string, l
   return result.rows[0]?.revision_id ?? null;
 }
 
-export async function createNativeJob(input: { ownerId: string; projectId: string; kind: "native-generation" | "native-revision" | "native-sync"; idempotencyKey: string; request: Record<string, unknown>; expectedHeadId: string | null; defaultModel?: string }): Promise<{ id: string; duplicate: boolean }> {
-  // The public route supplies its current default separately from request data,
-  // so omitted-model idempotency receipts and historical internal callers survive.
-  let requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard"), input.request.model === undefined ? input.defaultModel : producerModelSchema.parse(input.request.model)) };
+export async function createNativeJob(input: { ownerId: string; projectId: string; kind: "native-generation" | "native-revision" | "native-sync"; idempotencyKey: string; request: Record<string, unknown>; expectedHeadId: string | null }): Promise<{ id: string; duplicate: boolean }> {
+  let requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard"), input.request.model === undefined ? undefined : producerModelSchema.parse(input.request.model)) };
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");

@@ -193,8 +193,6 @@ export function nativeFinishingGuidance(turns: number): string {
 }
 
 export class NativeConvergenceMonitor {
-  private blockedFinishState: string | null = null;
-  private blockedFinishAttempts = 0;
   private last: string | null = null;
   private unchanged = 0;
   private readonly evidence = new Set<string>();
@@ -203,15 +201,7 @@ export class NativeConvergenceMonitor {
   private turnsWithoutStateChange = 0;
   observeTool(name: string, result: unknown): void {
     // A bounded discovery window, not unlimited progress from paging reads.
-    if (name !== "finish_native_arrangement") this.evidence.add(canonicalHash([name, result]));
-  }
-  finishFeedback(music: string, missing: string[]) {
-    const state = canonicalHash([music, [...missing].sort()]);
-    this.blockedFinishAttempts = state === this.blockedFinishState ? this.blockedFinishAttempts + 1 : 1;
-    this.blockedFinishState = state;
-    return { repeated: this.blockedFinishAttempts > 1, next: this.blockedFinishAttempts > 1
-      ? "The same music has the same completion blockers. Calling finish again or changing metadata will not resolve them. Use the existing missing list: inspect only the named target if needed, make one valid targeted edit, then finish. Never remove a genuine user protection to satisfy a check. If instructions truly conflict, explain the conflict instead of claiming completion."
-      : "Resolve the listed requirements in one targeted batch before finishing again. This check spent no review call. Qualitative coherence/recognizability is not an exact lock; explicit keep-unchanged instructions and protected parts remain mandatory." };
+    this.evidence.add(canonicalHash([name, result]));
   }
   observeState(state: unknown): { stagnantTurns: number; guidance: string } {
     const stable = canonicalHash(state);

@@ -1,18 +1,5 @@
 # Verification record
 
-## Incremental UX and preservation — October 6
-
-Final completed runs, using installed pinned binaries on Node 22.14.0 with the isolated `_test` database and fixture/injected providers:
-
-- `vitest run --config vitest.config.ts packages/core/src apps/web/src tests/unit tests/native-construction.test.ts --maxWorkers=1`: **234/234**, 40 files, 91.97s.
-- `vitest run --config vitest.config.ts tests/integration --maxWorkers=1`: **159/159**, 13 files, 282.90s.
-- `playwright test --config tests/visual.playwright.config.ts`: **23/23**; subsequent focused account/sample runs also pass after improving screenshot targeting and the account selector.
-- `node --import tsx scripts/prepare-e2e.ts`, then `playwright test --config tests/playwright.config.ts`: **18/18**, 1.9m. Exact coherence wording is checked by the real preservation-preview API at whole-piece and section scope, followed by a fixture-supported variation with that wording. Retired models are rejected for new create/revise requests; old browser drafts retain text and submit Luna.
-- `playwright test --config tests/hosted.playwright.config.ts`: **2/2**, 37.8s, after rebuilding the web app. Covers invitation mode and injected Audiotool sign-in, separate owners, reload and sign-out; not live OAuth consent.
-- `tsc -b`, targeted ESLint across changed runtime/test files, Vite production build in `apps/web`, and `git diff --check`: pass. Existing >500 kB bundle warning remains. Vitest excludes ignored `.local` imported source trees; default dependency exclusions are retained.
-
-Desktop account/composer and desktop/phone sample layouts were visually inspected. No provider credentials, paid generation, live tracing or real Audiotool mutation was used. The initial fixture/default-model and test-data failures are retained in [STATUS](STATUS.md); final passing reruns are not represented as first-pass results. Unknown liabilities, owner/version fences, cancellation, exact protection and historical profile accounting remain covered. Live musical quality and speed require a separately authorized test, not extrapolation from these fixtures.
-
 ## Input-pressure review follow-up — September 28
 
 Both new regressions failed on the original code: complete critic envelope **229,091 > 128,000**, and final optional observation **128,362 > 128,000**. Production `focusedNativeReview` now passes a valid 96-bar, 12-section, 12-part score with 4,608 notes and four automation curves per part through the actual injected reviewer. The tighter 110k case retains a ~30k-character brief and previous findings, while selecting the explicitly bounded layout. Unit coverage checks lossless encoding, sloped/null automation boundaries, shared-curve omissions, preview counts and source immutability. A mandatory-input overflow creates no new effect and never invokes the reviewer; a pending tool exchange is never sacrificed to fit finishing context.

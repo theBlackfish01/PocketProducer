@@ -6,7 +6,6 @@ import { nativePlanSchema } from "./plan.js";
 import { readNativeExample } from "./examples.js";
 import { nativeFormOperations } from "./form.js";
 import { nativeCompletionIssues } from "./producer.js";
-import { compactNativeReviewEvidence } from "./review-evidence.js";
 
 describe("grounded symbolic editor", () => {
   const document = applyNativeOperations(seedNativeDocument("A quiet answer"), [
@@ -74,26 +73,6 @@ describe("grounded symbolic editor", () => {
     expect(dense.rhythmWindow!.notes).toHaveLength(32);
     expect(dense.rhythmWindow!.omittedOnsets).toBe(16);
     expect(summary.timing.previewCoverage).toContain("not additional notes");
-  });
-  it("distinguishes crossing source clips and sustained notes from automation-only activity at every evidence tier", () => {
-    const score = structuredClone(document);
-    score.sections = [{ id: "opening", name: "Opening", startBar: 0, endBar: 1, intent: "" }, { id: "middle", name: "Middle", startBar: 1, endBar: 2, intent: "" }, { id: "end", name: "End", startBar: 2, endBar: 4, intent: "" }];
-    score.parts[0]!.notes[0]!.durationTicks = 6000;
-    score.parts.push({ ...structuredClone(score.parts[0]!), id: "recording", name: "Recording", role: "source", device: { type: "audio", parameters: {} }, notes: [], sourceRegions: [{ id: "slice", assetId: "00000000-0000-4000-8000-000000000001", assetHash: "a".repeat(64), startTick: 3000, durationTicks: 1800, sourceStartSeconds: 1.5, sourceDurationSeconds: 0.375, gain: 0.2, rights: "Owned", playbackMode: "once" }] });
-    score.parts[0]!.automation = [{ id: "gain", target: "gain", points: [{ tick: 0, value: 0.5 }, { tick: 15359, value: 0.5 }] }];
-    const review = symbolicNativeReview(score, null);
-    const middle = review.sections[1]!;
-    expect(middle.parts.find(part => part.id === "starting-voice")).toMatchObject({ newOnsets: 0, soundingNotes: 1 });
-    const clip = middle.parts.find(part => part.id === "recording")!;
-    expect(clip).toMatchObject({ newOnsets: 0, clips: 1, clipIntervals: [{ id: "slice", startTick: -840, endTick: 960, sourceStartSeconds: 1.5 }], omittedClipIntervals: 0 });
-    expect(review.emptySections).toEqual(["end"]);
-    expect(review.sections[2]!.parts.some(part => part.id === "recording")).toBe(false);
-    for (const minimal of [false, true]) {
-      const compact = compactNativeReviewEvidence(review, minimal);
-      const row = compact.sections[1]!.parts.find(part => part[0] === "recording")!;
-      expect(row[compact.evidenceLayout.part.indexOf("clipIntervals")]).toEqual(clip.clipIntervals);
-      expect(compact.timing.clipTiming).toContain("Clips need no MIDI onsets");
-    }
   });
   it("shows unresolved kit identity and repeated default tonal cores to the reviewer", () => {
     const weak = applyNativeOperations(seedNativeDocument("Synth and disco"), [

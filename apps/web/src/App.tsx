@@ -150,7 +150,7 @@ export default function App({ onSignOut, listenerName, hostedAudiotool = false }
 
   const account = <ConnectedAccount connected={Boolean(nexus?.session.connected)} userName={nexus?.session.userName ?? null} onConnect={() => void connectAudiotool()} onDisconnect={() => { void api.disconnectAudiotool().then(() => api.status()).then((status) => setNexus(status.nexus)).catch(() => setError("Unable to disconnect Audiotool.")) }} />
 
-  const hostedAccount = onSignOut ? <div className="hosted-account">{!nexus?.session.connected ? <small>{listenerName}</small> : null}<Button variant="ghost" onClick={onSignOut}>Sign out</Button></div> : null
+  const hostedAccount = onSignOut ? <div className="hosted-account"><span>{listenerName}</span><Button variant="ghost" onClick={onSignOut}>Sign out</Button></div> : null
   const navigation = <>
     <Button className="w-full justify-start rail-new" onClick={() => void createSession()} disabled={busy}><Plus /> New session</Button>
     <div className="rail-heading"><FolderOpen className="size-4" /> Sessions</div>

@@ -76,9 +76,7 @@ it("routes stale Sol submissions to Luna, keeps receipts stable, and rejects exh
   expect(job.request._nativeRun).toMatchObject({ model: "gpt-6-luna", reasoningEffort: "xhigh" });
   expect(await createNativeJob(input)).toEqual({ id: job.id, duplicate: true });
   const options = await fundedProducerModels(job.ownerId);
-  expect(options.fallbackModel).toBeNull();
-  expect(options.models).toHaveLength(1);
-  expect(options.models[0]).toMatchObject({ id: "gpt-6-luna", available: true });
+  expect(options.fallbackModel).toBe("gpt-6-luna");
   expect(JSON.stringify(options)).not.toMatch(/remaining|50|budgetUsd/i);
   config.LUNA_POOL_BUDGET_USD = 0;
   await expect(create()).rejects.toThrow(/shared demo allowance/);
@@ -99,9 +97,7 @@ it("never bypasses user or provider limits to fall back and meters critic calls 
   // Luna can fit it. The model-pool decision must be made before the expensive
   // route's quota estimate, and the cheaper route must still check that cap.
   await getPool().query("INSERT INTO owner_usage_limit(owner_id,limit_microusd) VALUES($1,50000)", [job.ownerId]);
-  const available = await fundedProducerModels(job.ownerId);
-  expect(available.fallbackModel).toBeNull();
-  expect(available.models).toMatchObject([{ id: "gpt-6-luna", available: true }]);
+  expect((await fundedProducerModels(job.ownerId)).fallbackModel).toBe("gpt-6-luna");
   await getPool().query("DELETE FROM owner_usage_limit WHERE owner_id=$1", [job.ownerId]);
   config.OPENAI_POOL_BUDGET_USD = 0;
   expect(await handoffNativeToLuna(job, 10_000)).toBe(false);

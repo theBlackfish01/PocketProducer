@@ -92,9 +92,11 @@ Add credentials only to the ignored root `.env`, set `FIXTURE_MODE=false`, and d
 
 | Producer | Credential | Behavior |
 | --- | --- | --- |
-| GPT-6 Luna | `OPENAI_API_KEY` | Producer through the OpenAI Responses API. |
+| GPT-6 Sol | `OPENAI_API_KEY` | Default producer through the OpenAI Responses API. |
+| GPT-6 Luna · xhigh | `OPENAI_API_KEY` | Same tool workflow, with captured xhigh producer reasoning. |
+| Gemini 3.7 Flash | `GEMINI_API_KEY` | Gemini producer through the existing compatible tool adapter. |
 
-New arrangements and changes use Luna automatically. Rewrite/Inspire uses a separate Luna helper. Symbolic review is not listening. Availability checks include configured credentials and application allowances—not the provider's wallet balance or a guarantee that a generation will finish. Historical model selections and charges remain intact.
+Rewrite/Inspire uses a separate Luna helper. Symbolic review is not listening. Provider availability in the chooser means a credential is configured—not that the account has credit or that a generation has been verified.
 
 Read [model selection and shared usage](docs/model-selection.md) before enabling paid work. A different model or a new session does not reset accumulated usage.
 

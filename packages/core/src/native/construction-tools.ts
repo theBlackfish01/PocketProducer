@@ -31,9 +31,9 @@ export const nativeSceneSchema = z.object({
   title: z.string().min(1).max(120).optional(),
   meter: nativeDocumentSchema.shape.meter.optional(),
   structure: operation("setStructure").omit({ kind: true }).optional(),
-  parts: z.array(nativeDocumentSchema.shape.parts.element).max(12).default([]).describe("Beatbox8 is boolean: pitches 36/38/42/46 only, startTick a multiple of 240, durationTicks 240, velocity 1. Use an inspected/pinned Gakki kit for expressive drum notes. Choose explicit patch settings or an inspected recipe for distinctive synth voices."),
-  motifs: z.array(nativeDocumentSchema.shape.motifs.element).max(24).default([]).describe("Root motif: omit familyId or set it to this motif's own id. A derived motif must reference its actual parent and the parent's family. Do not invent a separate family label for a root."),
-  patterns: z.array(compactPattern).max(24).default([]).describe("Compact motifs: events are [startTick,durationTicks,MIDI pitch,velocity]. Root familyId must equal id or be omitted; derived patterns reference a real parent/family. Beatbox8 example: [0,240,36,1]. Build a few patterns per call, not the whole piece at once."),
+  parts: z.array(nativeDocumentSchema.shape.parts.element).max(12).default([]),
+  motifs: z.array(nativeDocumentSchema.shape.motifs.element).max(24).default([]),
+  patterns: z.array(compactPattern).max(24).default([]).describe("Compact motifs: events are [startTick,durationTicks,MIDI pitch,velocity]. Exact notes, deterministic IDs; prefer to verbose notes. Build a few patterns per call, not the whole piece at once."),
   placements: z.array(z.object({ partId: id, placement: nativeDocumentSchema.shape.parts.element.shape.placements.unwrap().element })).max(48).default([]),
   inspect: inspectionScope.optional()
 });

@@ -9,7 +9,7 @@ test("captures the README Listening Room using isolated fixture data", async ({ 
   await page.goto("/");
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
   await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("Night Drive");
-  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Producer model" }).selectOption("gpt-6-luna");
   await page.getByRole("button", { name: "Create arrangement" }).click();
   await expect(page.locator(".producer-workspace-header")).toContainText("Version 1", { timeout: 90_000 });
   await expect(page.getByRole("heading", { name: "Night Drive", exact: true })).toBeVisible();

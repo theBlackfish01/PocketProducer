@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { interpretNativeBrief, resolveNativePreservation } from "./intent.js";
+import { interpretNativeBrief } from "./intent.js";
 import { applyNativeOperations } from "./model.js";
 import { assertNativeModelCompletion, nativeCompletionIssues, seedNativeDocument } from "./producer.js";
 
@@ -7,42 +7,6 @@ const part = (id: string, role: "melody" | "bass" | "percussion" | "harmony") =>
 const melody = applyNativeOperations(seedNativeDocument("A melody"), [{ kind: "removePart", partId: "starting-voice" }, { kind: "addPart", part: part("lead", "melody") }]);
 
 describe("traceable native brief constraints", () => {
-  it("preserves names containing conjunctions and inherited keep directives", () => {
-    const base = structuredClone(melody);
-    base.parts[0]!.name = "Now and Then";
-    expect(resolveNativePreservation('Keep part "Now and Then" unchanged', base).namedParts.map(value => value.id)).toEqual(["lead"]);
-    expect(resolveNativePreservation("Keep Now and Then unchanged", base).namedParts.map(value => value.id)).toEqual(["lead"]);
-    expect(interpretNativeBrief("Keep bass then melody unchanged").preservedRoles.map(value => value.label)).toEqual(["bass", "lead or melody"]);
-  });
-  it.each([null, "sketch"])("does not turn conversational coherence into preservation, scope %s", (sectionId) => {
-    const direction = "I feel like it seems a little too simple. Maybe there should be a bit more oomph and some variation from section to section. Add more things in but keep it coherent\nConsider the Audiotool sample OFV Glass #1; inspect it before use.";
-    expect(resolveNativePreservation(direction, melody, sectionId)).toEqual({ namedParts: [], theme: null, unresolved: [] });
-    expect(resolveNativePreservation("Bring more layers in then keep it coherent", melody, sectionId).unresolved).toEqual([]);
-  });
-  it("permits recognizable-hook development without weakening exact bass or explicit theme locks", () => {
-    const base = applyNativeOperations(melody, [{ kind: "addPart", part: part("bass", "bass") }]);
-    const changed = applyNativeOperations(base, [{ kind: "replaceNotes", partId: "lead", notes: [{ ...base.parts[0]!.notes[0]!, pitch: 62 }] }]);
-    const direction = "Change the lead notes. Keep its recognizable hook, but give the final bar a descending answer. Keep the bass exactly as it is.";
-    expect(resolveNativePreservation(direction, base)).toMatchObject({ theme: null, unresolved: [], namedParts: [{ id: "bass" }] });
-    expect(nativeCompletionIssues(changed, direction, "revision", [], base)).toEqual([]);
-    expect(nativeCompletionIssues(changed, "Keep the hook unchanged", "revision", [], base)).toContain("Requested preservation of lead was not met");
-    expect(interpretNativeBrief("Keep the melody recognizable").preservedRoles).toEqual([]);
-    const wrongBass = applyNativeOperations(changed, [{ kind: "setMix", partId: "bass", gain: 0.2 }]);
-    expect(nativeCompletionIssues(wrongBass, direction, "revision", [], base)).toContain("Requested preservation of bass was not met");
-    const locked = applyNativeOperations(base, [{ kind: "protect", partIds: ["lead"], motifIds: [] }]);
-    expect(() => applyNativeOperations(locked, [{ kind: "replaceNotes", partId: "lead", notes: changed.parts[0]!.notes }])).toThrow();
-  });
-  it("resolves trailing unchanged and retains genuine unknown-section errors", () => {
-    const base = applyNativeOperations(melody, [{ kind: "setStructure", bars: 4, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "" }] }]);
-    expect(resolveNativePreservation("Keep the lead in the intro unchanged", base)).toMatchObject({ namedParts: [{ id: "lead", sectionId: "intro" }], unresolved: [] });
-    expect(resolveNativePreservation("In the intro, keep the lead unchanged", base)).toMatchObject({ namedParts: [{ id: "lead", sectionId: "intro" }], unresolved: [] });
-    expect(resolveNativePreservation("Keep the lead in the missing section unchanged", base, "intro").unresolved).toEqual(["Preserved section missing is not uniquely identifiable"]);
-  });
-  it("does not mistake explicitly named Identity or Character parts for qualitative guidance", () => {
-    const base = applyNativeOperations(melody, [{ kind: "addPart", part: { ...part("identity", "harmony"), name: "Identity" } }, { kind: "addPart", part: { ...part("character", "bass"), name: "Character" } }]);
-    expect(resolveNativePreservation('Keep part "Identity"; preserve part "Character"', base).namedParts.map(value => value.id)).toEqual(["identity", "character"]);
-    expect(resolveNativePreservation("Keep the lead's character", base).namedParts).toEqual([]);
-  });
   it("does not invent a section called four bars for a normal duration phrase", () => {
     const brief = interpretNativeBrief("A melody and bass in four bars");
     expect(brief.sectionRequirements).toEqual([]);
