@@ -17,6 +17,7 @@ import { sharedUsageBlock, type UsageBlock } from "../providers/limits.js";
 import { allowanceMessage, selectFundedRoute, lunaHandoffLimits } from "../providers/demo-policy.js";
 import { modelCredentials } from "../providers/models.js";
 import { nativeReviewPlanHash, nativeReviewContextHash } from "./plan.js";
+import { interpretNativeBrief, resolveNativePreservation } from "./intent.js";
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
@@ -90,6 +91,12 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     if (current !== input.expectedHeadId) throw Object.assign(new Error("Native head changed; refresh before continuing"), { statusCode: 409 });
     if (input.kind === "native-generation" && current) throw Object.assign(new Error("This room already has a native construction; revise it instead"), { statusCode: 409 });
     if (input.kind !== "native-generation" && !current) throw Object.assign(new Error("Construct a native project first"), { statusCode: 409 });
+    if (input.kind !== "native-sync" && typeof input.request.direction === "string") {
+      const base = current ? await client.query<{ document: unknown }>("SELECT document FROM native_revision WHERE id=$1 AND owner_id=$2", [current, input.ownerId]) : null;
+      const document = base?.rows[0] ? nativeDocumentSchema.parse(base.rows[0].document) : undefined;
+      const issues = document ? resolveNativePreservation(input.request.direction, document, typeof input.request.targetSectionId === "string" ? input.request.targetSectionId : null).unresolved : interpretNativeBrief(input.request.direction).scopeIssues;
+      if (issues.length) throw Object.assign(new Error(`${issues.join(". ")}. Name a unique section or choose its scope before sending.`), { statusCode: 400 });
+    }
     if (input.kind === "native-sync") {
       const activeSync = await client.query("SELECT 1 FROM job WHERE owner_id=$1 AND project_id=$2 AND kind='native-sync' AND state IN ('queued','running','cancel_requested') AND request->>'baseNativeRevisionId'=$3", [input.ownerId, input.projectId, current]);
       if (activeSync.rowCount) throw Object.assign(new Error("A native synchronization for this version is already active"), { statusCode: 409 });

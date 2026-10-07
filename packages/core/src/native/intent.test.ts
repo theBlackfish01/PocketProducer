@@ -7,6 +7,49 @@ const part = (id: string, role: "melody" | "bass" | "percussion" | "harmony") =>
 const melody = applyNativeOperations(seedNativeDocument("A melody"), [{ kind: "removePart", partId: "starting-voice" }, { kind: "addPart", part: part("lead", "melody") }]);
 
 describe("traceable native brief constraints", () => {
+  it("keeps bar-list musical instructions advisory without inventing section names", () => {
+    const base = structuredClone(melody);
+    base.sections = [{ id: "return", name: "Return", startBar: 0, endBar: base.bars, intent: "Closing phrase" }];
+    for (const scope of ["bars 13 and 15", "bars 13-15", "bars 13–15", "the missing section"]) {
+      const direction = `Add melody in ${scope}`;
+      expect(interpretNativeBrief(direction, base).sectionRequirements).toEqual([]);
+      expect(nativeCompletionIssues(base, direction, "revision", [], base)).toEqual([]);
+      expect(interpretNativeBrief(`No drums in ${scope}`, base)).toMatchObject({ excludedRoles: [], sectionExclusions: [], scopeIssues: [expect.stringContaining("not uniquely identifiable")] });
+      const keep = resolveNativePreservation(`Keep melody in ${scope} unchanged`, base);
+      expect(keep.namedParts).toEqual([]);
+      expect(keep.unresolved).not.toHaveLength(0);
+    }
+  });
+  it("resolves unique exact names and aligned bar spans, never a first substring match", () => {
+    const base = structuredClone(melody);
+    base.bars = 16;
+    base.sections = [{ id: "first", name: "Bars 13", startBar: 0, endBar: 8, intent: "Opening" }, { id: "last", name: "Bars 13 Long", startBar: 8, endBar: 16, intent: "Closing" }];
+    for (const scope of ['"Bars 13"', "BARS 13", "bars 1–8"]) {
+      expect(resolveNativePreservation(`Keep melody in ${scope} unchanged`, base)).toMatchObject({ namedParts: [{ id: "lead", sectionId: "first" }], unresolved: [] });
+    }
+    expect(resolveNativePreservation('Keep melody in "Bars 13 Long" unchanged', base).namedParts[0]?.sectionId).toBe("last");
+    expect(resolveNativePreservation("Keep melody in bars 13 and 15 unchanged", base).namedParts).toEqual([]);
+    base.sections[1]!.name = "Bars 13";
+    expect(resolveNativePreservation('Keep melody in "Bars 13" unchanged', base).unresolved).not.toHaveLength(0);
+  });
+  it("retains real locks when numeric composition guidance is present", () => {
+    const changed = structuredClone(melody);
+    changed.parts[0]!.notes[0]!.pitch++;
+    const direction = "Add harmony in bars 13 and 15; keep melody unchanged";
+    expect(nativeCompletionIssues(changed, direction, "revision", [], melody)).toContain("Requested preservation of lead was not met");
+  });
+  it("accepts actual requested edits for the complete Saffron revision wording", () => {
+    const base = structuredClone(melody);
+    base.bars = 16;
+    base.sections = ["Opening", "Groove", "Lift", "Return"].map((name, i) => ({ id: name.toLowerCase(), name, startBar: i * 4, endBar: (i + 1) * 4, intent: "Musical development" }));
+    base.parts.push(part("bass", "bass"), part("chords", "harmony"), part("drums", "percussion"));
+    const changed = structuredClone(base);
+    for (const id of ["bass", "chords", "lead"]) changed.parts.find(value => value.id === id)!.notes.push({ id: `${id}-ending`, startTick: 12 * 3840, durationTicks: 960, pitch: 69, velocity: 0.5 });
+    changed.parts[0]!.notes.push({ id: "lift", startTick: 8 * 3840, durationTicks: 960, pitch: 72, velocity: 0.5 });
+    changed.parts.find(value => value.id === "chords")!.gain = 0.5;
+    const direction = "The Return section is currently empty. Add a sparse but audible ending in bars 13–16: bass roots on A and a gentle A-minor chord in bars 13 and 15, with a short final melody resolution to A. Also vary two or three melody notes in Lift and brighten its chord tone slightly. Add these things in but keep it coherent. Keep the same four parts and 16-bar structure.";
+    expect(nativeCompletionIssues(changed, direction, "revision", [], base)).toEqual([]);
+  });
   it("preserves names containing conjunctions and inherited keep directives", () => {
     const base = structuredClone(melody);
     base.parts[0]!.name = "Now and Then";

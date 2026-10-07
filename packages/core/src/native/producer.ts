@@ -22,7 +22,7 @@ import { completeProviderEffect, failProviderEffect, markEffectDispatched, reser
 import { analyzePreview, geminiAnalysisEffectKey, prepareLibrarySampleAnalysis, type GeminiGenerateClient } from "../providers/gemini.js";
 import { discoverNativeCapabilities, inspectNativeCapability } from "./catalog.js";
 import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, nativeDiff, nativeDocumentSchema, nativeHasMaterial, nativeMusicHash, nativeOperationSchema, pinnedContext, protectedPartHash, type NativeDocument, type NativeOperation } from "./model.js";
-import { interpretNativeBrief, resolveNativePreservation } from "./intent.js";
+import { interpretNativeBrief, resolveNativePreservation, resolveNativeSection } from "./intent.js";
 import { hasShorterConnectedAmbience } from "./ambience.js";
 import { adoptUnfinishedNativeProducerEffect, advanceNativePlan, loadConfirmedNativeModelCalls, loadNativePlan, loadNativeProducerCompletion, loadNativeSteps, nativeModelEffectsSafeToContinue, recordNativeProducerCompletion, recoverConfirmedNativeProducerResult, saveNativeCreativeState, saveNativePlan, saveNativeReview, saveNativeStep } from "./repository.js";
 import { nativeFormOperations, nativeFormSchema } from "./form.js";
@@ -164,12 +164,12 @@ function containsChordProgression(document: NativeDocument, symbols: string[]): 
 
 export function nativeCompletionIssues(document: NativeDocument, direction: string, mode: "generation" | "revision", selectedSourceIds: string[] = [], base?: NativeDocument, targetSectionId?: string | null): string[] {
   const issues: string[] = [];
-  const brief = interpretNativeBrief(direction);
+  const brief = interpretNativeBrief(direction, mode === "revision" ? base ?? document : document);
+  issues.push(...brief.scopeIssues);
   if (mode === "generation" && brief.totalBars !== null && document.bars !== brief.totalBars) issues.push(`Requested ${brief.totalBars} bars in total, but the draft has ${document.bars}`);
   if (brief.tempoBpm !== null && document.tempoBpm !== brief.tempoBpm) issues.push(`Requested ${brief.tempoBpm} BPM, but the draft is ${document.tempoBpm} BPM`);
   if (brief.meter && (document.meter.numerator !== brief.meter.numerator || document.meter.denominator !== brief.meter.denominator)) issues.push(`Requested ${brief.meter.numerator}/${brief.meter.denominator} meter was not constructed`);
-  const findSection = (name: string) => document.sections.find((item) => [item.id, item.name].some((label) => label.toLowerCase() === name || label.toLowerCase().includes(name)))
-    ?? (/^(?:closing|final|last)(?: section)?$/.test(name) ? document.sections.at(-1) : /^(?:opening|first)(?: section)?$/.test(name) ? document.sections[0] : null);
+  const findSection = (name: string) => resolveNativeSection(name, document);
   for (const rule of brief.sectionSpans) {
     const section = findSection(rule.section);
     if (!section || section.startBar + 1 !== rule.startBar || section.endBar !== rule.endBar) issues.push(`Requested ${rule.section} at bars ${rule.startBar}–${rule.endBar} was not constructed`);
@@ -568,7 +568,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
         return { ...receipt, committed: true, inspection: null, inspectionError: error instanceof Error ? error.message : "Inspection unavailable", recovery: "Music is committed. Inspect the returned current document; do not reapply with a new step key." };
       }
     };
-    const brief = interpretNativeBrief(input.direction);
+    const brief = interpretNativeBrief(input.direction, input.mode === "revision" ? input.session.initialDocument : undefined);
     const soundFeedback = await listNativeSoundFeedback(input.session.job.ownerId, input.session.job.projectId);
     const failedToolCalls = new Map<string, number>();
     const convergence = new NativeConvergenceMonitor();

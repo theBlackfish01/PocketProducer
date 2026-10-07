@@ -12,6 +12,7 @@ type RoleRule = { label: string; matches: Role[] };
 export interface NativeRequirement extends RoleRule {
   kind: "required" | "absent" | "preserve" | "change" | "ambiguous";
   section: string | null;
+  unresolvedScope?: string;
   changeMeasure?: "reduce-density";
   evidence: { start: number; end: number; text: string };
 }
@@ -33,6 +34,7 @@ export interface NativeBriefIntent {
   changeRequirements: NativeRequirement[];
   constructionRequirements: Array<"shared-parallel-drums" | "sidechain" | "automation">;
   advisory: string[];
+  scopeIssues: string[];
 }
 
 export interface ResolvedNativePreservation {
@@ -85,10 +87,9 @@ export function resolveNativePreservation(direction: string, document: NativeDoc
       const hasTarget = hasTheme || roles.some((role) => new RegExp(role.pattern.source, "i").test(phrase))
         || [...document.parts, ...document.motifs].some((item) => [item.id, item.name].some((name) => new RegExp(`(?<![\\w-])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w-])`, "i").test(phrase)));
       if (!hasTarget) continue;
-      const sectionName = scope(phrase) ?? scope(chunk.text.slice(0, cue.index));
-      const sections = sectionName ? document.sections.filter((value) => [value.name.toLowerCase(), value.id.toLowerCase()].includes(sectionName)) : [];
-      if (sectionName && sections.length !== 1) { unresolved.push(`Preserved section ${sectionName} is not uniquely identifiable`); continue; }
-      const selectedId = sections[0]?.id ?? sectionId ?? undefined;
+      const selectedScope = resolveScope(phrase, document, [], true) ?? resolveScope(chunk.text.slice(0, cue.index), document, [], true);
+      if (selectedScope?.unresolved) { unresolved.push(`Preserved section ${selectedScope.unresolved} is not uniquely identifiable`); continue; }
+      const selectedId = selectedScope?.section ?? sectionId ?? undefined;
       if (hasTheme) { themeSectionId = selectedId; themePhrase = phrase; }
       const candidates = [
         ...document.parts.map((value) => ({ kind: "part" as const, value })),
@@ -119,8 +120,9 @@ export function resolveNativePreservation(direction: string, document: NativeDoc
       }
     }
   }
-  const brief = interpretNativeBrief(roleDirection);
-  for (const rule of brief.requirements.filter((value) => value.kind === "preserve")) {
+  const brief = interpretNativeBrief(roleDirection, document);
+  unresolved.push(...brief.scopeIssues);
+  for (const rule of brief.requirements.filter((value) => value.kind === "preserve" && !value.unresolvedScope)) {
     const selected = rule.section ? document.sections.filter((value) => [value.name.toLowerCase(), value.id.toLowerCase()].includes(rule.section!)) : [];
     if (rule.section && selected.length !== 1) { unresolved.push(`Preserved section ${rule.section} is not uniquely identifiable`); continue; }
     const selectedId = selected[0]?.id ?? sectionId ?? undefined;
@@ -145,18 +147,54 @@ export function resolveNativePreservation(direction: string, document: NativeDoc
   }
   if (families.size === 0) {
     const melodyParts = document.parts.filter((part) => ["lead", "melody"].includes(part.role));
-    if (melodyParts.length === 1) return { namedParts: [...namedParts, { id: melodyParts[0]!.id, name: melodyParts[0]!.name, evidence: `${themePhrase} (one melodic part; no linked phrase)` }], theme: null, unresolved: [] };
+    if (melodyParts.length === 1) return { namedParts: [...namedParts, { id: melodyParts[0]!.id, name: melodyParts[0]!.name, evidence: `${themePhrase} (one melodic part; no linked phrase)`, ...(themeSectionId ? { sectionId: themeSectionId } : {}) }], theme: null, unresolved: [] };
   }
   return { namedParts, theme: null, unresolved: [families.size > 1 ? "Several distinct melodic phrase families could be the theme; name the part or phrase to keep" : "No uniquely identifiable melodic theme is present; name the part to keep"] };
 }
 
-const scope = (text: string): string | null => {
-  const found = /\b(?:in|during|throughout|for)\s+(?:the\s+)?([a-z][a-z0-9 -]{0,38}?)(?:\s+section)?(?=\s*(?:[,;.!?]|$|\band\b|\bbut\b|\bthen\b))/i.exec(text.trim());
-  const name = found?.[1]?.trim().toLowerCase().replace(/^(?:for|in)\s+(?:the\s+)?/, "").replace(/\s+(?:exactly\s+)?(?:unchanged|unaltered|identical)$/, "").replace(/\s+section$/, "") ?? null;
-  // "Bring in chords" names material, not a section. A false section here
-  // makes an otherwise valid construction impossible to complete.
-  return name && !/^(?:a|an|the|one|total|overall|chords?|harmony|bass|drums?|percussion|beats?|pads?|lead|melody|motif|theme|notes?|samples?|sounds?)$/.test(name) && !/^(?:(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+bars?)$/.test(name) ? name : null;
-};
+const sectionLabels = "intro|opening|groove|first main|second main|main|breakdown|peak|outro|verse|chorus|bridge|release|ascent|bloom|suspension|ending|middle|body|return";
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// No substring match or first-match wins. This same lookup is used by
+// preservation and completion. Section bar ranges are zero-based internally.
+export function resolveNativeSection(name: string, document: NativeDocument) {
+  const normalized = name.trim().toLowerCase();
+  const exact = document.sections.filter(value => [value.id, value.name].some(label => label.toLowerCase() === normalized));
+  if (exact.length) return exact.length === 1 ? exact[0] : undefined;
+  if (/^(?:opening|first)(?: section)?$/.test(normalized)) return document.sections[0];
+  if (/^(?:closing|final|last)(?: section)?$/.test(normalized)) return document.sections.at(-1);
+  const span = /^bars?\s+(\d+)\s*[-–—]\s*(\d+)$/.exec(normalized);
+  const matches = span ? document.sections.filter(value => value.startBar + 1 === Number(span[1]) && value.endBar === Number(span[2])) : [];
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+type Scope = { section: string | null; unresolved?: string };
+function resolveScope(text: string, document?: NativeDocument, declared: string[] = [], strict = false): Scope | null {
+  const found = /\b(?:in|during|throughout|for)\s+(?:the\s+)?(.+)$/i.exec(text.trim());
+  if (!found) return null;
+  const tail = found[1]!.trim().toLowerCase().replace(/^for\s+(?:the\s+)?/, "").replace(/\s+and\s*$/, "");
+  // Meter/key qualifiers are not a spatial scope inherited by a later "no".
+  if (/^\d+\s*[/⁄]\s*\d+\b|^[a-g][#b]?\s+(?:major|minor|dorian|phrygian|lydian|mixolydian|aeolian|locrian)\b/.test(tail)) return null;
+  // A preposition locates candidate wording, never grants it hard authority.
+  // Match the entire target, including quoted/conjoined names, before parsing
+  // generic musical prose. Unknown ranges/lists must not become global locks.
+  const labels = document ? document.sections.flatMap(value => [value.id, value.name]) : sectionLabels.split("|");
+  const names = [...new Set([...labels, ...declared, "opening", "first", "closing", "final", "last"].map(value => value.toLowerCase()))];
+  const candidates = names.filter(name => new RegExp(`^["“]?${escaped(name)}["”]?(?:\\s+section)?(?:\\s+(?:exactly\\s+)?(?:unchanged|unaltered|identical))?\\s*(?:$|[,:;.!?])`, "i").test(tail));
+  if (candidates.length === 1) {
+    const name = candidates[0]!;
+    const section = document ? resolveNativeSection(name, document)?.id : name;
+    return section ? { section } : declared.includes(name) ? { section: name } : { section: null, unresolved: name };
+  }
+  const target = tail.split(/[,:;.!?]/, 1)[0]!.replace(/\s+(?:exactly\s+)?(?:unchanged|unaltered|identical)$/, "").replace(/\s+section$/, "").trim();
+  const span = /^bars?\s+\d+\s*[-–—]\s*\d+$/.test(target) && document ? resolveNativeSection(target, document) : undefined;
+  if (span) return { section: span.id };
+  if (/^(?:total|overall|the whole piece|whole piece|the arrangement)$/.test(target)) return { section: null };
+  // Material introductions and duration (not positional bar lists) have no scope.
+  if (!strict && (/^(?:a|an|the)?\s*(?:chords?|harmony|bass|drums?|percussion|beats?|pads?|lead|melody|motif|theme|notes?|samples?|sounds?)\b/.test(target)
+    || /^(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+bars?$/.test(target))) return null;
+  return { section: null, unresolved: target || tail };
+}
 const unique = <T extends RoleRule>(rules: T[]): T[] => rules.filter((rule, index) => rules.findIndex((other) => other.label === rule.label && ("section" in other ? other.section : null) === ("section" in rule ? rule.section : null)) === index);
 const directivePattern = /\b(?:do\s+not\s+(?:change|alter|touch|use)|don't\s+(?:change|alter|touch|use)|without\s+(?:changing|altering|touching)|keep|preserve|leave|no|without|omit|exclude|skip|remove|avoid|thin|simplify|reduce|brighten|darken|shorten|change|alter|develop|vary|make|include|add|bring|create|write|use|introduce|maybe|perhaps|optionally|optional|could)\b/gi;
 function directiveKind(cue: string): NativeRequirement["kind"] {
@@ -169,13 +207,13 @@ function directiveKind(cue: string): NativeRequirement["kind"] {
 
 // Hard authority belongs to a role mention's own clause, never to all roles
 // in a sentence. Conflicting global instructions become advisory, not a veto.
-export function interpretNativeBrief(direction: string): NativeBriefIntent {
+export function interpretNativeBrief(direction: string, document?: NativeDocument): NativeBriefIntent {
   const text = direction.toLowerCase();
   const tempoMention = [...text.matchAll(/\b(\d{2,3})\s*bpm\b/g)].at(-1);
   const tempoBpm = tempoMention && Number(tempoMention[1]) >= 40 && Number(tempoMention[1]) <= 220 ? Number(tempoMention[1]) : null;
   const meterMention = [...text.matchAll(/\b(\d{1,2})\s*[/⁄]\s*([48])\b/g)].at(-1);
   const meter = meterMention && Number(meterMention[1]) >= 2 && Number(meterMention[1]) <= 12 ? { numerator: Number(meterMention[1]), denominator: Number(meterMention[2]) as 4 | 8 } : null;
-  const sectionLabel = "intro|opening|groove|first main|second main|main|breakdown|peak|outro|verse|chorus|bridge|release|ascent|bloom|suspension|ending|middle|body|return";
+  const sectionLabel = sectionLabels;
   const sectionSpans = [...text.matchAll(new RegExp(`\\b(${sectionLabel})\\s*(?:section)?\\s*(?:bars?)?\\s*(\\d{1,3})\\s*[-–—]\\s*(\\d{1,3})\\b`, "g"))].map((match) => ({ section: match[1]!, startBar: Number(match[2]), endBar: Number(match[3]) })).filter((value) => value.startBar >= 1 && value.endBar >= value.startBar && value.endBar <= 128);
   const sectionLengths = [
     ...[...text.matchAll(new RegExp(`\\b(\\d{1,3})[- ]bar\\s+(${sectionLabel})\\b`, "g"))].map((match) => ({ section: match[2]!, bars: Number(match[1]) })),
@@ -190,6 +228,7 @@ export function interpretNativeBrief(direction: string): NativeBriefIntent {
   const explicitTotal = durationMentions.filter((mention, index) => /\b(?:in total|overall|altogether|entire piece)\b/.test(text.slice(mention.index + mention[0].length, Math.min(text.length, durationMentions[index + 1]?.index ?? text.length)).slice(0, 45))).at(-1);
   const totalBars = explicitTotal ? Number(explicitTotal[1]) : durationMentions.length === 1 && !/\b(?:intro|opening|verse|chorus|section|bridge|outro|break|ending)\b/.test(text.slice(Math.max(0, durationMentions[0]!.index - 12), durationMentions[0]!.index + durationMentions[0]![0].length + 18)) ? Number(durationMentions[0]![1]) : null;
   const requirements: NativeRequirement[] = [];
+  const declared = [...sectionSpans, ...sectionLengths].map(value => value.section);
   const chunks = [...intentClauses(direction)];
   for (const chunk of chunks) {
     const sentence = chunk.text;
@@ -203,15 +242,18 @@ export function interpretNativeBrief(direction: string): NativeBriefIntent {
       const phraseEnd = nextCue?.start ?? sentence.length;
       const phrase = sentence.slice(phraseStart, phraseEnd);
       const rawKind = cue ? directiveKind(cue.cue) : /\bunchanged\b/i.test(phrase) ? "preserve" : "required";
-      const kind = (rawKind === "preserve" && qualitativePreservation(phrase)) || (["required", "change"].includes(rawKind) && (cueIndex > 0 && directiveKind(directives[cueIndex - 1]!.cue) === "ambiguous" || /\bif useful\b/i.test(phrase))) ? "ambiguous" : rawKind;
-      const section = scope(phrase) ?? (cue ? scope(sentence.slice(0, cue.start)) : null);
+      const strictScope = rawKind === "preserve" || rawKind === "absent";
+      const selectedScope = resolveScope(phrase, document, declared, strictScope) ?? (cue ? resolveScope(sentence.slice(0, cue.start), document, declared, strictScope) : null);
+      const kind = (rawKind === "preserve" && qualitativePreservation(phrase)) || (["required", "change"].includes(rawKind) && (selectedScope?.unresolved || cueIndex > 0 && directiveKind(directives[cueIndex - 1]!.cue) === "ambiguous" || /\bif useful\b/i.test(phrase))) ? "ambiguous" : rawKind;
+      const section = selectedScope?.section ?? null;
       const changeMeasure = kind === "change" && mention.role.label === "drums" && (/^(?:thin|simplify|reduce)$/i.test(cue?.cue ?? "") || /\b(?:sparser|fewer hits|less busy)\b/i.test(phrase)) ? "reduce-density" as const : undefined;
-      requirements.push({ kind, section, label: mention.role.label, matches: mention.role.matches, ...(changeMeasure ? { changeMeasure } : {}), evidence: { start: (chunk.index ?? 0) + phraseStart, end: (chunk.index ?? 0) + phraseEnd, text: phrase.trim().slice(0, 180) } });
+      requirements.push({ kind, section, ...(selectedScope?.unresolved ? { unresolvedScope: selectedScope.unresolved } : {}), label: mention.role.label, matches: mention.role.matches, ...(changeMeasure ? { changeMeasure } : {}), evidence: { start: (chunk.index ?? 0) + phraseStart, end: (chunk.index ?? 0) + phraseEnd, text: phrase.trim() } });
     }
   }
   const deduped = new Map<string, NativeRequirement>();
-  for (const rule of requirements) deduped.set(`${rule.kind}:${rule.section ?? "global"}:${rule.label}`, rule);
-  const boundedRequirements = [...deduped.values()];
+  for (const rule of requirements) deduped.set(`${rule.kind}:${rule.unresolvedScope ?? rule.section ?? "global"}:${rule.label}`, rule);
+  const scopeIssues = [...new Set([...deduped.values()].filter(rule => rule.unresolvedScope && ["preserve", "absent"].includes(rule.kind)).map(rule => `${rule.kind === "preserve" ? "Preserved" : "Excluded"} section ${rule.unresolvedScope} is not uniquely identifiable`))];
+  const boundedRequirements = [...deduped.values()].filter(rule => !rule.unresolvedScope);
   const advisory = durationMentions.length > 1 && !explicitTotal ? ["Several section lengths are mentioned; total duration is not a hard requirement"] : [];
   const constructionRequirements: NativeBriefIntent["constructionRequirements"] = [];
   if (/\b(?:shared|group|drum bus)[^.!?;]{0,60}\bparallel\b|\bparallel[^.!?;]{0,60}\b(?:shared|group|drum bus)\b/i.test(direction)) constructionRequirements.push("shared-parallel-drums");
@@ -221,7 +263,7 @@ export function interpretNativeBrief(direction: string): NativeBriefIntent {
   for (const role of roles) if (global.some((rule) => rule.label === role.label && rule.kind === "absent") && global.some((rule) => rule.label === role.label && ["required", "change"].includes(rule.kind))) advisory.push(`Conflicting global ${role.label} instructions need a stated interpretation`);
   const conflicted = new Set(advisory.filter((item) => item.startsWith("Conflicting global")).map((item) => item.split(" ")[2]));
   return {
-    totalBars, tempoBpm, meter, sectionLengths, sectionSpans, chordProgressions, requirements: boundedRequirements,
+    totalBars, tempoBpm, meter, sectionLengths, sectionSpans, chordProgressions, requirements: [...deduped.values()],
     requiredRoles: unique(boundedRequirements.filter((rule) => !rule.section && ["required", "change"].includes(rule.kind) && !conflicted.has(rule.label)).map(({ label, matches }) => ({ label, matches }))),
     excludedRoles: unique(boundedRequirements.filter((rule) => !rule.section && rule.kind === "absent" && !conflicted.has(rule.label)).map(({ label, matches }) => ({ label, matches }))),
     sectionRequirements: unique(boundedRequirements.filter((rule) => rule.section && ["required", "change"].includes(rule.kind)).map(({ section, label, matches }) => ({ section: section!, label, matches }))),
@@ -231,6 +273,6 @@ export function interpretNativeBrief(direction: string): NativeBriefIntent {
     changeRoles: unique(boundedRequirements.filter((rule) => rule.kind === "change").map(({ label, matches }) => ({ label, matches }))),
     changeRequirements: unique(boundedRequirements.filter((rule) => rule.kind === "change")),
     constructionRequirements,
-    advisory
+    advisory, scopeIssues
   };
 }
