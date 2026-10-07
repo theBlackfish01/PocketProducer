@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { appendPublicActivity, cancelJob, claimJobById, createNativeJob, createProject, dispatchOutbox, getPool, readProjectActivity, saveNativePlan } from "@pocket/core";
 import { processJob } from "@pocket/worker";
+import { appendJobEvent, nativeSnapshot } from "@pocket/core";
 
 let ownerId = "";
 const rooms: string[] = [];
@@ -21,6 +22,23 @@ afterAll(async () => {
 });
 async function room() { const id = (await createProject(ownerId, "Activity isolation")).id; rooms.push(id); return id; }
 function input(projectId: string, key = randomUUID()) { return { ownerId, projectId, kind: "native-generation" as const, idempotencyKey: key, request: { direction: "A warm evolving instrumental", sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null }; }
+
+it("keeps ordinary copy validation neutral and reserves attention for an actual failure", async () => {
+  const projectId = await room();
+  const made = await createNativeJob(input(projectId));
+  await dispatchOutbox();
+  await processJob((await claimJobById(made.id, "copy-message-seed"))!);
+  const revision = (await nativeSnapshot(ownerId, projectId)).current!;
+  const sync = await createNativeJob({ ownerId, projectId, kind: "native-sync", idempotencyKey: randomUUID(), expectedHeadId: revision.id, request: { baseNativeRevisionId: revision.id } });
+  await appendJobEvent(sync.id, "stage", {}, "validating");
+  await appendJobEvent(sync.id, "retrying", {});
+  let events = (await readProjectActivity(ownerId, projectId)).events.filter(value => value.jobId === sync.id);
+  expect(events).toHaveLength(2);
+  expect(events.every(value => !value.payload.text.includes("needs attention"))).toBe(true);
+  await appendJobEvent(sync.id, "needs_attention", { code: "NATIVE_REMOTE_CONFLICT" });
+  events = (await readProjectActivity(ownerId, projectId)).events.filter(value => value.jobId === sync.id);
+  expect(events.at(-1)!.payload.text).toContain("needs attention");
+});
 
 it("accepts one command across contending tabs and replays the same receipt and direction", async () => {
   const projectId = await room(), command = input(projectId);

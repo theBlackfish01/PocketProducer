@@ -128,7 +128,7 @@ it("bounds owner writes durably and preserves duplicate job receipts under hoste
   const project=await createProject(owner,"Queue one"), second=await createProject(owner,"Queue two");
   const input={ownerId:owner,projectId:project.id,kind:"native-generation" as const,idempotencyKey:randomUUID(),request:{direction:"Test"},expectedHeadId:null};
   const created=await createNativeJob(input); expect((await createNativeJob(input)).id).toBe(created.id);
-  await expect(createNativeJob({...input,projectId:second.id,idempotencyKey:randomUUID()})).rejects.toThrow("current request");
+  await expect(createNativeJob({...input,projectId:second.id,idempotencyKey:randomUUID()})).rejects.toThrow("already running in one of your sessions");
   const api=await createApi(transport);
   try {
     const stopped=await api.inject({url:`/api/v1/jobs/${created.id}/cancel`,method:"POST",headers:{origin},cookies:{"pocket-session":session.token}});

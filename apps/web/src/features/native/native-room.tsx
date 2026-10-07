@@ -142,10 +142,20 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
         const raw = localStorage.getItem(receiptKey)
         if (raw) {
           const receipt = JSON.parse(raw) as Receipt
+          const recoverCopy = async (found: Job) => {
+            if (!active || found.project_id !== projectId || found.kind !== "native-sync") return
+            if (terminal.has(found.state)) {
+              const fresh = await api.nativeSnapshot(projectId)
+              if (!active) return
+              if (fresh.currentRevisionId === snapshotRef.current?.currentRevisionId) setSnapshot(fresh)
+              if (found.state === "succeeded") localStorage.removeItem(receiptKey)
+            }
+            if (active) setJob(found)
+          }
           // Construction recovery uses room activity; an old browser receipt must
           // not replace a newer request accepted in another tab.
-          if (receipt.operation === "native-sync" && receipt.jobId) void api.job(receipt.jobId).then(async (value) => { if (active) { setJob(value); if (terminal.has(value.state)) { const fresh = await api.nativeSnapshot(projectId); if (active) setSnapshot(fresh) } } }).catch(() => undefined)
-          else if (receipt.operation === "native-sync") void api.commandReceipt(projectId, receipt.operation, receipt.key).then(async ({ job: found }) => { if (active && found) { setJob(found); localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: found.id })); if (terminal.has(found.state)) { const fresh = await api.nativeSnapshot(projectId); if (active) setSnapshot(fresh) } } }).catch(() => undefined)
+          if (receipt.operation === "native-sync" && receipt.jobId) void api.job(receipt.jobId).then(recoverCopy).catch(() => undefined)
+          else if (receipt.operation === "native-sync") void api.commandReceipt(projectId, receipt.operation, receipt.key).then(async ({ job: found }) => { if (active && found && found.project_id === projectId) { localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: found.id })); await recoverCopy(found) } }).catch(() => undefined)
         }
       } catch { /* A malformed local receipt cannot change server state. */ }
     }).catch((cause: unknown) => { if (active) { setLoading(false); setError(cause instanceof Error ? cause.message : "Unable to load native construction") } })
@@ -224,10 +234,25 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   useEffect(() => {
     if (!job || job.kind !== "native-sync" || terminal.has(job.state)) return
     let active = true
+    let reading = false
     const timer = window.setInterval(() => void api.job(job.id).then(async (next) => {
+      if (!active || reading || next.id !== job.id || next.project_id !== projectId) return
+      reading = true
+      try {
+        // Resolve the canonical read BEFORE publishing a terminal job. Publishing
+        // first cleans up this effect and discards a delayed successful read.
+        if (terminal.has(next.state)) {
+          const headId = snapshotRef.current?.currentRevisionId
+          const fresh = await api.nativeSnapshot(projectId)
+          if (!active) return
+          if (headId === snapshotRef.current?.currentRevisionId && fresh.currentRevisionId === headId) {
+            setSnapshot(fresh); setSnapshotError(null)
+          }
+          if (next.state === "succeeded") localStorage.removeItem(receiptKey)
+        }
+      } finally { reading = false }
       if (!active) return
       setJob(next)
-      if (terminal.has(next.state)) { const fresh = await api.nativeSnapshot(projectId); if (active) setSnapshot(fresh) }
     }).catch(() => undefined), 1_500)
     return () => { active = false; window.clearInterval(timer) }
   }, [job?.id, job?.state, projectId])
@@ -397,10 +422,16 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       const accepted = await api.syncNative(projectId, current.id, key)
       localStorage.setItem(receiptKey, JSON.stringify({ operation: "native-sync", key, jobId: accepted.jobId, signature: current.id } satisfies Receipt))
       const state = await api.job(accepted.jobId)
+      if (!stillInProject()) return
+      if (terminal.has(state.state)) {
+        const fresh = await api.nativeSnapshot(projectId)
+        if (!stillInProject()) return
+        if (snapshotRef.current?.currentRevisionId === current.id && fresh.currentRevisionId === current.id) setSnapshot(fresh)
+        if (state.state === "succeeded") localStorage.removeItem(receiptKey)
+      }
       setJob(state)
-      if (terminal.has(state.state)) { setSnapshot(await api.nativeSnapshot(projectId)); if (state.state === "succeeded") localStorage.removeItem(receiptKey) }
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to start native synchronization") }
-    finally { setBusy(false) }
+    } catch (cause) { if (stillInProject()) setError(cause instanceof Error ? cause.message : "Unable to start native synchronization") }
+    finally { if (stillInProject()) setBusy(false) }
   }
 
   const abandonPartial = async () => {

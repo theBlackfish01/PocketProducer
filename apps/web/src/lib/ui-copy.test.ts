@@ -14,6 +14,8 @@ describe("Listening Room copy", () => {
     expect(friendlyIssue("uncertain remote outcome", "Fallback")).toMatch(/check what happened/i)
     expect(friendlyIssue("unknown reservation outcome", "Fallback")).toMatch(/check what happened/i)
     expect(friendlyIssue("opaque provider code 123", "Your saved work is safe.")).toBe("Your saved work is safe.")
+    expect(friendlyIssue("Let your current request finish before starting another.", "Fallback")).toMatch(/already running in one of your sessions/)
+    expect(friendlyIssue("The shared studio is busy. Please try again shortly.", "Fallback")).toMatch(/shared studio is busy/)
   })
 
   it("uses human progress and instrument labels", () => {

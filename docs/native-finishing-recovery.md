@@ -1,6 +1,15 @@
 # Native finishing and recovery — 2026-09-27
 
-## Proposed reliability slice — 2026-10-07 (not implemented)
+## Reliability slice — 2026-10-07 (implemented locally; rollout pending)
+
+Implementation preserves the plan below, with these concrete contracts:
+
+- Section authority uses unique exact names/IDs, existing supported form declarations, opening/final aliases and exact numeric spans matching one existing section. Unknown positive scope stays in the exact brief and traceable interpretation, without becoming a global change obligation. Unknown preservation/exclusion is rejected before a new job is admitted; preview and completion use the same resolver. No broad numeric constraint language or automatic composition was added.
+- A clean/low-priority current review keeps the one-call finish path. High/medium findings return `category: review_response` once. The producer can perform one focused musical correction and obtain a fresh current review, or explicitly call `finish_native_arrangement` with `acceptRemainingSuggestions: true` against an already current review. First-call acceptance cannot skip new feedback. Normal final text and marking the plan reviewed obey the same policy.
+- Review history stores an optional server-calculated musical fingerprint. This survives restart and ignores metadata changes without another table or migration. Historical reviews without the field remain readable and explicitly acceptable; they cannot prove that refinement occurred. An invalid/stale review or genuine hard constraint still blocks acceptance. Suggestions remain recorded, with no listening/perfection claim and no new budget allowance.
+- Sync polling awaits canonical terminal readback before publishing terminal job state; project/job/head guards reject late reads. Restored receipts receive guarded readback too. Successful copies update the header without reload. Ordinary validation uses neutral progress text; owner-busy responses explain the other running request instead of generic failure. There is no new recurring poller or automatic write retry.
+
+Verification and limitations are recorded in `docs/STATUS.md` and `docs/testing.md`. Existing live Saffron work and its uncertain charge remain untouched; deployment and paid evaluation require separate authorization.
 
 ### Diagnosis and minimal scope
 

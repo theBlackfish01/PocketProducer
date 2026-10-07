@@ -1,5 +1,19 @@
 # Verification record
 
+## Focused reliability repairs — October 7
+
+Installed pinned binaries, isolated `_test` PostgreSQL, fixture/injected providers and tracing disabled; queue-sharing database/application/hosted suites ran serially. No live model, OAuth consent, Audiotool mutation or Railway change:
+
+- `node node_modules/vitest/vitest.mjs run --config vitest.config.ts packages/core/src apps/web/src tests/unit tests/native-construction.test.ts --maxWorkers=1`: **241/241**, 41 files, 78.79s.
+- `node node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/integration --maxWorkers=1`: **163/163**, 13 files, 180.40s. Includes exact Saffron revision with real bass/chord/lead edits, immutable original version, pre-admission ambiguous-scope rejection, first-review feedback, one corrected fresh review, explicit best effort, restart/metadata invariants and neutral sync activity. Existing effect/review repair, ownership, cancellation, lock and accounting checks retained.
+- After the final same-turn acknowledgement guard and empty-ending correction assertion: `node node_modules/vitest/vitest.mjs run --config vitest.config.ts packages/core/src/native/intent.test.ts packages/core/src/native/finishing.test.ts tests/integration/native-finishing-recovery.test.ts --maxWorkers=1`: **64/64**, 26.17s.
+- `node node_modules/@playwright/test/cli.js test --config tests/visual.playwright.config.ts`: **28/28**, 2.3m. Delayed terminal verification, receipt restoration, navigation/new-head stale-read rejection, desktop/phone confirmed header and accurate owner-busy messaging without a second POST. Desktop/phone copy screenshots inspected.
+- `node --import tsx scripts/prepare-e2e.ts`, then `node node_modules/@playwright/test/cli.js test --config tests/playwright.config.ts`: **18/18**, 1.7m. Real offline API create/protect/revise/compare/select/reload and phone/source/activity journeys.
+- `node node_modules/@playwright/test/cli.js test --config tests/hosted.playwright.config.ts`: **2/2**, 29.8s. Injected public Audiotool identity isolation and invitation mode, not live identity-provider testing.
+- `node node_modules/typescript/bin/tsc -b`, targeted `node node_modules/eslint/bin/eslint.js` across changed source/tests, `node node_modules/vite/bin/vite.js build` from `apps/web`, and `git diff --check`: pass. Build retains the pre-existing >500 kB bundle warning.
+
+Initial failures were corrected, not waived: a key/meter prefix must not become an inherited exclusion scope; generation completion must inspect the constructed document rather than the initial seed; a resume fixture must create the real aggregate effect before testing restart; an optional test-fixture field must be absent rather than explicitly undefined under exact optional typing. Final reruns are reported above. Live speed, musical quality, browser-engine/physical-device behavior and paid recovery remain unverified by these offline checks. No source mapping, schema, accepted production version or provider liability was changed.
+
 ## Incremental UX and preservation — October 6
 
 Final completed runs, using installed pinned binaries on Node 22.14.0 with the isolated `_test` database and fixture/injected providers:

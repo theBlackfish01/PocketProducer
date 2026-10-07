@@ -28,7 +28,7 @@ async function hostedQueueCapacity(client: pg.PoolClient, ownerId: string) {
   if (getConfig().DEV_LOCAL_AUTH) return;
   const active = await client.query<{ total: number; owned: number }>(`SELECT count(*)::int AS total,
     count(*) FILTER (WHERE owner_id=$1)::int AS owned FROM job WHERE state IN ('queued','running','cancel_requested')`, [ownerId]);
-  if (active.rows[0]!.owned >= 1) throw Object.assign(new Error("Let your current request finish before starting another."), { statusCode: 429 });
+  if (active.rows[0]!.owned >= 1) throw Object.assign(new Error("An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request."), { statusCode: 429 });
   if (active.rows[0]!.total >= 8) throw Object.assign(new Error("The shared studio is busy. Please try again shortly."), { statusCode: 429 });
 }
 

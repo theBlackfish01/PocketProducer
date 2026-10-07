@@ -7,6 +7,8 @@ export function friendlyIssue(message: string | null | undefined, fallback: stri
 
 function issueMessage(message: string | null | undefined, fallback: string) {
   if (!message) return fallback
+  if (/already running in one of your sessions|Let your current request finish/i.test(message)) return "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request."
+  if (/shared studio is busy/i.test(message)) return "The shared studio is busy. Please try again shortly."
   if (/stale|head changed|version conflict|expected.*revision/i.test(message)) return "This piece changed while you were working. Reopen it before trying again."
   if (/uncertain|reconcil|unknown.*outcome/i.test(message)) return "We need to check what happened before another attempt can start."
   if (/MODEL_CALL_LIMIT|model-call allowance|step limit/i.test(message)) return "The producer reached this request’s step limit."

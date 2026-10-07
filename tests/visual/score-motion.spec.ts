@@ -720,6 +720,86 @@ for (const mappingVersion of ["nexus-native-v7", "nexus-native-v8", "nexus-nativ
   })
 }
 
+test("delayed terminal copy readback updates the header without reload or duplicate submission", async ({ page }) => {
+  await mockRoom(page, { audiotool: true })
+  let posts = 0, polls = 0, terminalReadStarted = false
+  let releaseRead!: () => void
+  const delayed = new Promise<void>(resolve => { releaseRead = resolve })
+  await page.route("**/native/synchronizations", async route => { posts++; await route.fulfill({ json: { jobId: "sync-test" } }) })
+  await page.route("**/jobs/sync-test", route => route.fulfill({ json: { id: "sync-test", project_id: projectId, kind: "native-sync", state: ++polls > 1 ? "succeeded" : "running", stage: "validating", error_code: null, error_message: null } }))
+  const document = documentFixture()
+  await page.route(`**/projects/${projectId}/native`, async route => {
+    terminalReadStarted = true
+    await delayed
+    await route.fulfill({ json: { currentRevisionId: "version-2", headVersion: 2, current: { id: "version-2", ordinal: 2, document }, versions: [], synchronization: { state: "verified", mappingVersion: "nexus-native-v9", revisionId: "version-2", projectId: "projects/fixture", url: "https://offline.invalid/studio" }, playback: "deferred" } })
+  })
+  await page.getByRole("button", { name: "Copy to Audiotool", exact: true }).click()
+  await expect.poll(() => terminalReadStarted).toBe(true)
+  await expect(page.getByRole("button", { name: "Open in Audiotool", exact: true })).toHaveCount(0)
+  releaseRead()
+  await expect(page.getByRole("button", { name: "Open in Audiotool", exact: true })).toBeVisible()
+  expect(posts).toBe(1)
+  await page.screenshot({ path: `${evidence}/copy-confirmed-desktop.png` })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole("button", { name: "Open in Audiotool", exact: true })).toBeVisible()
+  await page.screenshot({ path: `${evidence}/copy-confirmed-phone.png` })
+})
+
+test("copy owner-busy response is explained without retrying the POST", async ({ page }) => {
+  await mockRoom(page, { audiotool: true })
+  let posts = 0
+  await page.route("**/native/synchronizations", async route => { posts++; await route.fulfill({ status: 429, json: { message: "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request." } }) })
+  await page.getByRole("button", { name: "Copy to Audiotool", exact: true }).click()
+  await expect(page.getByText(/already running in one of your sessions/)).toBeVisible()
+  expect(posts).toBe(1)
+  await expect(page.getByRole("button", { name: "Open in Audiotool", exact: true })).toHaveCount(0)
+})
+
+test("restores a terminal copy receipt with delayed canonical verification and no new copy", async ({ page }) => {
+  const options: { audiotool: boolean; verifiedMapping?: string } = { audiotool: true }
+  const room = await mockRoom(page, options)
+  let reads = 0, release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route("**/jobs/restored-copy", route => route.fulfill({ json: { id: "restored-copy", project_id: projectId, kind: "native-sync", state: "succeeded", stage: "validating" } }))
+  await page.route(`**/projects/${projectId}/native`, async route => {
+    if (++reads > 1) await held
+    await route.fallback()
+  })
+  await page.evaluate(id => localStorage.setItem(`pocket-producer:native-receipt:${id}`, JSON.stringify({ operation: "native-sync", key: "recovered", jobId: "restored-copy", signature: "version-2" })), projectId)
+  await page.reload()
+  await expect.poll(() => reads).toBe(2)
+  options.verifiedMapping = "nexus-native-v9"
+  release()
+  await expect(page.getByRole("button", { name: "Open in Audiotool", exact: true })).toBeVisible()
+  expect(await page.evaluate(id => localStorage.getItem(`pocket-producer:native-receipt:${id}`), projectId)).toBeNull()
+  expect(room.writes()).toBe(0)
+})
+
+for (const change of ["navigation", "head"] as const) test(`a delayed copy snapshot cannot overwrite a newer ${change}`, async ({ page }) => {
+  const room = await mockRoom(page, { audiotool: true })
+  let polls = 0, reads = 0, release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  await page.route("**/native/synchronizations", route => route.fulfill({ json: { jobId: "sync-late" } }))
+  await page.route("**/jobs/sync-late", route => route.fulfill({ json: { id: "sync-late", project_id: projectId, kind: "native-sync", state: ++polls > 1 ? "succeeded" : "running", stage: "validating" } }))
+  await page.route(`**/projects/${projectId}/native`, async route => {
+    if (++reads > 1) { await route.fallback(); return }
+    await held
+    await route.fulfill({ json: { currentRevisionId: "version-2", headVersion: 2, current: { id: "version-2", ordinal: 2, document: room.before }, versions: [], synchronization: { state: "verified", mappingVersion: "nexus-native-v9", revisionId: "version-2", projectId: "projects/fixture", url: "https://offline.invalid/stale-copy" }, playback: "deferred" } }).catch(() => undefined)
+  })
+  await page.getByRole("button", { name: "Copy to Audiotool", exact: true }).click()
+  await expect.poll(() => reads).toBe(1)
+  if (change === "navigation") {
+    await page.evaluate(() => { history.pushState({}, "", "/unavailable"); window.dispatchEvent(new PopStateEvent("popstate")) })
+    await expect(page.locator(".producer-workspace-header")).toHaveCount(0)
+  } else {
+    room.complete()
+    await expect(page.locator(".producer-workspace-header")).toContainText("Version 3", { timeout: 15_000 })
+  }
+  release()
+  await expect(page.getByRole("button", { name: "Open in Audiotool", exact: true })).toHaveCount(0)
+  if (change === "head") await expect(page.locator(".producer-workspace-header")).toContainText("Version 3")
+})
+
 test("history and Audiotool use compact dialogs with focus return and no implicit copy", async ({ page }) => {
   const room = await mockRoom(page, { audiotool: true })
   const copy = page.getByRole("button", { name: "Copy to Audiotool", exact: true })
