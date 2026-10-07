@@ -8,7 +8,7 @@ import { nativeFormSchema } from "@pocket/core";
 import { boundOpenAiRequest } from "@pocket/core/test-support";
 import { listProjects, requireProject, abandonNativePartialJob } from "@pocket/core";
 import { completeProviderEffect, failProviderEffect, reconcileNativeStepConflict } from "@pocket/core";
-import { nativeDocumentSchema } from "@pocket/core";
+import { nativeDocumentSchema, nativeMusicHash } from "@pocket/core";
 import { nativeReviewResponseFormat } from "@pocket/core/test-support";
 
 let owner = "";
@@ -46,19 +46,57 @@ async function prepared(profile: "standard" | "extended" = "standard", model = "
   return { job, session };
 }
 
-it("finishes through one compound tool without buying a goodbye turn, retaining subjective suggestions", async () => {
+it("returns first actionable findings before explicit best-effort acceptance, without another review", async () => {
   const { job } = await prepared("standard", "gpt-6-luna");
-  const producer = fakeModel().respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  const producer = fakeModel().respondWithTools([{ name: "finish_native_arrangement", args: { acceptRemainingSuggestions: true } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: { acceptRemainingSuggestions: true } }]);
   const reviewer = fakeModel().respond(new AIMessage(JSON.stringify({ verdict: "A useful sparse statement with room to develop.", findings: [{ priority: "medium", sectionId: "whole", partId: "lead", observation: "Only one opening gesture", suggestedChange: "Consider a quiet answering note in a later revision" }], noChangeReason: null })));
   await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
   expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
-  expect(producer.callCount).toBe(1);
+  expect(producer.callCount).toBe(2);
+  expect(JSON.stringify(producer.calls[1]!.messages)).toContain("review_response");
   expect(reviewer.callCount).toBe(1);
   expect(await loadNativePlan(job.id)).toMatchObject({ stage: "reviewed", reviewCount: 1, review: { modelUsed: true, findings: [{ priority: "medium" }] } });
   expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(1);
   const calls = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' AND prompt_version='deep-producer-v2'", [job.id])).rows;
-  expect(calls).toHaveLength(1);
+  expect(calls).toHaveLength(2);
   expect(calls[0]).toMatchObject({ state: "succeeded", cost_status: "observed" });
+});
+
+it("gives an empty ending one correction after normal final text and saves fresh review with retained suggestions", async () => {
+  const { job } = await prepared("standard", "gpt-6-luna");
+  const producer = fakeModel().respond(new AIMessage("Finished."))
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "answer", operations: [{ kind: "addNotes", partId: "lead", notes: [{ id: "ending-answer", startTick: 11520, durationTicks: 1920, pitch: 64, velocity: 0.5 }] }] } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  const finding = new AIMessage(JSON.stringify({ verdict: "The ending needs its answering gesture.", findings: [{ priority: "high", sectionId: "whole", partId: "lead", observation: "There is no answering material in the ending", suggestedChange: "Add a restrained final answer" }], noChangeReason: null }));
+  const refined = new AIMessage(JSON.stringify({ verdict: "The ending now answers the opening.", findings: [{ priority: "medium", sectionId: "whole", partId: "lead", observation: "The phrase could have a warmer tone", suggestedChange: "Consider a softer patch in a later revision" }], noChangeReason: null }));
+  const reviewer = fakeModel().respond(finding).respond(refined);
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  expect(producer.callCount).toBe(3);
+  expect(reviewer.callCount).toBe(2);
+  expect(JSON.stringify(producer.calls[1]!.messages)).toContain("Respond to the current review");
+  expect((await nativeSnapshot(owner, job.projectId)).versions).toHaveLength(1);
+  expect((await nativeSnapshot(owner, job.projectId)).current!.document.parts[0]!.notes).toContainEqual(expect.objectContaining({ id: "ending-answer", startTick: 11520, pitch: 64 }));
+});
+
+it("retains the response opportunity across restart and metadata updates; marking reviewed cannot bypass it", async () => {
+  const { job, session } = await prepared("standard", "gpt-6-luna");
+  const review = { documentHash: canonicalHash(session.document), musicHash: nativeMusicHash(session.document), contextHash: nativeReviewContextHash(direction, plan), verdict: "A useful phrase needing a response", findings: [{ priority: "medium" as const, sectionId: "whole", partId: "lead", observation: "The ending could answer the opening", suggestedChange: "Consider a restrained reply" }], noChangeReason: null, modelUsed: true };
+  await saveNativeReview(job, review);
+  await processJob(job, { scriptedModel: fakeModel().respond(new AIMessage("Finished.")).respond(new AIMessage("Finished.")), scriptedReviewer: fakeModel(), library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "needs_attention", error_code: "NATIVE_PARTIAL" });
+  await resumeNativePartialJob(owner, job.projectId, job.id);
+  const resumed = (await claimJobById(job.id, "review-response-resumed"))!;
+  const producer = fakeModel().respondWithTools([{ name: "record_native_creative_state", args: { ...plan.creativeState, unfinishedTasks: [], guidanceRefs: ["already-read"] } }])
+    .respondWithTools([{ name: "advance_native_stage", args: { stage: "reviewed" } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: { acceptRemainingSuggestions: true } }]);
+  const reviewer = fakeModel();
+  await processJob(resumed, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  expect(JSON.stringify(producer.calls[2]!.messages)).toContain("review_response");
+  expect((await loadNativePlan(job.id))!.reviewCount).toBe(1);
+  expect(reviewer.callCount).toBe(0);
 });
 
 it("completes procedural inspection and review after a normal final response without reopening creation", async () => {
@@ -72,6 +110,46 @@ it("completes procedural inspection and review after a normal final response wit
   const saved = await loadNativePlan(job.id);
   expect(saved!.inspectedDocumentHash).toBe(saved!.review!.documentHash);
   expect(saved!.stage).toBe("reviewed");
+});
+
+it("saves a Saffron-style numeric-bar revision through the production graph without fake section requirements", async () => {
+  const project = await createProject(owner, "Numeric-bar revision");
+  const createRequest = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), expectedHeadId: null, request: { direction: "A 16-bar melody", model: "gpt-6-luna" } });
+  await dispatchOutbox();
+  const generation = (await claimJobById(createRequest.id, "numeric-create"))!;
+  const arrangement = { ...form, sections: ["Opening", "Groove", "Lift", "Return"].map(name => ({ id: name.toLowerCase(), name, bars: 4 })), parts: [form.parts[0]!, ...["bass", "harmony", "percussion"].map(role => ({ ...form.parts[0]!, id: role, name: role, role }))] };
+  const arrangementPlan = { ...plan, sections: arrangement.sections.map(section => ({ name: section.name, purpose: "Develop the four-part phrase" })), hardConstraints: ["16 bars and four parts"] };
+  const builder = fakeModel().respondWithTools([{ name: "record_native_plan", args: arrangementPlan }])
+    .respondWithTools([{ name: "compose_native_form", args: arrangement }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  await processJob(generation, { scriptedModel: builder, scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, generation.id)).toMatchObject({ state: "succeeded" });
+  const before = (await nativeSnapshot(owner, project.id)).current!;
+  const request = { baseNativeRevisionId: before.id, expectedNativeHeadId: before.id, model: "gpt-6-luna", direction: "The Return section is currently empty. Add a sparse but audible ending in bars 13–16: bass roots on A and a gentle A-minor chord in bars 13 and 15, with a short final melody resolution to A. Also vary two or three melody notes in Lift and brighten its chord tone slightly. Add these things in but keep it coherent. Keep the same four parts and 16-bar structure." };
+  for (const direction of ["Keep melody in bars 13 and 15 unchanged", "No drums in the missing section"]) {
+    await expect(createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-revision", idempotencyKey: randomUUID(), expectedHeadId: before.id, request: { ...request, direction } })).rejects.toThrow("not uniquely identifiable");
+  }
+  expect((await getPool().query("SELECT 1 FROM job WHERE project_id=$1 AND kind='native-revision'", [project.id])).rowCount).toBe(0);
+  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-revision", idempotencyKey: randomUUID(), expectedHeadId: before.id, request });
+  await dispatchOutbox();
+  const job = (await claimJobById(made.id, "numeric-revise"))!;
+  const operations = [
+    ...["bass", "harmony"].map(partId => ({ kind: "addNotes", partId, notes: [12, 14].flatMap(bar => (partId === "bass" ? [45] : [57, 60, 64]).map(pitch => ({ id: `${partId}-return-${bar}-${pitch}`, startTick: bar * 3840, durationTicks: 1920, pitch, velocity: 0.5 }))) })),
+    { kind: "addNotes", partId: "lead", notes: [8, 9, 15].map(bar => ({ id: `answer-${bar}`, startTick: bar * 3840, durationTicks: 960, pitch: bar === 15 ? 69 : 72, velocity: 0.5 })) },
+    { kind: "setDevice", partId: "harmony", device: { type: "heisenberg", parameters: { "filter.cutoffFrequencyHz": 1800 } } }
+  ];
+  const producer = fakeModel().respondWithTools([{ name: "record_native_plan", args: { ...arrangementPlan, intent: "Return the theme gently and vary Lift" } }])
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "requested-return", operations } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  const reviewer = fakeModel().respond(good());
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  const after = await nativeSnapshot(owner, project.id);
+  expect(after.versions).toHaveLength(2);
+  expect(after.versions.find(value => value.id === before.id)?.documentHash).toBe(before.documentHash);
+  expect(after.current!.document.parts.find(value => value.id === "bass")!.notes.some(note => note.startTick === 12 * 3840)).toBe(true);
+  expect(producer.callCount).toBe(3);
+  expect(reviewer.callCount).toBe(1);
 });
 
 it("defers review for missing objective requirements and bounds identical incomplete final responses", async () => {

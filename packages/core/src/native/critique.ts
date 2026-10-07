@@ -20,6 +20,7 @@ function sectionAutomation(curve: NativeDocument["parts"][number]["automation"][
 
 export const nativeReviewSchema = z.object({
   documentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  musicHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   verdict: z.string().min(3).max(360),
   findings: z.array(z.object({ priority: z.enum(["high", "medium", "low"]), sectionId: z.string().max(64).nullable(), partId: z.string().max(64).nullable(), observation: z.string().min(3).max(300), suggestedChange: z.string().min(3).max(300) })).max(4),
   noChangeReason: z.string().max(300).nullable(),

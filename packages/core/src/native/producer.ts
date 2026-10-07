@@ -23,6 +23,7 @@ import { analyzePreview, geminiAnalysisEffectKey, prepareLibrarySampleAnalysis, 
 import { discoverNativeCapabilities, inspectNativeCapability } from "./catalog.js";
 import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, nativeDiff, nativeDocumentSchema, nativeHasMaterial, nativeMusicHash, nativeOperationSchema, pinnedContext, protectedPartHash, type NativeDocument, type NativeOperation } from "./model.js";
 import { interpretNativeBrief, resolveNativePreservation, resolveNativeSection } from "./intent.js";
+import { needsNativeReviewResponse, nativeReviewResponseGuidance } from "./finishing.js";
 import { hasShorterConnectedAmbience } from "./ambience.js";
 import { adoptUnfinishedNativeProducerEffect, advanceNativePlan, loadConfirmedNativeModelCalls, loadNativePlan, loadNativeProducerCompletion, loadNativeSteps, nativeModelEffectsSafeToContinue, recordNativeProducerCompletion, recoverConfirmedNativeProducerResult, saveNativeCreativeState, saveNativePlan, saveNativeReview, saveNativeStep } from "./repository.js";
 import { nativeFormOperations, nativeFormSchema } from "./form.js";
@@ -576,6 +577,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
     let specialistTools: "none" | "library" | "sdk" | "beat-form" | "scene" | "sound" | "batch" = "none";
     const schemaCache = new WeakMap<object, ReturnType<typeof convertToOpenAITool>>();
     let finalizedHash: string | null = null;
+    let presentedReviewHash: string | null = null;
     const completionChecklist = async () => {
       const saved = await loadNativePlan(input.session.job.id);
       const hash = canonicalHash(input.session.document);
@@ -587,6 +589,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
       if (saved) {
         if (saved.inspectedDocumentHash !== hash || saved.stage !== "reviewed") missing.push("Inspect two current sections after the final edit, then mark the plan reviewed");
         if ((!input.scriptedModel || input.scriptedReviewer) && !reviewCurrent) missing.push("Run a valid focused review on the final document");
+        if (reviewCurrent && needsNativeReviewResponse(saved.review!, saved.reviewHistory, nativeMusicHash(input.session.document)) && (saved.stage !== "reviewed" || saved.inspectedDocumentHash !== hash)) missing.push(nativeReviewResponseGuidance);
       }
       return { saved, hash, reviewCurrent, objectiveMissing, missing: [...new Set(missing)] };
     };
@@ -606,7 +609,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
       const hash = checklist.hash;
       if (checklist.reviewCurrent) return { ...saved.review!, reused: true };
       const settled = await settledNativeReviewRecovery(input.session.job.id, hash, nativeReviewContextHash(input.direction, saved.plan));
-      if (settled) { await saveNativeReview(input.session.job, settled, true); return { ...settled, reused: true }; }
+      if (settled) { const recovered = { ...settled, musicHash: nativeMusicHash(input.session.document) }; await saveNativeReview(input.session.job, recovered, true); return { ...recovered, reused: true }; }
       let review: NativeReview;
       const canModelReview = !input.scriptedModel || Boolean(input.scriptedReviewer);
       const exhausted = canModelReview && saved.reviewCount >= nativeReviewLimit(run);
@@ -617,12 +620,13 @@ export async function produceNative(input: { session: NativeToolSession; directi
         const symbolic = symbolicNativeReview(input.session.document, saved.plan);
         review = { documentHash: hash, verdict: "Symbolic inspection only; no acoustic conclusion.", findings: symbolic.emptySections.slice(0, 3).map((sectionId) => ({ priority: "medium", sectionId, partId: null, observation: "No note onset or clip begins in this section.", suggestedChange: "Check whether silence is intentional against the original brief." })), noChangeReason: "No model opinion was established for this document.", modelUsed: false };
       } else review = await focusedNativeReview({ job: input.session.job, direction: input.direction, document: input.session.document, plan: saved.plan, previousReviews: saved.reviewHistory, attempt: saved.reviewCount, ...(recoverFormat ? { recovery: { diagnostic: lastReview.diagnostic ?? { code: "historical_unusable" as const, paths: [], finishReason: null } } } : {}), ...(input.scriptedReviewer ? { scriptedReviewer: input.scriptedReviewer } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+      review = { ...review, musicHash: nativeMusicHash(input.session.document) };
       await saveNativeReview(input.session.job, review, canModelReview);
       return review;
     } catch (error) { if (error instanceof Error && /^(NATIVE_INCOMPLETE|MODEL_|OPENAI_INPUT_LIMIT)|uncertain|unconfirmed outcome/i.test(error.message)) throw error; return toolFailure(error); } };
-    const finishArrangement = async () => {
+    const finishArrangement = async (acceptRemainingSuggestions = false) => {
       const before = await completionChecklist();
-      if (before.objectiveMissing.length) return { ready: false, documentHash: before.hash, missing: before.objectiveMissing, reviewSpent: false,
+      if (before.objectiveMissing.length) return { ready: false, category: "hard_requirements", documentHash: before.hash, missing: before.objectiveMissing, reviewSpent: false,
         recovery: convergence.finishFeedback(nativeMusicHash(input.session.document), before.objectiveMissing) };
       // The same canonical inspections as the individual tools; no simulated
       // evidence and no paid producer turn for procedural stage bookkeeping.
@@ -636,6 +640,14 @@ export async function produceNative(input: { session: NativeToolSession; directi
       if ((!input.scriptedModel || input.scriptedReviewer) && !review.modelUsed) return { ready: false, review, missing: ["A valid final model review is still unavailable; this is not approval."] };
       const after = await completionChecklist();
       if (after.hash !== before.hash || after.objectiveMissing.length || ((!input.scriptedModel || input.scriptedReviewer) && !after.reviewCurrent)) return { ready: false, missing: ["The music or requirements changed during final review. Inspect current state before finishing."] };
+      if (needsNativeReviewResponse(review, after.saved!.reviewHistory, nativeMusicHash(input.session.document))
+        && !(after.saved!.stage === "reviewed" && after.saved!.inspectedDocumentHash === after.hash)
+        && !(acceptRemainingSuggestions && before.reviewCurrent && presentedReviewHash === canonicalHash(before.saved!.review))) {
+        return { ready: false, category: "review_response", documentHash: after.hash, review,
+          findings: [...review.findings].sort((a, b) => (a.priority === "high" ? 0 : 1) - (b.priority === "high" ? 0 : 1)),
+          missing: [nativeReviewResponseGuidance], canAcceptRemainingSuggestions: true,
+          note: "This first review has actionable suggestions. They are not hard constraints or a listening verdict. A first-call acknowledgement cannot skip seeing the review." };
+      }
       await advanceNativePlan(input.session.job, "reviewed", after.hash);
       finalizedHash = after.hash;
       return { ready: true, documentHash: after.hash, review, refinementSuggestions: review.findings.length, note: "Objective checks passed. Review suggestions remain recorded, not a claim of perfection or heard quality. No more edits are needed to save this version." };
@@ -653,12 +665,12 @@ export async function produceNative(input: { session: NativeToolSession; directi
         tool(async (raw: unknown) => { try { const plan = nativePlanSchema.parse(raw); await saveNativePlan(input.session.job, plan); return { saved: true, sectionCount: plan.sections.length, next: "Construct in small batches, then inspect sections and refine" }; } catch (error) { return toolFailure(error); } }, { name: "record_native_plan", description: "Persist an original form, sound and development plan for this request. Keep hard constraints distinct from subjective sound goals. The plan is progress, not accepted music.", schema: nativePlanSchema }),
         tool(async (raw: unknown) => { try { const state = nativeCreativeStateSchema.parse(raw); await saveNativeCreativeState(input.session.job, state); return { saved: true, identity: state.identity, palette: state.palette.map((item) => ({ role: item.role, resourceId: item.resourceId, resourceHash: item.resourceHash ?? null })), unfinished: state.unfinishedTasks.length }; } catch (error) { return toolFailure(error); } }, { name: "record_native_creative_state", description: "Persist compact palette identities and inspected hashes when available, selected guidance, decisions, definite failures, remaining tasks and links to confirmed entities within the durable plan. Update after discoveries and confirmed changes. Never store credentials or signed URLs.", schema: nativeCreativeStateSchema }),
         tool(reviewScore, { name: "review_native_score", description: "Preflight objective requirements before spending a bounded symbolic review. Use this for one targeted refinement pass, not repeated perfection seeking. Suggestions do not themselves block completion. Reuse a current review; edits invalidate it. Prefer finish_native_arrangement when ready to save.", schema: z.object({}) }),
-        tool(finishArrangement, { name: "finish_native_arrangement", description: "Finish useful music in one call: check objective brief/protection/plan requirements, inspect current sections, obtain or reuse a valid final symbolic review, and mark ready to save. Returns concrete missing requirements without spending a review when blocked. Retains subjective suggestions for later rather than requiring perfection. Call alone, after edits; do not combine with mutations. Does not copy to Audiotool or claim heard quality.", schema: z.object({}) }),
+        tool((raw: unknown) => finishArrangement(z.object({ acceptRemainingSuggestions: z.boolean().optional() }).parse(raw).acceptRemainingSuggestions), { name: "finish_native_arrangement", description: "Check hard requirements, inspect sections and obtain/reuse a valid review. A clean review finishes immediately. First actionable findings return once: make one focused correction then finish, or explicitly acceptRemainingSuggestions after reading the current review to save best effort. Acceptance never waives hard constraints, protections or a valid review. Call alone after edits. Does not copy or claim heard quality.", schema: z.object({ acceptRemainingSuggestions: z.boolean().optional() }) }),
         tool((raw: unknown) => searchNativeExamples(z.object({ query: z.string().max(80).default("") }).parse(raw).query), { name: "search_native_examples", description: "Find a few original, unheard executable musical references by need; these are ideas, never templates to copy wholesale.", schema: z.object({ query: z.string().max(80).default("") }) }),
         tool((raw: unknown) => readNativeExample(z.object({ id: z.string().max(80) }).parse(raw).id), { name: "read_native_example", description: "Read one validated reference form, section/motif map and rationale after search. Adapt the relationship rather than copying its notes.", schema: z.object({ id: z.string().max(80) }) }),
         tool((raw: unknown) => { const { offset, length } = z.object({ offset: z.number().int().min(0), length: z.number().int().min(1).max(3000).default(1500) }).parse(raw); return { offset, totalLength: input.direction.length, text: input.direction.slice(offset, offset + length), nextOffset: offset + length < input.direction.length ? offset + length : null }; }, { name: "read_native_brief", description: "Read an exact bounded character window of the original, losslessly stored user direction, including its ending. Use offsets when details are not in the compact context.", schema: z.object({ offset: z.number().int().min(0), length: z.number().int().min(1).max(3000).default(1500) }) }),
         tool(async () => await loadNativePlan(input.session.job.id), { name: "read_native_plan", description: "Read the durable creative plan, its stage and reviewed document hash. Planned work is not yet confirmed music.", schema: z.object({}) }),
-        tool(async (raw: unknown) => { try { const { stage } = z.object({ stage: z.enum(["building", "refining", "reviewed"]) }).parse(raw); const hash = canonicalHash(input.session.document); if (stage === "reviewed" && (inspectionHash !== hash || inspectedSections.size < Math.min(2, input.session.document.sections.length))) throw new Error("Inspect at least two current sections after the final mutation before marking the arrangement reviewed"); if (stage === "reviewed" && !input.scriptedModel) { const review = (await loadNativePlan(input.session.job.id))?.review; if (review?.documentHash !== hash || !review.modelUsed) throw new Error("Run a valid focused review on this exact confirmed document before marking reviewed; an unavailable or invalid review is not approval"); } await advanceNativePlan(input.session.job, stage, hash); return { stage, documentHash: hash }; } catch (error) { return toolFailure(error); } }, { name: "advance_native_stage", description: "Record construction progress durably. Mark reviewed only after inspecting at least two current sections and running a valid focused review of the final document.", schema: z.object({ stage: z.enum(["building", "refining", "reviewed"]) }) }),
+        tool(async (raw: unknown) => { try { const { stage } = z.object({ stage: z.enum(["building", "refining", "reviewed"]) }).parse(raw); const hash = canonicalHash(input.session.document); if (stage === "reviewed" && (!input.scriptedModel || input.scriptedReviewer)) return await finishArrangement(); if (stage === "reviewed" && (inspectionHash !== hash || inspectedSections.size < Math.min(2, input.session.document.sections.length))) throw new Error("Inspect at least two current sections after the final mutation before marking the arrangement reviewed"); await advanceNativePlan(input.session.job, stage, hash); return { stage, documentHash: hash }; } catch (error) { return toolFailure(error); } }, { name: "advance_native_stage", description: "Record construction progress durably. Marking reviewed uses the same validation and first-review response policy as finish_native_arrangement.", schema: z.object({ stage: z.enum(["building", "refining", "reviewed"]) }) }),
         ...(input.mode === "generation" && !input.session.applied.length ? [tool(async (raw: unknown) => { try { const form = nativeFormSchema.parse(raw); const result = await input.session.apply("form-" + canonicalHash(form).slice(0, 24), nativeFormOperations(form, input.sources)); latestInspection = null; inspectionHash = null; inspectedSections.clear(); return result; } catch (error) { return toolFailure(error); } }, { name: "compose_native_form", description: "Construct an original editable form with model-chosen meter, sections, instruments and pinned parameters, motifs and note events, placements, effects, automation and selected owned source intervals. Beats are quarter-note beats; placements use bars. All details go through validated, durably replayed operations.", schema: nativeFormSchema })] : []),
         tool((raw: unknown) => discoverNativeCapabilities(z.object({ query: z.string().max(80) }).parse(raw).query), { name: "discover_native_capabilities", description: "Search the pinned Nexus entity catalogue; discovery is not write permission.", schema: z.object({ query: z.string().max(80) }) }),
         tool((raw: unknown) => inspectNativeCapability(z.object({ path: z.string().max(160) }).parse(raw).path), { name: "inspect_native_capability", description: "Inspect SDK metadata, pointer targets and numeric ranges at a schema path.", schema: z.object({ path: z.string().max(160) }) }),
@@ -743,6 +755,9 @@ export async function produceNative(input: { session: NativeToolSession; directi
         }
       }, wrapModelCall: async (request, handler) => {
         const checklist = await completionChecklist();
+        // Acceptance refers to feedback in this model turn's trusted context,
+        // never a review another tool produced concurrently in the same turn.
+        presentedReviewHash = checklist.reviewCurrent ? canonicalHash(checklist.saved!.review) : null;
         if (finalizedHash === checklist.hash && !checklist.missing.length) {
           // A tool has already completed the trusted lifecycle. Do not buy a
           // provider turn merely to say goodbye or invite more optional edits.

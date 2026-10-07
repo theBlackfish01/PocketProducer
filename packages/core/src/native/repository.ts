@@ -514,7 +514,11 @@ export async function saveNativeReview(job: JobRecord, review: NativeReview, att
     if (!plan.rows[0]) throw new Error("Record a production plan before reviewing");
     if (checked.contextHash && checked.contextHash !== nativeReviewContextHash(typeof job.request.direction === "string" ? job.request.direction : "", nativePlanSchema.parse(plan.rows[0].plan))) throw new Error("Focused review is stale against current requirements");
     if (attemptedModel && plan.rows[0].creative_review_count >= nativeReviewLimit(jobNativeRunLimits(job.request))) {
-      const recovery = checked.formatRecovery && await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1' AND state='succeeded' AND cost_status='observed' AND output->'review'=$2::jsonb", [job.id, JSON.stringify(checked)]);
+      // The server adds this non-provider fingerprint only after a valid review.
+      // Repair authorization still compares the exact settled provider result.
+      const providerReview = { ...checked };
+      delete providerReview.musicHash;
+      const recovery = checked.formatRecovery && await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1' AND state='succeeded' AND cost_status='observed' AND output->'review'=$2::jsonb", [job.id, JSON.stringify(providerReview)]);
       if (!recovery || !recovery.rowCount) throw new Error("Focused review allowance for this request is exhausted");
     }
     await client.query("UPDATE native_job_plan SET creative_review=$2::jsonb,creative_review_history=creative_review_history || jsonb_build_array($2::jsonb),creative_review_count=creative_review_count+$3,updated_at=now() WHERE job_id=$1", [job.id, JSON.stringify(checked), attemptedModel ? 1 : 0]);
