@@ -1,8 +1,29 @@
 # Live implementation status
 
+## Reliability release and two hosted Luna checks — 2026-10-07
+
+Reviewed and pushed `2d68c4a` (grounded scope), `a12f976` (bounded review response) and `ab83281` (copy readback) to `main`. Railway deployment `3795ce83-6b64-4704-b8b4-a0cb5dc75229` succeeded on `ab83281`; existing migrations remained applied and API/worker startup succeeded. GitHub verification run `37571958215` passed all stages, including lint, types, unit/integration/application/hosted/visual suites, Docker build and static-course checks. No additional source patch was required by the release review.
+
+The user authorized two live generations with a combined $1 ceiling and no Audiotool copies. Used the hosted browser and imported both private LangSmith traces:
+
+| Test | Outcome | Trace duration | LLM spans | LangSmith cost |
+| --- | --- | --- | --- | --- |
+| Apricot Circuit | Saved Version 1: 16 bars, four sections/four parts, 112 BPM, 4/4. Ending material present. | 272 seconds | 23 | $0.04419604 |
+| Willow Steps | Preserved draft: 12 bars, three sections/parts, 96 BPM, 3/4. Paused during sound configuration. | 202 seconds | 14 | $0.025182365 |
+
+Apricot exercised the new first-review response: medium findings returned to the producer, which inspected the disputed chord and adjusted the Lift cutoff before a fresh clean review and acceptance. The initial critic incorrectly called a G-major triad D major; the final review corrected this. Symbolic review is fallible, not a listening verdict. Version history, section/ending inspection and persistence after reload worked.
+
+Willow's producer invented `presets/soft-glass` while adapting the original **local** Soft glass parameter recipe. No remote preset search/inspection established that identity. `configure_native_sound` attempted a trusted `getPreset` lookup, which failed before the batch committed. The library wrapper classified it as `provider-failed`; the recovery policy makes that fatal rather than model-correctable. The SDK's generic error does not establish its underlying HTTP status. Both prior note batches and the paused state survived reload; no completed version or copy was claimed.
+
+This is a remaining reliability blocker, **not an identified regression in this release**: the recipe, library lookup and tool-recovery files are byte-identical to `11ca90f`, and the apply-time preset check is unchanged. A zero-provider local check reproduced the fatal classification. It occurred before any final-review call. No rollback was performed; no continuation, financial reset, credential/configuration change or Audiotool copy was attempted. Combined trace-reported model spend was **$0.069378405** (not an independently reconciled invoice).
+
+Health/homepage return 200, signed-out projects 401, and `/.env` 404. Browser error/warning capture was empty. Queried Railway runtime error logs returned no entries; the failed SDK operation is evidenced by LangSmith. Raw traces/screenshots remain ignored/private under `.local/reviews/release-ab83281/` and `.local/evidence/`.
+
+Next targeted repair, not implemented: reject ungrounded remote preset references before lookup; clearly distinguish local recipes from remote identities; return bounded selection feedback for proven invalid/not-found references without masking actual authentication/transport failures or weakening identity/hash checks. No heard-quality assessment or live copy-readback verification was performed in these tests. The existing cancelled Saffron liability remains untouched.
+
 ## Grounded revision scope, bounded review response and copy readback — 2026-10-07
 
-Implemented the approved reliability plan locally; Railway remains on the restored `11ca90f` runtime. No push/deployment, paid generation, Audiotool mutation, allowance change, migration or old-job continuation was performed.
+Local implementation checkpoint before the release recorded above: implemented the approved reliability plan while Railway remained on the restored `11ca90f` runtime. At that checkpoint no push/deployment, paid generation, Audiotool mutation, allowance change, migration or old-job continuation had been performed.
 
 - **Revision intent:** prepositions no longer manufacture hard section names. Unique existing names/IDs, narrow opening/final aliases and exact section-aligned bar spans resolve consistently. The exact Saffron `bars 13 and 15` prompt now completes a scripted revision with real ending/lift edits and a new immutable version; Version 1 remains unchanged. Unresolved positive wording stays guidance. Unsupported preservation/exclusion is explained before admitting a new job instead of being broadened or discarded. Existing protections and timing/source/owner guards remain enforced.
 - **Finishing:** a valid first review with high/medium findings returns feedback rather than accepting immediately. The producer can make one focused musical correction and obtain a fresh review, or explicitly accept retained suggestions after receiving the current review. Normal final text and stage tools cannot bypass this decision. Clean/low-priority reviews retain the fast path. An optional server-owned musical fingerprint in existing review history survives restarts and distinguishes music from bookkeeping; no schema migration or allowance reset. Invalid/stale reviews, hard conflicts and unknown effects still block completion.
