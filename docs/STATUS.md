@@ -17,7 +17,7 @@ The GM kit search now uses the shared word segmenter.
 - "Lantern in the Gaps" built cleanly ($0.034).
 - Its Copy to Audiotool failed to resolve `rpc.audiotool.com` (DNS `ENOTFOUND`) and retried until the dev stack was stopped. No remote project was created, and DNS resolves again.
 - The sync job is left `running` with an expired lease; the next worker start reclaims it.
-- The SDK's retry on an unresolvable host has no overall deadline, which deserves a bounded failure.
+- The SDK retries an unresolvable host until its call is aborted, and `boundedNativeWait` only raced it, so the retries ran on unobserved after the 60 s limit. **Fixed:** the bounded wait now aborts its signal when it gives up, and project creation passes that signal to the SDK, so the retry loop stops. The outcome is still fenced as `NATIVE_CREATE_OUTCOME_UNKNOWN`. Tested with an SDK-like fake in `native-export-layout.test.ts`.
 
 ## Helper fixes and two live retests — 2026-10-09 (later)
 

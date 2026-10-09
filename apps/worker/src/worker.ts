@@ -77,18 +77,23 @@ function throwIfAborted(signal: AbortSignal, fallback: string): void {
   throw new JobControlError("CANCELLED", fallback);
 }
 
-async function boundedNativeWait<T>(run: () => Promise<T>, job: JobRecord, signal: AbortSignal, step: string): Promise<T> {
+/** Wait for one remote step, bounded by the job deadline (at most 60 s) and the
+ * job's abort signal. `run` gets a signal that aborts when the wait gives up: the
+ * Audiotool SDK retries an unavailable host forever unless its call is aborted,
+ * and an abandoned call could otherwise still succeed unobserved. */
+export async function boundedNativeWait<T>(run: (deadline: AbortSignal) => Promise<T>, job: JobRecord, signal: AbortSignal, step: string): Promise<T> {
   throwIfAborted(signal, `${step} interrupted`);
   const remaining = new Date(job.deadlineAt).getTime() - Date.now();
   if (remaining <= 0) throw new JobControlError("DEADLINE_EXCEEDED", `${step} exceeded the job deadline`);
+  const deadline = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const limit = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`${step} timed out after dispatch; outcome requires reconciliation`)), Math.min(remaining, 60_000));
-    onAbort = () => reject(signal.reason instanceof Error ? signal.reason : new JobControlError("CANCELLED", `${step} interrupted`));
+    timer = setTimeout(() => { reject(new Error(`${step} timed out after dispatch; outcome requires reconciliation`)); deadline.abort(); }, Math.min(remaining, 60_000));
+    onAbort = () => { reject(signal.reason instanceof Error ? signal.reason : new JobControlError("CANCELLED", `${step} interrupted`)); deadline.abort(); };
     signal.addEventListener("abort", onAbort, { once: true });
   });
-  try { return await Promise.race([run(), limit]); }
+  try { return await Promise.race([run(deadline.signal), limit]); }
   finally { if (timer) clearTimeout(timer); if (onAbort) signal.removeEventListener("abort", onAbort); }
 }
 
@@ -163,7 +168,7 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
     await stage(job, "synchronizing", "Creating an isolated native Audiotool project");
     throwIfAborted(signal, "Native synchronization interrupted");
     try {
-      const created = await boundedNativeWait(() => client.projects.createProject({ project: { displayName: `Pocket Producer · ${revision.document.title.slice(0, 72)} · v${revision.ordinal}` } }), job, signal, "native project create");
+      const created = await boundedNativeWait((deadline) => client.projects.createProject({ project: { displayName: `Pocket Producer · ${revision.document.title.slice(0, 72)} · v${revision.ordinal}` } }, { signal: deadline }), job, signal, "native project create");
       if (created instanceof Error || !created.project?.name) throw new Error("Audiotool project creation did not return a durable identity");
       remoteName = created.project.name;
       await advanceNativeSync(job, "create_in_flight", "created", { remoteProjectName: created.project.name });

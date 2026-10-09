@@ -24,7 +24,8 @@ export function toNexusTicks(canonicalTicks: number): number {
 type WritableDocument = Pick<SyncedDocument, "modify" | "queryEntities">;
 export interface NativeRemoteDocument extends WritableDocument { start(): Promise<void>; stop(): Promise<void>; dawUrl: string }
 export interface NativeRemoteClient {
-  projects: { createProject(request: { project: { displayName: string } }): Promise<{ project?: { name: string } } | Error> };
+  // The SDK retries an unavailable host until `signal` aborts.
+  projects: { createProject(request: { project: { displayName: string } }, options?: { signal?: AbortSignal }): Promise<{ project?: { name: string } } | Error> };
   samples: { upload(options: { file: ArrayBuffer; displayName: string; bpm: number; kind: "loop"; visibility: "unlisted"; tags: string[] }, signal?: AbortSignal): Promise<{ uploaded: Promise<unknown>; ready: Promise<{ name: string; durationSeconds?: number } | Error> } | Error> };
   open(project: string): Promise<NativeRemoteDocument>;
 }

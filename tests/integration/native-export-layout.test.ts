@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createOfflineDocument } from "@pocket/core/test-support";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { advanceNativeSync, applyNativeSnapshot, beginNativeSync, canonicalHash, claimJobById, commitNativeRevision, createNativeJob, createProject, dispatchOutbox, finishNativeSync, getPool, heartbeat, jobSnapshot, nativeDocumentSchema, nativeSnapshot, nativeStructuralReadback, seedNativeDocument } from "@pocket/core";
-import { nativeSynchronization } from "@pocket/worker";
+import { boundedNativeWait, nativeSynchronization } from "@pocket/worker";
 
 let owner = "";
 beforeAll(async () => { owner = (await getPool().query("INSERT INTO app_user(provider_subject,display_name) VALUES($1,'Export layout test') RETURNING id", [randomUUID()])).rows[0].id; });
@@ -48,6 +48,23 @@ async function setup() {
   }, awaitTokenPersistence: async () => {} };
   return { project, revision, document, newCopyJob, offline, connection, creates: () => creates };
 }
+
+it("stops the SDK's endless retry when a bounded remote wait gives up", async () => {
+  let attempts = 0, aborted = false;
+  // Like the Audiotool SDK on an unresolvable host: retry until the call's signal aborts.
+  const sdkLike = async (signal: AbortSignal) => {
+    while (!signal.aborted) { attempts++; await new Promise((resolve) => setTimeout(resolve, 20)); }
+    aborted = true;
+    return new Error("createProject was aborted");
+  };
+  const job = { deadlineAt: new Date(Date.now() + 150).toISOString() } as Parameters<typeof boundedNativeWait>[1];
+  await expect(boundedNativeWait(sdkLike, job, new AbortController().signal, "native project create")).rejects.toThrow(/timed out after dispatch/);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  expect(aborted).toBe(true);
+  const settled = attempts;
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(attempts).toBe(settled);
+});
 
 it("pins new v9 copies before dispatch and verifies the separated layout through the worker", async () => {
   const test = await setup();
