@@ -3,6 +3,7 @@ import { AudioLines, Check, FolderOpen, LoaderCircle, Menu, Pause, Plus } from "
 import { Button } from "@/components/ui/button"
 import { Brand } from "@/components/brand"
 import { ConnectedAccount } from "@/components/connected-account"
+import { Fingerprint } from "@/components/fingerprint"
 import { RepositoryLink } from "@/components/repository-link"
 import { WelcomeRoom } from "@/components/welcome-room"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
@@ -158,7 +159,7 @@ export default function App({ onSignOut, listenerName, hostedAudiotool = false }
     <div className="rail-list" aria-label="Recent sessions">{projects.map((project) => {
       const status = project.workspaceStatus && project.workspaceStatus !== "new" ? project.workspaceStatus === "working" ? "Working" : project.workspaceStatus === "attention" ? "Paused" : "Ready" : null
       const StatusIcon = status === "Working" ? LoaderCircle : status === "Paused" ? Pause : Check
-      return <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === snapshot?.project.id ? "page" : undefined} title={`${project.title}${status ? ` · ${status}` : ""}`} onClick={() => void chooseProject(project.id)}><span className="rail-session-title">{project.title}</span>{status ? <><StatusIcon className={`rail-session-status${status === "Working" ? " is-working" : ""}`} size={14} aria-hidden="true" /><span className="sr-only"> · {status}</span></> : null}</button>
+      return <button key={project.id} className="rail-session" data-project-id={project.id} aria-current={project.id === snapshot?.project.id ? "page" : undefined} title={`${project.title}${status ? ` · ${status}` : ""}`} onClick={() => void chooseProject(project.id)}><Fingerprint value={project.fingerprint} className="rail-thumb" /><span className="rail-session-title">{project.title}</span>{status ? <><StatusIcon className={`rail-session-status${status === "Working" ? " is-working" : ""}`} size={14} aria-hidden="true" /><span className="sr-only"> · {status}</span></> : null}</button>
     })}</div>
   </>
 

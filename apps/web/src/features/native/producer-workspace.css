@@ -42,7 +42,8 @@
 .producer-message-request { padding: 12px; margin-block: 8px; background: var(--secondary); border: 0; border-radius: 12px; }
 .producer-message-saved { border-left: 2px solid var(--forest); padding-left: 12px; }
 .producer-empty { color: var(--muted-foreground); font-size: .8rem; line-height: 1.6; }
-.producer-new-updates { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); background: var(--card); }
+.producer-new-updates { position: sticky; bottom: 0; z-index: 1; display: flex; justify-content: center; padding: 14px 0 8px; background: linear-gradient(to bottom, color-mix(in srgb, var(--card) 0%, transparent), var(--card) 45%); }
+.producer-new-updates [data-slot="button"] { background: var(--card); }
 .producer-current { padding: 12px 20px; background: color-mix(in srgb, var(--forest) 5%, var(--card)); font-size: .78rem; }
 .producer-current p { color: var(--muted-foreground); font-size: .7rem; margin: 6px 0 10px; }
 .producer-panel .job-status { margin: 12px; padding: 14px; font-size: .78rem; }

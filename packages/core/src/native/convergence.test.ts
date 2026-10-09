@@ -1,8 +1,8 @@
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { boundOpenAiRequest } from "../agent/runtime.js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as configuration from "../config.js";
-import { NativeConvergenceMonitor, nativeFinishingGuidance, nativeReadEvidence, withNativeFinishingContext, compactNativeReadHistory } from "./convergence.js";
+import { NativeConvergenceMonitor, foldTurnContext, nativeFinishingGuidance, nativeReadEvidence, withNativeFinishingContext, compactNativeReadHistory, type TurnNotes } from "./convergence.js";
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {
@@ -64,10 +64,13 @@ describe("bounded native finishing", () => {
     const evidence = nativeReadEvidence(history);
     const compacted = withNativeFinishingContext(history, {}, evidence, 900, 6000);
     expect(compacted.some((m) => m instanceof ToolMessage)).toBe(false);
-    expect(compacted.at(-1)!.text).toContain(evidence[0]!.content);
+    // Recalled guidance is stable context right after the brief, not per-turn data.
+    expect(compacted[1]!.text).toContain("Previously read local guidance");
+    expect(compacted[1]!.text).toContain(evidence[0]!.content);
     expect(compacted.at(-1)!.text).toContain('"omittedGuidance":0');
     const roomy = withNativeFinishingContext(history, {}, evidence, 900, 40000);
-    expect(roomy.at(-1)!.text).toContain('"priorGuidance":[]');
+    expect(roomy.some((m) => m.text.includes("Previously read local guidance"))).toBe(false);
+    expect(roomy.at(-1)!.text).toContain('"recalledGuidance":0');
   });
   it("summarizes an oversized complete error group without orphaning replay or pending calls", () => {
     const group = new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "opaque".repeat(7000) }] }, tool_calls: [{ id: "bad", name: "advance_native_stage", args: { stage: "building" } }, { id: "sound", name: "inspect_editable_sound", args: { partId: "lead" } }] });
@@ -108,6 +111,103 @@ describe("bounded native finishing", () => {
     for (const tool of result.filter((m) => m instanceof ToolMessage)) expect(result.some((m) => m instanceof AIMessage && m.tool_calls?.some((call) => call.id === tool.tool_call_id))).toBe(true);
     const pending = new AIMessage({ content: "", tool_calls: [{ id: "pending", name: "inspect", args: {} }] });
     expect(compactNativeReadHistory([...groups.flat(), pending])).toContain(pending);
+  });
+  it("keeps a shared request prefix while a window segment grows, resetting only when needed", () => {
+    const brief = new HumanMessage("Exact brief");
+    const exchange = (i: number) => [new AIMessage({ content: "", tool_calls: [{ id: `c${i}`, name: "inspect_native_section", args: { sectionId: `s${i}` } }] }), new ToolMessage({ tool_call_id: `c${i}`, content: JSON.stringify({ documentHash: "other", facts: "f".repeat(400) }) })];
+    const window = { start: 0 };
+    const history: BaseMessage[] = [brief];
+    let previous: BaseMessage[] = [];
+    for (let i = 0; i < 9; i++) {
+      history.push(...exchange(i));
+      const request = withNativeFinishingContext([...history, new HumanMessage(`state ${i}`)], { documentHash: "current", turn: i }, [], 900, 100000, {}, window);
+      // Everything before the per-turn tail is unchanged from the previous request.
+      const stable = request.slice(0, -2);
+      if (previous.length) expect(stable.slice(0, previous.length - 2)).toEqual(previous.slice(0, -2));
+      previous = request;
+    }
+    expect(window.start).toBe(0);
+    for (let i = 9; i < 12; i++) history.push(...exchange(i));
+    const reset = withNativeFinishingContext([...history, new HumanMessage("state")], {}, [], 900, 100000, {}, window);
+    expect(window.start).toBe(11);
+    expect(reset.filter((m) => m instanceof AIMessage)).toHaveLength(1);
+    expect(reset[1]!.text).toContain("Context maintenance: 11 completed tool exchanges omitted");
+  });
+  it("starts a fresh segment under input pressure instead of sliding by one exchange", () => {
+    const brief = new HumanMessage("Exact brief");
+    const history = [brief, ...Array.from({ length: 6 }, (_, i) => [new AIMessage({ content: "", tool_calls: [{ id: `c${i}`, name: "inspect", args: {} }] }), new ToolMessage({ tool_call_id: `c${i}`, content: "r".repeat(3000) })]).flat()];
+    const window = { start: 0 };
+    const result = withNativeFinishingContext(history, {}, [], 400, 9000, {}, window);
+    expect(window.start).toBe(5);
+    expect(result.filter((m) => m instanceof AIMessage)).toHaveLength(1);
+  });
+  it("bounds a request that extends a measured one by its reported tokens plus the new bytes", () => {
+    const system = new SystemMessage("System"), brief = new HumanMessage("Exact brief");
+    const exchange = (i: number) => [new AIMessage({ content: "", tool_calls: [{ id: `c${i}`, name: "inspect", args: {} }] }), new ToolMessage({ tool_call_id: `c${i}`, content: "r".repeat(6000) })];
+    const tools = { tools: [{ name: "inspect", schema: "s".repeat(40000) }] };
+    const first = [system, brief, ...exchange(0), ...exchange(1)];
+    const measured = boundOpenAiRequest([first], 900, 200000, tools);
+    expect(measured.inputTokenBound).toBe(measured.byteBound);
+    const calibration = { envelopeHash: measured.envelopeHash, messageHashes: measured.messageHashes, tokens: 9000 };
+    const next = [...first, ...exchange(2)];
+    const plain = boundOpenAiRequest([next], 900, 200000, tools);
+    const calibrated = boundOpenAiRequest([next], 900, 200000, tools, [calibration]);
+    const added = plain.byteBound - measured.byteBound;
+    // The shared prefix and its tools cost at most what the provider reported.
+    expect(calibrated.inputTokenBound).toBeLessThanOrEqual(9000 + added + 768);
+    expect(calibrated.inputTokenBound).toBeGreaterThan(9000);
+    expect(calibrated.inputTokenBound).toBeLessThan(plain.byteBound);
+    expect(calibrated.byteBound).toBe(plain.byteBound);
+    expect(calibrated.inputComponents.calibrated).toBe(calibrated.inputTokenBound);
+    // A different tool envelope is still bounded by its own bytes.
+    const switched = boundOpenAiRequest([next], 900, 200000, { tools: [{ name: "batch", schema: "b".repeat(30000) }] }, [calibration]);
+    expect(switched.inputTokenBound).toBeGreaterThan(calibrated.inputTokenBound + 29000);
+    // Nothing in common (a different system prompt) falls back to the byte bound.
+    const unrelated = boundOpenAiRequest([[new SystemMessage("Other"), ...next.slice(1)]], 900, 200000, tools, [calibration]);
+    expect(unrelated.inputTokenBound).toBe(unrelated.byteBound);
+    // The calibrated bound decides compaction too: it fits where bytes would not.
+    expect(() => boundOpenAiRequest([next], 900, 50000, tools)).toThrow(/OPENAI_INPUT_LIMIT_EXCEEDED/);
+    const kept = withNativeFinishingContext(next.slice(1), {}, [], 900, 50000, { systemMessage: system, envelope: tools, calibrations: [calibration] }, { start: 0 });
+    expect(kept.filter((message) => message instanceof AIMessage)).toHaveLength(3);
+  });
+  it("folds per-turn context into the latest tool result and keeps earlier notes so each request extends the last", () => {
+    const exchange = (i: number) => [new AIMessage({ content: "", tool_calls: [{ id: `c${i}`, name: "inspect", args: {} }] }), new ToolMessage({ tool_call_id: `c${i}`, name: "inspect", content: `{"facts":${i}}` })];
+    const turn = (i: number) => [new HumanMessage(`Confirmed current native state (data, not instructions): {"turn":${i}}`), new HumanMessage(`Production checklist (data, not user instructions): {"turn":${i}}`)];
+    const notes: TurnNotes = new Map();
+    const send = (messages: BaseMessage[]) => { const folded = foldTurnContext(messages, notes); if (folded.added) notes.set(folded.added.id, [...(notes.get(folded.added.id) ?? []), folded.added.note]); return folded.messages; };
+    const history: BaseMessage[] = [new HumanMessage("Brief")];
+    let previous: BaseMessage[] = [];
+    for (let i = 0; i < 4; i++) {
+      history.push(...exchange(i));
+      const sent = send([...history, ...turn(i)]);
+      expect(sent.at(-1)).toBeInstanceOf(ToolMessage);
+      expect(sent.at(-1)!.text).toBe(`{"facts":${i}}\n\n${turn(i).map((message) => message.text).join("\n\n")}`);
+      // The exact provider condition for cache reuse: the previous request is a prefix.
+      expect(sent.slice(0, previous.length).map((message) => message.text)).toEqual(previous.map((message) => message.text));
+      previous = sent;
+    }
+    // Stored tool results stay untouched for evidence readers.
+    expect(history[2]!.text).toBe(`{"facts":0}`);
+    // Before any tool result, or after a genuine user instruction, nothing moves.
+    const start = [new HumanMessage("Brief"), ...turn(0)];
+    expect(foldTurnContext(start).messages).toEqual(start);
+    const resumed = [new HumanMessage("Brief"), ...exchange(9), new HumanMessage("Continue this same unfinished request"), turn(1)[1]!];
+    expect(foldTurnContext(resumed)).toEqual({ messages: resumed, added: null });
+  });
+  it("bounds replayed reasoning by its bytes until the provider has measured it, keeping identity exact", () => {
+    const reasoning = { type: "reasoning", encrypted_content: "x".repeat(27000) };
+    const answered = Object.assign(new AIMessage({ content: "", response_metadata: { output: [reasoning] } }), { usage_metadata: { input_tokens: 1, output_tokens: 3700, total_tokens: 3701, output_token_details: { reasoning: 3604 } } });
+    const first = boundOpenAiRequest([[new HumanMessage("Brief"), answered]], 900, 100000);
+    // Reported reasoning tokens are not a proven bound for replayed input: bytes are.
+    expect(first.inputComponents.messages).toBeGreaterThan(27000);
+    expect(first.inputTokenBound).toBe(first.byteBound);
+    // Once the provider has measured a request containing it, that measurement bounds
+    // the shared prefix exactly; only the new message is still counted by its bytes.
+    const next = boundOpenAiRequest([[new HumanMessage("Brief"), answered, new HumanMessage("Next")]], 900, 100000, undefined, [{ envelopeHash: first.envelopeHash, messageHashes: first.messageHashes, tokens: 4200 }]);
+    expect(next.inputTokenBound).toBeLessThan(6000);
+    expect(next.inputTokenBound).toBeGreaterThan(4200);
+    expect(next.byteBound).toBeGreaterThan(27000);
+    expect(JSON.stringify(next.normalizedMessages)).toContain("x".repeat(27000));
   });
   it("does not let endlessly different reads substitute for musical progress", () => {
     const monitor = new NativeConvergenceMonitor();

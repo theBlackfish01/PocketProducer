@@ -83,10 +83,12 @@ export class CompatibleProducerModel extends BaseChatModel<Options> {
   }
 }
 
-export function producerChatModel(model: string, output: number, effort: "low" | "medium" | "high" | "xhigh", timeout: number): BaseChatModel {
+/** cacheKey groups requests that share a prompt prefix (one job, or one reviewer
+ * prompt) so the provider can reuse cached input. It carries no user content. */
+export function producerChatModel(model: string, output: number, effort: "low" | "medium" | "high" | "xhigh", timeout: number, cacheKey?: string): BaseChatModel {
   // The pinned LangChain version only recognizes o*/gpt-5 as reasoning models.
   // Forward Luna's effort explicitly rather than silently dropping xhigh on the wire.
-  if (modelProvider(model) === "openai") return new ChatOpenAI({ model, apiKey: getConfig().OPENAI_API_KEY, useResponsesApi: true, reasoning: { effort }, ...(model === "gpt-6-luna" ? { modelKwargs: { reasoning: { effort } } } : {}), maxTokens: output, maxRetries: 0, timeout });
+  if (modelProvider(model) === "openai") return new ChatOpenAI({ model, apiKey: getConfig().OPENAI_API_KEY, useResponsesApi: true, reasoning: { effort }, ...(model === "gpt-6-luna" ? { modelKwargs: { reasoning: { effort } } } : {}), maxTokens: output, maxRetries: 0, timeout, ...(cacheKey ? { promptCacheKey: cacheKey } : {}) });
   if (effort === "xhigh") throw new Error("xhigh reasoning requires an OpenAI producer");
   return new CompatibleProducerModel(model, output, effort, timeout);
 }

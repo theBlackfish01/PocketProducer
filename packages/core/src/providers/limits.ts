@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { getConfig } from "../config.js";
 import type { ModelProvider } from "./models.js";
+import { coded } from "../errors.js";
 
 export function providerPoolLimit(provider: ModelProvider): number {
   const c = getConfig();
@@ -43,5 +44,5 @@ export async function assertSharedUsage(client: pg.PoolClient, ownerId: string, 
   const blocked = await sharedUsageBlock(client, ownerId, provider, reserve, model);
   // LangChain may reconstruct callback errors and discard custom properties.
   // Include the exact rejected reservation in the private machine-readable code.
-  if (blocked) throw new Error(`MODEL_BUDGET_EXCEEDED:${blocked}${blocked === "PROVIDER" ? `:${provider}` : blocked === "MODEL" ? `:${model}:reservation=${reserve}` : ""}`);
+  if (blocked) throw coded(`MODEL_BUDGET_EXCEEDED:${blocked}${blocked === "PROVIDER" ? `:${provider}` : blocked === "MODEL" ? `:${model}:reservation=${reserve}` : ""}`, { pool: blocked, provider, ...(blocked === "MODEL" && model ? { model, reservation: reserve } : {}) });
 }

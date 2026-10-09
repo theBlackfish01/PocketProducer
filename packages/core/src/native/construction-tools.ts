@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalHash } from "../domain/hash.js";
 import { analyzeNativeSection, nativeDocumentSchema, nativeOperationSchema, nativeParameterRanges, automatableDeviceFields, automatableEffectFields, type NativeDocument, type NativeOperation } from "./model.js";
+import { NativeUnknownIdError } from "./errors.js";
 
 const stepKey = z.string().regex(/^[a-z0-9-]{1,96}$/);
 const id = nativeDocumentSchema.shape.parts.element.shape.id;
@@ -64,7 +65,7 @@ export const soundBatchSchema = z.object({ stepKey,
 export const soundInspectionSchema = z.object({ partId: z.string(), query: z.string().max(120).default(""), offset: z.number().int().min(0).default(0) });
 export function inspectEditableSound(document: NativeDocument, partId: string, query = "", offset = 0) {
   const part = document.parts.find((item) => item.id === partId);
-  if (!part) throw new Error(`Unknown part ${partId}`);
+  if (!part) throw new NativeUnknownIdError("part", partId);
   const controls = (type: keyof typeof nativeParameterRanges, values: Record<string, number>, prefix: string, allowed: Set<string> | undefined) => Object.entries(nativeParameterRanges[type]).map(([path, range]) => ({
     parameter: path, range, integer: /Index$|Count$/.test(path),
     unit: /Hz$/.test(path) ? "Hz" : /Ms$/.test(path) ? "ms" : /Db$/.test(path) ? "dB" : /Semitones$/.test(path) ? "semitones" : "SDK value",

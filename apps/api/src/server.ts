@@ -9,10 +9,10 @@ import { z } from "zod";
 import { registerAuth } from "./auth.js";
 import { registerWeb } from "./web.js";
 import { registerActivityRoutes } from "./activity-stream.js";
-import { assistMusicalPrompt, byteRange, clearConnectedProfile, connectedAudiotoolProfile, fundedProducerModels, selectableProducerModelSchema as producerModelSchema, type OAuthFetch } from "@pocket/core";
+import { assistMusicalPrompt, byteRange, issue, clearConnectedProfile, connectedAudiotoolProfile, fundedProducerModels, selectableProducerModelSchema as producerModelSchema, type OAuthFetch } from "@pocket/core";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createNativeLibrary, createProject, decodeWav, encodeWav, deleteAudiotoolSession, getConfig, getPool, getProjectSnapshot,
-  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listNativeSoundFeedback, listProjects, nativeDraftView, nativePresetRecipes, nativeSnapshot, providerAvailability, readNativeRecipe, requireProject, resolveNativePreservation, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, saveNativeSoundFeedback, selectNativeRevision, storeImmutableAudio
+  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listNativeSoundFeedback, listProjects, nativeDraftView, nativePresetRecipes, nativeSnapshot, providerAvailability, readNativeRecipe, requireProject, interpretNativeDirection, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, saveNativeSoundFeedback, selectNativeRevision, storeImmutableAudio
 } from "@pocket/core";
 
 export async function createApi(oauthTransport?: OAuthFetch) {
@@ -31,8 +31,9 @@ app.setErrorHandler((error: unknown, request, reply) => {
   const statusCode = statusFromError ?? (error instanceof z.ZodError ? 422 : 500);
   const name = error instanceof Error ? error.name : "UnknownError";
   const message = error instanceof Error ? error.message : "Unknown request failure";
+  const code = statusCode !== 500 && typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : null;
   request.log.error({ err: { name, message }, requestId: request.id }, "request failed");
-  void reply.status(statusCode).send({ code: statusCode === 500 ? "INTERNAL_ERROR" : "INVALID_REQUEST", message: statusCode === 500 ? "The request could not be completed." : message, requestId: request.id, retryable: statusCode >= 500 });
+  void reply.status(statusCode).send({ code: statusCode === 500 ? "INTERNAL_ERROR" : code ?? "INVALID_REQUEST", message: statusCode === 500 ? "The request could not be completed." : message, requestId: request.id, retryable: statusCode >= 500 });
 });
 
 app.get("/api/v1/status", async (request) => {
@@ -172,13 +173,13 @@ app.get("/api/v1/projects/:projectId/native", async (request) => {
   return nativeSnapshot(request.ownerId, projectId);
 });
 
-app.post("/api/v1/projects/:projectId/native/preservation-preview", async (request) => {
+// A small paid check at submit time: the direction's explicit requirements are
+// read once, validated against the selected version and captured for the job.
+app.post("/api/v1/projects/:projectId/native/interpretations", async (request) => {
+  if (request.headers.origin !== config.APP_ORIGIN) throw Object.assign(new Error("Direction checks require the configured origin"), { statusCode: 403 });
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  const body = z.object({ direction: z.string().trim().min(1).max(32_768), expectedNativeHeadId: idSchema, targetSectionId: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).nullable() }).parse(request.body);
-  const snapshot = await nativeSnapshot(request.ownerId, projectId);
-  if (!snapshot.current || snapshot.currentRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("The selected arrangement changed; refresh before revising"), { statusCode: 409 });
-  if (body.targetSectionId && !snapshot.current.document.sections.some((section) => section.id === body.targetSectionId)) throw Object.assign(new Error("Selected section no longer exists"), { statusCode: 409 });
-  return { revisionId: snapshot.currentRevisionId, sectionId: body.targetSectionId, ...resolveNativePreservation(body.direction, snapshot.current.document, body.targetSectionId) };
+  const key = idSchema.parse(request.headers["idempotency-key"]);
+  return interpretNativeDirection(request.ownerId, projectId, key, request.body);
 });
 
 app.get("/api/v1/projects/:projectId/native/requests/:jobId/draft", async (request) => {
@@ -188,7 +189,7 @@ app.get("/api/v1/projects/:projectId/native/requests/:jobId/draft", async (reque
 
 app.post("/api/v1/projects/:projectId/native/constructions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
-  const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null() }).parse(request.body);
+  const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), sourceAssetIds: z.array(idSchema).max(24).default([]), expectedNativeHeadId: z.null(), interpretationId: idSchema.optional() }).parse(request.body);
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId: request.ownerId, projectId, kind: "native-generation", idempotencyKey, request: body, expectedHeadId: null, defaultModel: "gpt-6-luna" });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });
@@ -197,8 +198,8 @@ app.post("/api/v1/projects/:projectId/native/constructions", async (request, rep
 app.post("/api/v1/projects/:projectId/native/revisions", async (request, reply) => {
   const { projectId } = z.object({ projectId: idSchema }).parse(request.params);
   const partId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
-  const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: partId.optional(), targetSectionId: partId.optional(), protectedPartIds: z.array(partId).max(24).optional(), protectionChange: z.object({ expectedPartIds: z.array(partId).max(24), desiredPartIds: z.array(partId).max(24) }).optional(), sourceAssetIds: z.array(idSchema).max(24).default([]) }).parse(request.body);
-  if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw Object.assign(new Error("Revise the currently selected native version; restore an older one first"), { statusCode: 409 });
+  const body = z.object({ direction: z.string().trim().min(3).max(32_768), model: producerModelSchema.optional(), profile: z.enum(["standard", "extended"]).default("standard"), baseNativeRevisionId: idSchema, expectedNativeHeadId: idSchema, targetPartId: partId.optional(), targetSectionId: partId.optional(), protectedPartIds: z.array(partId).max(24).optional(), protectionChange: z.object({ expectedPartIds: z.array(partId).max(24), desiredPartIds: z.array(partId).max(24) }).optional(), sourceAssetIds: z.array(idSchema).max(24).default([]), interpretationId: idSchema.optional() }).parse(request.body);
+  if (body.baseNativeRevisionId !== body.expectedNativeHeadId) throw issue("HEAD_CHANGED", "Revise the currently selected native version; restore an older one first", 409);
   const idempotencyKey = z.string().min(8).max(160).parse(request.headers["idempotency-key"]);
   const job = await createNativeJob({ ownerId: request.ownerId, projectId, kind: "native-revision", idempotencyKey, request: body, expectedHeadId: body.expectedNativeHeadId, defaultModel: "gpt-6-luna" });
   return reply.status(202).send({ jobId: job.id, duplicate: job.duplicate });

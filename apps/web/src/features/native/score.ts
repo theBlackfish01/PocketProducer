@@ -6,7 +6,9 @@ const stable = (value: unknown): string => JSON.stringify(value, (_key, item: un
 
 export interface ScoreNote extends NativeNote { key: string; partId: string; origin: "free" | "motif"; motifId?: string; familyId?: string; placementId?: string; repeat?: number }
 export interface ScoreBlock { key: string; partId: string; startTick: number; endTick: number; label: string; kind: "motif" | "owned-clip" | "library-clip"; familyId?: string; derivedFromMotifId?: string; sourceStartSeconds?: number; sourceDurationSeconds?: number; playbackMode?: string; playbackRate?: number; stretchMode?: string; pitchShiftSemitones?: number; gain?: number }
-export interface ScoreLane { partId: string; name: string; role: string; density: number[]; blocks: ScoreBlock[]; totalNoteOnsets: number; totalClips: number }
+/** One SVG path of stored note spans in lane coordinates (0–1000 × 21–43). */
+export interface ScoreContour { path: string; low: number; high: number; segments: number }
+export interface ScoreLane { partId: string; name: string; role: string; density: number[]; blocks: ScoreBlock[]; totalNoteOnsets: number; totalClips: number; contour: ScoreContour | null }
 export interface ScoreOverview { lanes: ScoreLane[]; noteOnsets: number; bars: number; truncated: boolean }
 
 export function motifFamily(document: NativeDocument, motifId: string): string | null {
@@ -21,8 +23,13 @@ export function projectScoreOverview(document: NativeDocument): ScoreOverview {
   const motifs = new Map(document.motifs.map((motif) => [motif.id, motif]))
   const lanes = document.parts.map((part): ScoreLane => {
     const density = Array.from({ length: document.bars }, () => 0)
-    const add = (tick: number) => { const bar = Math.floor(tick / width); if (bar >= 0 && bar < density.length) { density[bar]++; noteOnsets++ } }
-    for (const note of part.notes) add(note.startTick)
+    const spans: Array<[number, number, number]> = []
+    const add = (tick: number, duration = 0, pitch?: number) => {
+      const bar = Math.floor(tick / width)
+      if (bar >= 0 && bar < density.length) { density[bar]++; noteOnsets++ }
+      if (pitch !== undefined && spans.length <= rawContourLimit) spans.push([tick, tick + duration, pitch])
+    }
+    for (const note of part.notes) add(note.startTick, note.durationTicks, note.pitch)
     const blocks: ScoreBlock[] = []
     let visits = 0
     for (const placement of part.placements) {
@@ -31,15 +38,47 @@ export function projectScoreOverview(document: NativeDocument): ScoreOverview {
       blocks.push({ key: `${part.id}:${placement.id}`, partId: part.id, startTick: placement.startTick, endTick: placement.startTick + placement.repeats * motif.lengthTicks, label: motif.name, kind: "motif", familyId: motifFamily(document, motif.id) ?? undefined, derivedFromMotifId: motif.derivedFromMotifId })
       for (let repeat = 0; repeat < placement.repeats && visits < 100_000; repeat++) for (const note of motif.notes) {
         if (visits++ >= 100_000) { truncated = true; break }
-        add(placement.startTick + repeat * motif.lengthTicks + note.startTick)
+        add(placement.startTick + repeat * motif.lengthTicks + note.startTick, note.durationTicks, note.pitch + placement.transpose)
       }
       if (visits >= 100_000) truncated = true
     }
     for (const clip of part.sourceRegions) blocks.push({ key: `${part.id}:${clip.id}`, partId: part.id, startTick: clip.startTick, endTick: clip.startTick + clip.durationTicks, label: "Your sound", kind: "owned-clip", sourceStartSeconds: clip.sourceStartSeconds, sourceDurationSeconds: clip.sourceDurationSeconds, playbackMode: clip.playbackMode, playbackRate: clip.playbackRate, stretchMode: clip.stretchMode, pitchShiftSemitones: clip.pitchShiftSemitones, gain: clip.gain })
     for (const clip of part.libraryRegions ?? []) blocks.push({ key: `${part.id}:${clip.id}`, partId: part.id, startTick: clip.startTick, endTick: clip.startTick + clip.durationTicks, label: clip.displayName, kind: "library-clip", sourceStartSeconds: clip.sourceStartSeconds, sourceDurationSeconds: clip.sourceDurationSeconds, playbackMode: clip.playbackMode, playbackRate: clip.playbackRate, stretchMode: clip.stretchMode, pitchShiftSemitones: clip.pitchShiftSemitones, gain: clip.gain })
-    return { partId: part.id, name: part.name, role: part.role, density, blocks, totalNoteOnsets: density.reduce((sum, count) => sum + count, 0), totalClips: part.sourceRegions.length + (part.libraryRegions?.length ?? 0) }
+    return { partId: part.id, name: part.name, role: part.role, density, blocks, totalNoteOnsets: density.reduce((sum, count) => sum + count, 0), totalClips: part.sourceRegions.length + (part.libraryRegions?.length ?? 0), contour: spans.length > rawContourLimit ? null : laneContour(spans, width * document.bars) }
   })
   return { lanes, noteOnsets, bars: document.bars, truncated }
+}
+
+const rawContourLimit = 8_000
+const mergedContourLimit = 1_600
+/** Stored pitch and timing only, merged at display resolution. Too-dense lanes
+ * return null so the caller keeps the bounded density view instead. */
+export function laneContour(spans: Array<[number, number, number]>, endTick: number): ScoreContour | null {
+  if (!spans.length || endTick <= 0) return null
+  let low = Infinity, high = -Infinity
+  for (const [, , pitch] of spans) { low = Math.min(low, pitch); high = Math.max(high, pitch) }
+  const rows = new Map<number, Array<[number, number]>>()
+  for (const [start, stop, pitch] of spans) {
+    if (start >= endTick) continue
+    const y = high === low ? 32 : Math.round((43 - (pitch - low) / (high - low) * 22) * 2) / 2
+    const x1 = Math.round(start / endTick * 10_000) / 10
+    const x2 = Math.max(x1 + .3, Math.round(Math.min(stop, endTick) / endTick * 10_000) / 10)
+    const row = rows.get(y) ?? []
+    row.push([x1, x2]); rows.set(y, row)
+  }
+  let path = "", segments = 0
+  for (const [y, row] of rows) {
+    row.sort((a, b) => a[0] - b[0])
+    let [from, to] = row[0]
+    const flush = () => { path += `M${from} ${y}H${Number(to.toFixed(1))}`; segments++ }
+    for (const [start, stop] of row.slice(1)) {
+      if (start <= to + .4) to = Math.max(to, stop)
+      else { flush(); from = start; to = stop }
+    }
+    flush()
+    if (segments > mergedContourLimit) return null
+  }
+  return { path, low, high, segments }
 }
 
 export function materializedSectionNotes(document: NativeDocument, partId: string, fromTick: number, toTick: number, limit = 320): { notes: ScoreNote[]; total: number; truncated: boolean; pitchRange: [number, number] | null } {

@@ -1,0 +1,162 @@
+/* Wayfinding: fingerprints, the section ruler, feed pointers, construction progress,
+   pinned notes and the session header. These present stored structure only; none of
+   them represents loudness, audio or quality. */
+
+/* Fingerprints: decorative outlines beside real text. */
+.fingerprint { display: block; flex: none; }
+.fingerprint path { fill: none; stroke: #697d68; stroke-width: 2; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.fingerprint .role-percussion { stroke: #c84f28; }
+.fingerprint .role-bass { stroke: #315f4c; }
+.fingerprint :is(.role-melody, .role-lead) { stroke: #a66436; }
+.fingerprint :is(.role-fx, .role-source) { stroke: #9e7448; }
+.fingerprint.is-empty { border-radius: 4px; background: color-mix(in srgb, var(--forest) 6%, transparent); }
+.fingerprint.is-empty path { stroke: color-mix(in srgb, var(--forest) 32%, transparent); stroke-width: 1.5; }
+.rail-thumb { width: 30px; height: 20px; border-radius: 4px; }
+.rail-session[aria-current="page"] .fingerprint.is-empty { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+
+/* Session header: one strong handoff, quiet tools beside it. */
+.producer-workspace-header { flex-wrap: wrap; align-items: flex-end; margin-bottom: 20px; }
+.workspace-identity { flex: 1 1 320px; min-width: 0; }
+.workspace-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 16px; }
+.producer-room .workspace-actions .workspace-toolbar { flex-wrap: nowrap; gap: 2px; padding: 0; margin: 0; }
+/* The global border-color rule outranks Tailwind's border-transparent; quiet tools opt out. */
+.workspace-actions .workspace-toolbar > button { border-color: transparent; color: var(--forest); font-weight: 560; }
+.workspace-actions .workspace-toolbar > button:hover { background: color-mix(in srgb, var(--forest) 8%, transparent); }
+.workspace-actions .workspace-toolbar > [data-slot="dropdown-menu-trigger"] { margin-left: 0; }
+.workspace-handoff { display: grid; justify-items: end; gap: 6px; }
+.workspace-handoff .handoff-action { padding-inline: 18px; background: var(--forest); color: #fffdf7; box-shadow: 0 6px 16px rgb(37 72 59 / 18%); }
+.workspace-handoff .handoff-action:hover { background: #1c3a2f; }
+.workspace-handoff small { color: var(--muted-foreground); font-size: .7rem; }
+
+/* The form ruler is the section navigator in the overview. */
+.score-heading-row, .score-form-ruler { min-height: 46px; }
+.score-form-ruler .score-ruler-section { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 2px; min-width: 0; min-height: 0; padding: 4px 8px; overflow: hidden; border: 0; border-left: 1px solid #cbd7c9; background: transparent; color: #24473a; text-align: left; }
+.score-ruler-section strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; font-weight: 650; }
+.score-ruler-section small { width: auto; max-width: 100%; overflow: hidden; color: #55665a; text-overflow: ellipsis; white-space: nowrap; font-size: .6rem; }
+button.score-ruler-section { cursor: pointer; }
+button.score-ruler-section:hover { background: #e6eee0; }
+.score-ruler-section[data-active] { background: #e1ebde; box-shadow: inset 0 -3px #255843; }
+.score-form-strip { display: flex; align-items: stretch; gap: 8px; margin-bottom: 10px; }
+.score-form-strip > button { flex: none; min-height: 48px; }
+.score-form-strip-track { display: flex; flex: 1; min-width: 0; overflow-x: auto; border: 1px solid #d6ddd1; border-radius: 10px; background: #fbfcf7; scrollbar-width: thin; }
+.score-form-strip-track .score-section-choice { min-width: 92px; }
+/* Long section names wrap to two lines instead of disappearing behind an ellipsis. */
+.score-form-strip-track .score-section-choice strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.25; white-space: normal; overflow-wrap: anywhere; }
+.comparison-section-list [data-slot="button"] { height: auto; min-height: 32px; max-width: 200px; padding-block: 5px; line-height: 1.25; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+
+/* Short pieces fit the width; longer ones scroll with a fading trailing edge. */
+.score-canvas { --score-label: 190px; --score-bar: 28px; min-width: min(6400px, calc(var(--score-label) + var(--score-bars, 16) * var(--score-bar))); }
+.score-scroll-frame { position: relative; }
+.score-scroll-frame[data-more]::after { content: ""; position: absolute; top: 1px; right: 11px; bottom: 11px; width: 40px; background: linear-gradient(to right, rgb(255 253 247 / 0%), #fffdf7 85%); pointer-events: none; }
+.score-scroll-hint { margin: 6px 0 0; color: var(--muted-foreground); font-size: .72rem; }
+.score-form-strip-track .score-section-choice:last-child { border-right: 0; }
+
+/* Note contours: stored pitch and timing inside each part's own range. */
+.score-contour { fill: none; stroke: #bd6b42; stroke-width: 2.5; stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+.score-contour.role-percussion { stroke: #c84f28; }
+.score-contour.role-bass { stroke: #315f4c; }
+.score-contour:is(.role-melody, .role-lead) { stroke: #a66436; }
+.score-contour:is(.role-harmony, .role-texture) { stroke: #5f735e; }
+.score-contour:is(.role-fx, .role-source) { stroke: #9e7448; }
+.score-density-hit { fill: transparent; }
+
+/* Feed pointers: a temporary highlight, never a change scope. */
+.score-lane-picture, .score-detail-lane { position: relative; }
+.score-lane[data-highlighted] .score-part-label, .score-detail-lane[data-highlighted] > button { background: #f9e0d2; box-shadow: inset 3px 0 var(--primary); }
+.score-lane[data-highlighted] .score-lane-picture { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent); }
+.score-lane-picture .score-section-highlight { fill: rgb(184 63 25 / 8%); }
+:is(.score-ruler-section, .score-section-choice)[data-highlighted] { background: #f9e0d2; box-shadow: inset 0 -3px var(--primary); }
+.score-lane-flash { position: absolute; inset: 0; z-index: 1; border-radius: 2px; pointer-events: none; animation: score-flash 1.6s ease-out both; }
+@keyframes score-flash { from { background: rgb(232 160 90 / 45%); } to { background: rgb(232 160 90 / 0%); } }
+.producer-heading:has(.producer-view-arrangement) { align-items: center; }
+.producer-heading .producer-view-arrangement { margin: -6px -8px -6px auto; padding-inline: 10px; border-color: transparent; color: var(--forest); }
+.producer-message-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.producer-locate { padding-inline: 6px; border-color: transparent; color: var(--forest); }
+
+/* Pinned notes. */
+.score-lane-picture[data-pinnable] { cursor: crosshair; user-select: none; }
+.score-pin { fill: rgb(184 63 25 / 9%); stroke: var(--primary); stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.score-pin-selection { fill: rgb(184 63 25 / 15%); stroke: var(--primary); stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.pin-tray { padding: 14px 20px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--primary) 4%, var(--card)); font-size: .78rem; }
+.pin-tray-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pin-tray h3 { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--forest); font-size: .78rem; font-weight: 650; }
+.pin-tray ul { display: grid; gap: 6px; max-height: 220px; margin: 8px 0 10px; padding: 0; overflow-y: auto; list-style: none; }
+.pin-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 8px 4px 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+.pin-item > span { display: grid; gap: 2px; min-width: 0; }
+.pin-item strong { color: var(--forest); font-size: .74rem; }
+.pin-item small { color: var(--muted-foreground); font-size: .68rem; }
+.pin-item:is(.is-kept, .is-missing) .pin-note { color: var(--muted-foreground); }
+.pin-note { overflow-wrap: anywhere; line-height: 1.45; }
+.pin-tray .section-footnote { margin: 8px 0 0; }
+.pin-tray :is(.pin-tray-heading, .pin-item) button { border-color: transparent; }
+.pin-dialog[data-slot="dialog-content"] { width: min(460px, calc(100vw - 32px)); max-width: 460px; gap: 16px; padding: 22px; }
+.pin-form { display: grid; gap: 8px; font-size: .8rem; }
+.pin-range { display: flex; gap: 12px; margin-bottom: 6px; }
+.pin-range label { display: grid; gap: 4px; color: var(--muted-foreground); font-size: .74rem; }
+.pin-range input { width: 96px; min-height: 40px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); color: var(--foreground); font-size: 16px; }
+.pin-form textarea { min-height: 96px; font-size: 16px; }
+
+/* Construction progress: recorded stage plus the plan's outline. */
+.construction-progress { padding: 14px 20px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--forest) 4%, var(--card)); }
+.stage-tracker { display: flex; margin: 0; padding: 0; color: var(--muted-foreground); font-size: .7rem; list-style: none; }
+.stage-tracker li { position: relative; display: flex; flex: 1; flex-direction: column; align-items: center; gap: 6px; font-weight: 560; text-align: center; }
+/* Connectors run between centred dots: from this dot to the next step's dot. */
+.stage-tracker li::before { content: ""; position: absolute; top: 8px; left: calc(50% + 13px); right: calc(-50% + 13px); height: 2px; background: var(--border); }
+.stage-tracker li:last-child::before { display: none; }
+.stage-tracker li:is(.is-done, .is-active, .is-paused) { color: var(--forest); }
+.stage-tracker li.is-done::before { background: var(--forest); }
+.stage-dot { z-index: 1; display: grid; place-items: center; width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 50%; background: var(--card); color: #fffdf7; }
+.is-done > .stage-dot { border-color: var(--forest); background: var(--forest); }
+.is-active > .stage-dot { border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent); animation: stage-pulse 1.8s ease-in-out infinite; }
+.is-paused > .stage-dot { border-color: var(--primary); background: var(--primary); }
+@keyframes stage-pulse { 50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--primary) 6%, transparent); } }
+.ghost-plan { display: flex; gap: 4px; margin: 12px 0 6px; padding: 0; overflow-x: auto; list-style: none; scrollbar-width: thin; }
+.ghost-section { display: grid; flex-basis: 0; gap: 2px; min-width: 64px; padding: 7px 8px; border: 1.5px dashed color-mix(in srgb, var(--forest) 45%, transparent); border-radius: 8px; color: var(--forest); font-size: .68rem; }
+.ghost-section strong { overflow: hidden; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.ghost-section small { color: var(--muted-foreground); font-size: .62rem; }
+.ghost-section.is-shaped { border-style: solid; border-color: color-mix(in srgb, var(--forest) 30%, transparent); background: color-mix(in srgb, var(--forest) 6%, transparent); }
+.ghost-section.is-has-music { border-style: solid; border-color: var(--forest); background: var(--forest); color: #fffdf7; }
+.ghost-section.is-has-music small { color: #dfe9e2; }
+.ghost-plan-note { margin: 4px 0 0; color: var(--muted-foreground); font-size: .66rem; line-height: 1.4; }
+
+/* Version rail: oldest to newest, newest scrolled into view. */
+.version-rail-wrap { display: grid; gap: 10px; margin-top: 12px; }
+.version-rail-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted-foreground); font-size: .75rem; }
+.version-rail-toolbar p { margin: 0; }
+.workspace-tool-dialog .version-quick-list.version-rail { display: flex; flex-wrap: nowrap; gap: 10px; max-height: none; margin: 0; padding: 2px 2px 10px; overflow-x: auto; list-style: none; scroll-snap-type: x mandatory; }
+/* Three whole cards per view, so snapping never leaves a card cut in half. */
+.version-rail > li { flex: 0 0 calc((100% - 20px) / 3); min-width: 0; scroll-snap-align: end; }
+.workspace-tool-dialog .version-rail button { display: flex; flex-direction: column; align-items: stretch; gap: 4px; width: 100%; max-width: none; height: 100%; min-height: 0; padding: 10px; white-space: normal; }
+.version-rail button[aria-pressed="true"] { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
+.version-rail .version-thumb { width: 100%; height: 40px; margin-bottom: 4px; border-radius: 6px; background: #f6f4ec; }
+.version-rail .fingerprint.version-thumb.is-empty { background: color-mix(in srgb, var(--forest) 5%, transparent); }
+.version-quick-list.version-rail button > span { overflow: visible; white-space: normal; }
+.version-rail .version-rail-title { display: flex; align-items: center; justify-content: space-between; color: var(--forest); font-size: .8rem; font-weight: 650; }
+.version-rail .version-rail-title .version-badge { margin-left: 8px; }
+.version-rail time { color: var(--muted-foreground); font-size: .66rem; }
+
+@media (pointer: coarse) { .producer-locate { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) {
+  .score-lane-flash { animation: none; background: rgb(232 160 90 / 18%); }
+  .is-active > .stage-dot { animation: none; }
+}
+@media (forced-colors: active) {
+  .score-pin, .score-pin-selection { stroke: Highlight; }
+  .ghost-section.is-has-music { forced-color-adjust: none; border-color: CanvasText; background: CanvasText; color: Canvas; }
+}
+@media (max-width: 700px) {
+  .producer-workspace-header { align-items: stretch; }
+  .workspace-identity { flex: none; }
+  .workspace-actions { width: 100%; justify-content: space-between; }
+  .workspace-handoff { flex: 1 1 100%; justify-items: stretch; }
+  .workspace-handoff .handoff-action { width: 100%; }
+  .construction-progress { padding-inline: 14px; }
+  .score-form-strip { flex-direction: column; }
+  .score-form-strip > button { align-self: flex-start; }
+  /* Every section stays visible and tappable: two columns, no sideways scroll. */
+  .score-form-strip-track { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-x: visible; }
+  .score-form-strip-track .score-section-choice { min-width: 0; border-bottom: 1px solid #e3e8df; }
+  .score-canvas { --score-label: 135px; --score-bar: 16px; }
+  /* Phones list versions in a two-column grid instead of a sideways strip. */
+  .workspace-tool-dialog .version-quick-list.version-rail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow-x: visible; scroll-snap-type: none; }
+}

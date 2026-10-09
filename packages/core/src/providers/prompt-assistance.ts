@@ -2,11 +2,12 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { getConfig } from "../config.js";
 import { getPool } from "../db/pool.js";
+import { containsWords, words } from "../domain/words.js";
 import { requireProject } from "../db/repository.js";
 import { getNativeRevision } from "../native/repository.js";
 import { canonicalHash } from "../domain/hash.js";
 import { tokenCostMicrousd, type TokenUsage } from "./pricing.js";
-import { assertSharedUsage } from "./limits.js";
+import { responsesUsage, runJoblessProviderCall } from "./jobless-call.js";
 
 export const promptAssistanceSchema = z.object({
   mode: z.enum(["rewrite", "inspire"]), direction: z.string().max(32_768),
@@ -23,15 +24,20 @@ const issue = (message: string, statusCode = 409) => Object.assign(new Error(mes
 
 // Conservative lexical guard, not a claim of semantic equivalence. Domain
 // protection remains independent, and suggestions require the user's submission.
+// Sentences are split and compared as words, so punctuation and spacing in the
+// rewrite do not matter but the requirement's words and their order do.
+const sentences = new Intl.Segmenter("en", { granularity: "sentence" });
+const requirementWords = new Set(["no", "not", "never", "without", "keep", "preserve", "only", "exactly", "avoid", "don't", "unchanged", "except", "leave"]);
+const hasDigit = (text: string) => { for (const char of text) if (char >= "0" && char <= "9") return true; return false; };
 export function requiredPromptPassages(text: string): string[] {
-  return text.split(/(?<=[.!?;])\s+|\n+/u).map((line) => line.trim()).filter((line) =>
-    /\b(?:no|not|never|without|keep|preserve|only|exactly|avoid|don['’]t|unchanged|except|leave)\b|\d/iu.test(line));
+  // Clauses split at semicolons as well as sentences and lines, as before.
+  return [...sentences.segment(text)].flatMap((item) => item.segment.split("\n")).flatMap((line) => line.split(";")).map((line) => line.trim())
+    .filter((line) => line && (hasDigit(line) || words(line).some((word) => requirementWords.has(word))));
 }
 export function validatePromptSuggestion(original: string, value: unknown): string {
   const parsed = resultSchema.parse(value).prompt;
-  const normalized = (text: string) => text.normalize("NFKC").replace(/\s+/gu, " ").toLocaleLowerCase();
   for (const passage of requiredPromptPassages(original)) {
-    if (!normalized(parsed).includes(normalized(passage))) throw issue("The suggestion did not preserve your requirements. Your direction is unchanged.", 422);
+    if (!containsWords(parsed, passage)) throw issue("The suggestion did not preserve your requirements. Your direction is unchanged.", 422);
   }
   return parsed;
 }
@@ -69,58 +75,27 @@ export async function assistMusicalPrompt(ownerId: string, projectId: string, ke
   // UTF-8 bytes conservatively bound tokens; include framing/schema overhead.
   const reservation = config.FIXTURE_MODE ? 0 : tokenCostMicrousd("openai", model, { inputTokens: Buffer.byteLength(context + promptAssistanceInstructions, "utf8") + 1024, outputTokens, cacheWriteTokens: Buffer.byteLength(context + promptAssistanceInstructions, "utf8") + 1024 });
   const hash = canonicalHash({ projectId, input, context, model, version, outputTokens });
-  const client = await getPool().connect();
-  let effectId: string;
-  try {
-    await client.query("BEGIN");
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('pocket-producer-provider-budget-v1'))");
-    const prior = await client.query<{ input_hash: string; state: string; output: PromptSuggestion }>("SELECT p.input_hash,e.state,e.output FROM prompt_assistance p JOIN effect e ON e.prompt_assistance_id=p.id WHERE p.owner_id=$1 AND p.idempotency_key=$2", [ownerId, key]);
-    if (prior.rows[0]) {
-      const previous = prior.rows[0];
-      if (previous.input_hash !== hash) throw issue("This prompt request was already used for a different direction.");
-      if (previous.state !== "succeeded") throw issue("The earlier prompt request did not finish. Your words are unchanged.");
-      await client.query("COMMIT"); return previous.output;
-    }
-    const pending = await client.query("SELECT 1 FROM prompt_assistance p JOIN effect e ON e.prompt_assistance_id=p.id WHERE p.owner_id=$1 AND e.state IN ('dispatched','uncertain') AND (p.input_hash=$2 OR p.created_at>now()-interval '65 seconds')", [ownerId, hash]);
-    if (pending.rowCount) throw issue("An earlier prompt request is still being checked. Keep writing while it settles.");
-    const total = await client.query<{ total: string }>("SELECT COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS total FROM effect");
-    if (!config.FIXTURE_MODE && (Number(total.rows[0]?.total ?? 0) + reservation > config.INITIAL_BUILD_API_BUDGET_USD * 1_000_000 || reservation > config.MAX_JOB_COST_USD * 1_000_000)) throw issue("Prompt help is unavailable with the current setup. Your direction is unchanged.");
-    if (!config.FIXTURE_MODE) await assertSharedUsage(client, ownerId, "openai", reservation, model);
-    const row = await client.query<{ id: string }>("INSERT INTO prompt_assistance(owner_id,project_id,idempotency_key,input_hash,request) VALUES($1,$2,$3,$4,$5) RETURNING id", [ownerId, projectId, key, hash, { ...input, model, version, outputTokens }]);
-    const effect = await client.query<{ id: string }>("INSERT INTO effect(prompt_assistance_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd,cost_status,dispatched_at) VALUES($1,'prompt-assistance',$2,$3,'dispatched','openai',$4,$5,$6,'unknown',now()) RETURNING id", [row.rows[0]!.id, key, hash, model, version, reservation]);
-    effectId = effect.rows[0]!.id;
-    await client.query("COMMIT");
-  } catch (error) { await client.query("ROLLBACK"); throw error; }
-  finally { client.release(); }
-
-  // No transaction is held across the provider. A crash leaves a durable
-  // dispatched liability that neither a replay nor a different key bypasses.
-  let usage: TokenUsage | null = null;
-  let requestId: string | undefined;
-  try {
-    let generated: Awaited<ReturnType<PromptGenerator>>;
-    if (scripted) generated = await scripted(context, outputTokens);
-    else if (config.FIXTURE_MODE) generated = { value: { prompt: input.mode === "inspire" ? "A spacious instrumental built around a gentle, uneven pulse. Let a rounded bass answer a small glassy motif, gradually changing their rhythm while keeping room between phrases." : `${input.direction}\n\nLet the central idea develop through small rhythmic and textural changes, leaving room for each phrase to answer the next.` }, usage: { inputTokens: 0, outputTokens: 0 } };
-    else {
+  const { output } = await runJoblessProviderCall<PromptSuggestion>({
+    ownerId, projectId, key, step: "prompt-assistance", version, model, reservation, hash,
+    request: { ...input, model, version, outputTokens },
+    errors: {
+      reused: () => issue("This prompt request was already used for a different direction."),
+      unfinished: () => issue("The earlier prompt request did not finish. Your words are unchanged."),
+      pending: () => issue("An earlier prompt request is still being checked. Keep writing while it settles."),
+      unavailable: () => issue("Prompt help is unavailable with the current setup. Your direction is unchanged."),
+      failed: () => issue("Prompt help couldn't finish. Your words are unchanged; you can keep writing.", 503),
+    },
+    dispatch: async () => {
+      if (scripted) return scripted(context, outputTokens);
+      if (config.FIXTURE_MODE) return { value: { prompt: input.mode === "inspire" ? "A spacious instrumental built around a gentle, uneven pulse. Let a rounded bass answer a small glassy motif, gradually changing their rhythm while keeping room between phrases." : `${input.direction}\n\nLet the central idea develop through small rhythmic and textural changes, leaving room for each phrase to answer the next.` }, usage: { inputTokens: 0, outputTokens: 0 } };
       const openai = new OpenAI({ apiKey: config.OPENAI_API_KEY, maxRetries: 0, timeout: 60_000 });
       const response = await openai.responses.create({ model, store: false, reasoning: { effort: "low" }, max_output_tokens: outputTokens,
         instructions: promptAssistanceInstructions, input: context,
         text: { format: { type: "json_schema", name: "musical_direction", strict: true, schema: { type: "object", properties: { prompt: { type: "string" } }, required: ["prompt"], additionalProperties: false } } },
       });
-      const details = response.usage?.input_tokens_details as { cached_tokens?: number; cache_write_tokens?: number; cache_creation_tokens?: number } | undefined;
-      usage = response.usage ? { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens, cachedInputTokens: details?.cached_tokens ?? 0, cacheWriteTokens: details?.cache_write_tokens ?? details?.cache_creation_tokens ?? 0 } : null;
-      requestId = response.id;
-      generated = { value: JSON.parse(response.output_text), usage, requestId };
-    }
-    usage = generated.usage; requestId = generated.requestId;
-    if (!usage || !config.FIXTURE_MODE && (usage.inputTokens <= 0 || usage.outputTokens <= 0)) throw issue("The prompt response could not be confirmed. Your words are unchanged.");
-    const output: PromptSuggestion = { prompt: validatePromptSuggestion(input.direction, generated.value), provenance: config.FIXTURE_MODE ? "fixture" : "luna" };
-    await getPool().query("UPDATE effect SET state='succeeded',output=$2,actual_cost_microusd=$3::bigint,cost_usd=$3::numeric/1000000,cost_status='observed',provider_request_id=$4,completed_at=now(),updated_at=now() WHERE id=$1 AND state='dispatched'", [effectId, output, config.FIXTURE_MODE ? 0 : tokenCostMicrousd("openai", model, usage), requestId ?? null]);
-    return output;
-  } catch {
-    // Invalid output is still paid. Missing/ambiguous usage retains its hold.
-    const observed = usage !== null && (config.FIXTURE_MODE || usage.inputTokens > 0 && usage.outputTokens > 0);
-    await getPool().query("UPDATE effect SET state=$2,cost_status=$3,actual_cost_microusd=$4::bigint,cost_usd=$4::numeric/1000000,provider_request_id=$5,completed_at=now(),updated_at=now() WHERE id=$1 AND state='dispatched'", [effectId, observed ? "failed" : "uncertain", observed ? "observed" : "unknown", usage && !config.FIXTURE_MODE ? tokenCostMicrousd("openai", model, usage) : 0, requestId ?? null]);
-    throw issue("Prompt help couldn't finish. Your words are unchanged; you can keep writing.", 503);
-  }
+      return { value: response.output_text, usage: responsesUsage(response.usage), requestId: response.id };
+    },
+    accept: (value) => ({ prompt: validatePromptSuggestion(input.direction, typeof value === "string" ? JSON.parse(value) : value), provenance: config.FIXTURE_MODE ? "fixture" : "luna" }),
+  });
+  return output;
 }

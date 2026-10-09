@@ -1,7 +1,9 @@
-export interface Project { id: string; title: string; currentRevisionId: string | null; version: number; createdAt: string; updatedAt: string; workspaceStatus?: "working" | "attention" | "ready" | "new" }
+/** Server-computed outline of stored notes/clips for lists; not audio or quality. */
+export interface NativeFingerprint { version: 1; columns: number; lanes: Array<{ role: string; cells: number[] }> }
+export interface Project { id: string; title: string; currentRevisionId: string | null; version: number; createdAt: string; updatedAt: string; workspaceStatus?: "working" | "attention" | "ready" | "new"; fingerprint?: NativeFingerprint | null }
 export interface Asset { id: string; name: string; mimeType: string; durationSeconds: number; sampleRate: number; channels: number; readiness: string; provenance: string; audioUrl: string; createdAt: string }
-export interface Job { id: string; project_id: string; kind: string; state: string; stage: string | null; error_code: string | null; error_message: string | null; result_native_revision_id: string | null; events?: Array<{ sequence: number; event_type: string; payload: Record<string, unknown> }> }
-export interface Activity { cursor: number; jobId: string | null; createdAt: string; payload: { version: 1; kind: string; text: string; historical?: boolean; revisionId?: string; baseRevisionId?: string | null; ordinal?: number; selected?: boolean; step?: number; documentHash?: string; sectionId?: string; partId?: string; sourceIds?: string[]; profile?: string; scope?: string } }
+export interface Job { id: string; project_id: string; kind: string; state: string; stage: string | null; error_code: string | null; error_message: string | null; issue_code?: string | null; result_native_revision_id: string | null; events?: Array<{ sequence: number; event_type: string; payload: Record<string, unknown> }> }
+export interface Activity { cursor: number; jobId: string | null; createdAt: string; payload: { version: 1; kind: string; text: string; historical?: boolean; revisionId?: string; baseRevisionId?: string | null; ordinal?: number; selected?: boolean; step?: number; documentHash?: string; sectionId?: string; partId?: string; sectionIds?: string[]; partIds?: string[]; sourceIds?: string[]; profile?: string; scope?: string } }
 export interface WorkspaceActivity { events: Activity[]; cursor: number; nextCursor: number; reset?: boolean; hasOlder: boolean; job: Job | null; headId: string | null; draft: { step: number; hash: string } | null; actions: { canSubmit: boolean; canStop: boolean; canAbandon?: boolean; issue: "uncertain" | "paused" | null }; allowance: { remainingUsd: number; standardUsd: number; extendedUsd: number } }
 export interface NativeNote { id: string; startTick: number; durationTicks: number; pitch: number; velocity: number }
 export interface NativeAutomation { id: string; target: string; points: Array<{ tick: number; value: number; interpolation?: "step" | "linear" | "sloped"; slope?: number }> }
@@ -21,11 +23,14 @@ export interface NativeDocument {
   protectedPartIds: string[]; protectedMotifIds: string[]; sourceAssetIds: string[]; audio: { state: "deferred" | "unavailable" | "stale"; revisionId: null; assetHash: null };
 }
 export interface NativeDiff { addedParts: string[]; removedParts: string[]; changedParts: string[]; partChanges: Array<{ partId: string; fields: string[] }>; routingChange?: { groups: NativeDocument["groups"]; reverbBus: NativeDocument["reverbBus"] | null; delayBus: NativeDocument["delayBus"] | null; master: NativeDocument["master"] | null } | null; addedSections: string[]; removedSections: string[]; changedSections: string[]; tempoChange: { from: number; to: number } | null; meterChange: { from: { numerator: number; denominator: number }; to: { numerator: number; denominator: number } } | null; barsChange: { from: number; to: number } | null; titleChange: { from: string; to: string } | null; protectionChange: { added: string[]; removed: string[] }; sourceAssetChange: { added: string[]; removed: string[] }; noteCount: number; protectedPartIds: string[] }
-export interface NativeVersion { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: NativeDiff; producer: Record<string, unknown>; createdAt: string }
+export interface NativeVersion { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: NativeDiff; producer: Record<string, unknown>; createdAt: string; fingerprint?: NativeFingerprint }
 export interface NativeSnapshot { currentRevisionId: string | null; headVersion: number; current: NativeVersion | null; versions: NativeVersion[]; comparisons: Record<string, NativeDiff>; context: Record<string, unknown> | null; synchronization: { state: string; projectId: string | null; observedHash: string | null; mappingVersion: string | null; verifiedAt: string | null; url: string | null; revisionId: string | null; error: string | null } }
+/** The submit-time reading of a direction: hard checks in plain words, what the
+ * words keep unchanged, softer guidance, and anything that could not be matched. */
+export interface NativeInterpretation { interpretationId: string; provenance: "luna" | "fixture" | "scripted" | "none"; checks: string[]; keep: string[]; guidance: Array<{ quote: string; reason: string }>; rejected: Array<{ quote: string; reason: string }> }
 export interface SoundFeedback { sampleName: string; contentHash: string; rating: "fits" | "not-for-this"; note: string; updatedAt: string }
 export interface SoundRecipe { id: string; name: string; character: string; role: string; provenance: string; version: string; configurationHash: string; auditionStatus: "unheard"; guidance: { register: string; articulation: string; usefulMotion: string; failureMode: string }; device: { type: string; parameters: Record<string, number> }; effects: Array<{ type: string; parameters: Record<string, number> }>; heard: false }
-export interface NativeDraftView { jobId: string; state: string; selected: false; baseRevisionId: string | null; headMatches: boolean; stepCount: number; document: NativeDocument | null; documentHash: string | null; plan?: { plan: { intent: string; sections: Array<{ name: string; purpose: string }>; soundGoals: string[]; hardConstraints: string[]; developmentTasks: string[]; creativeState?: { identity: string; densityIntent: string; palette: Array<{ role: string; resourceId: string; resourceKind: string }>; unfinishedTasks: string[]; definiteFailures: string[] } }; stage: "planned" | "building" | "refining" | "reviewed"; inspectedDocumentHash: string | null; review?: { documentHash: string; verdict: string; findings: Array<{ observation: string; suggestedChange: string }>; modelUsed: boolean } | null } | null; runLimits?: { profile: "standard" | "extended"; maxCalls: number; maxInputTokens: number; maxOutputTokens: number; deadlineSeconds: number; maxJobCostUsd: number } | null; budget?: { spentUsd: number; reservedUsd: number; unknownUsd: number; siteRemainingUsd: number; minimumNextCallUsd: number; modelCalls: number }; extensionCeiling?: { maxCalls: number; maxInputTokens: number; maxOutputTokens: number; deadlineSeconds: number; maxJobCostUsd: number }; suggestedProfileExtension?: NativeDraftView["runLimits"]; canContinue: boolean; canExtend: boolean; continuationReason: string | null; stopReason?: string }
+export interface NativeDraftView { jobId: string; state: string; selected: false; baseRevisionId: string | null; headMatches: boolean; stepCount: number; document: NativeDocument | null; documentHash: string | null; plan?: { plan: { intent: string; sections: Array<{ name: string; purpose: string }>; soundGoals: string[]; hardConstraints: string[]; developmentTasks: string[]; creativeState?: { identity: string; densityIntent: string; palette: Array<{ role: string; resourceId: string; resourceKind: string }>; unfinishedTasks: string[]; definiteFailures: string[] } }; stage: "planned" | "building" | "refining" | "reviewed"; inspectedDocumentHash: string | null; review?: { documentHash: string; verdict: string; findings: Array<{ observation: string; suggestedChange: string }>; modelUsed: boolean } | null } | null; runLimits?: { profile: "standard" | "extended"; maxCalls: number; maxInputTokens: number; maxOutputTokens: number; deadlineSeconds: number; maxJobCostUsd: number } | null; budget?: { spentUsd: number; reservedUsd: number; unknownUsd: number; siteRemainingUsd: number; minimumNextCallUsd: number; modelCalls: number }; extensionCeiling?: { maxCalls: number; maxInputTokens: number; maxOutputTokens: number; deadlineSeconds: number; maxJobCostUsd: number }; suggestedProfileExtension?: NativeDraftView["runLimits"]; canContinue: boolean; canExtend: boolean; continuationCode?: string | null; continuationReason: string | null; stopCode?: string | null; stopReason?: string }
 export interface AppStatus {
   providers: { openai: boolean; gemini: boolean; audiotool: boolean };
   uploadFormats: string[];
@@ -37,6 +42,19 @@ export interface AppStatus {
     session: { connected: boolean; userName: string | null; expiresAt: string | null };
   };
 }
+
+/** A failed request. `code` is the server's stable issue code, or NETWORK when
+ * the service could not be reached; copy is chosen from it, never from the message. */
+export class ApiError extends Error {
+  readonly code: string | null
+  readonly status: number | null
+  constructor(message: string, code: string | null, status: number | null) { super(message); this.name = "ApiError"; this.code = code; this.status = status }
+}
+
+/** The issue code of a failed action, for user-facing copy. */
+export const issueOf = (cause: unknown) => ({ code: cause instanceof ApiError ? cause.code : null })
+
+const genericCodes = new Set(["INVALID_REQUEST", "INTERNAL_ERROR"])
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
@@ -52,8 +70,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)))
         continue
       }
-      const problem = await response.json().catch(() => ({ message: response.statusText })) as { message?: string };
-      throw new Error(problem.message ?? `Request failed (${response.status})`);
+      const problem = await response.json().catch(() => ({ message: response.statusText })) as { message?: string; code?: string };
+      const code = problem.code && !genericCodes.has(problem.code) ? problem.code : response.status >= 502 ? "NETWORK" : null;
+      throw new ApiError(problem.message ?? `Request failed (${response.status})`, code, response.status);
     } catch (error) {
       lastFailure = error
       if (init?.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error
@@ -61,7 +80,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       await new Promise((resolve) => window.setTimeout(resolve, 250 * (attempt + 1)))
     }
   }
-  throw lastFailure instanceof Error ? lastFailure : new Error("The local service is unavailable")
+  throw lastFailure instanceof ApiError ? lastFailure : new ApiError(lastFailure instanceof Error ? lastFailure.message : "The local service is unavailable", "NETWORK", null)
 }
 
 export const api = {
@@ -74,7 +93,7 @@ export const api = {
   createProject: (title: string) => request<{ project: Project }>("/projects", { method: "POST", body: JSON.stringify({ title }) }),
   snapshot: (id: string, signal?: AbortSignal) => request<SessionSnapshot>(`/projects/${id}`, { signal }),
   nativeSnapshot: (id: string, signal?: AbortSignal) => request<NativeSnapshot>(`/projects/${id}/native`, { signal }),
-  nativePreservationPreview: (projectId: string, direction: string, expectedNativeHeadId: string, targetSectionId: string | null, signal?: AbortSignal) => request<{ revisionId: string; sectionId: string | null; namedParts: Array<{ id: string; name: string; evidence: string }>; theme: { familyId: string; motifIds: string[]; label: string; evidence: string } | null; unresolved: string[] }>(`/projects/${projectId}/native/preservation-preview`, { method: "POST", body: JSON.stringify({ direction, expectedNativeHeadId, targetSectionId }), signal }),
+  interpretNative: (projectId: string, input: { direction: string; expectedHeadId: string | null; targetSectionId: string | null; targetPartId: string | null }, idempotencyKey: string) => request<NativeInterpretation>(`/projects/${projectId}/native/interpretations`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
   nativeDraft: (projectId: string, jobId: string, signal?: AbortSignal) => request<NativeDraftView>(`/projects/${projectId}/native/requests/${jobId}/draft`, { signal }),
   nativeCapabilities: (query = "") => request<{ version: string; totalEntities: number; matches: Array<{ type: string; family: string; purpose: string; writableInPocketProducer: boolean }> }>(`/native/capabilities?query=${encodeURIComponent(query)}`),
   soundRecipes: () => request<{ version: string; recipes: SoundRecipe[] }>("/native/sound-recipes"),
@@ -85,8 +104,8 @@ export const api = {
   saveSoundFeedback: (projectId: string, input: Pick<SoundFeedback, "sampleName" | "contentHash" | "rating" | "note">) => request<{ feedback: SoundFeedback }>(`/projects/${projectId}/native/sound-feedback`, { method: "POST", body: JSON.stringify(input) }),
   searchLibraryPresets: (deviceType: "heisenberg" | "pulverisateur" | "gakki" | "beatbox8", query: string) => request<{ presets: Array<{ name: string; displayName: string; ownerName: string; deviceType: string; tags: string[] }>; provenance: string }>(`/native/library/presets?deviceType=${encodeURIComponent(deviceType)}&query=${encodeURIComponent(query)}`),
   producerModels: (signal?: AbortSignal) => request<{ models: ProducerModelOption[]; fallbackModel?: string | null; repository?: { url: string; public: boolean } }>("/producer-models", { signal }),
-  constructNative: (projectId: string, direction: string, sourceAssetIds: string[], idempotencyKey: string, profile: "standard" | "extended" = "standard", model?: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/constructions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, profile, model, sourceAssetIds, expectedNativeHeadId: null }) }),
-  reviseNative: (projectId: string, input: { direction: string; model?: string; profile?: "standard" | "extended"; baseNativeRevisionId: string; expectedNativeHeadId: string; targetPartId?: string; targetSectionId?: string; protectionChange?: { expectedPartIds: string[]; desiredPartIds: string[] }; sourceAssetIds: string[] }, idempotencyKey: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/revisions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
+  constructNative: (projectId: string, direction: string, sourceAssetIds: string[], idempotencyKey: string, profile: "standard" | "extended" = "standard", model?: string, interpretationId?: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/constructions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify({ direction, profile, model, sourceAssetIds, expectedNativeHeadId: null, ...(interpretationId ? { interpretationId } : {}) }) }),
+  reviseNative: (projectId: string, input: { direction: string; model?: string; profile?: "standard" | "extended"; baseNativeRevisionId: string; expectedNativeHeadId: string; targetPartId?: string; targetSectionId?: string; protectionChange?: { expectedPartIds: string[]; desiredPartIds: string[] }; sourceAssetIds: string[]; interpretationId?: string }, idempotencyKey: string) => request<{ jobId: string; duplicate: boolean }>(`/projects/${projectId}/native/revisions`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }),
   abandonNative: (projectId: string, jobId: string) => request<{ jobId: string; abandoned: boolean }>(`/projects/${projectId}/native/requests/${jobId}/abandon`, { method: "POST", body: "{}" }),
   continueNative: (projectId: string, jobId: string) => request<{ jobId: string }>(`/projects/${projectId}/native/requests/${jobId}/continue`, { method: "POST", body: "{}" }),
   extendNative: (projectId: string, jobId: string, limits: Partial<Pick<NonNullable<NativeDraftView["runLimits"]>, "maxCalls" | "maxInputTokens" | "maxOutputTokens" | "deadlineSeconds" | "maxJobCostUsd">> = {}) => request<{ jobId: string; extended: boolean }>(`/projects/${projectId}/native/requests/${jobId}/extend`, { method: "POST", body: JSON.stringify(limits) }),

@@ -11,6 +11,8 @@ describe("musical prompt assistance", () => {
   });
   it("does not force vague ideas into numeric templates", () => {
     expect(requiredPromptPassages("Warm and strange for a late-night drive")).toEqual([]);
+    // Only the clause that states the requirement must survive a rewrite.
+    expect(requiredPromptPassages("Keep the low end steady; use a few crisp accents. Let it drift.")).toEqual(["Keep the low end steady"]);
     expect(promptAssistanceInstructions).toContain("Keep sparse work sparse");
     expect(promptAssistanceInstructions).toContain("do not summarize");
     expect(() => validatePromptSuggestion("", { prompt: "" })).toThrow();

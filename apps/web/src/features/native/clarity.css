@@ -20,6 +20,7 @@
 .direction-scope select { max-width: 220px; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--background); padding: 4px 8px; color: var(--foreground); }
 .native-composer textarea { min-height: 150px; }
 .direction-kept { color: var(--forest); font-size: .8rem; margin: 8px 0; overflow-wrap: anywhere; }
+.direction-issue { margin: 8px 0 0; padding: 8px 11px; border: 1px solid #ecc7b5; border-radius: 9px; background: #fbefe8; color: #86331a; font-size: .78rem; line-height: 1.45; }
 .prompt-helper-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
 .prompt-helper-message, .prompt-original { color: var(--muted-foreground); font-size: .78rem; margin: 8px 0; }
 .prompt-original p { white-space: pre-wrap; max-height: 180px; overflow-y: auto; }

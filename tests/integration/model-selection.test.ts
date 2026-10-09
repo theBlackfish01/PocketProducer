@@ -123,9 +123,15 @@ it.each([ ["gpt-6-sol", "multiple"], ["gpt-6-luna", "multiple"], ["gpt-6-luna", 
   expect((await nativeSnapshot(selected.ownerId, selected.projectId)).current?.document.parts[0]?.notes[0]?.pitch).toBe(64);
   expect(turn).toBe(9);
   const final = requests.at(-1)!;
-  expect(final.some((item) => item.id === "fc_0_0")).toBe(false); // Confirmed mutation is compacted as a whole.
-  expect(final.some((item) => item.id === "fc_2_0")).toBe(false); // Older successful reads are also bounded.
-  expect(final.filter((item) => item.type === "reasoning").map((item) => item.id)).toEqual(["rs_1_0", ...(reasoningMode === "shared" ? [] : ["rs_1_1"]), "rs_4_0", "rs_5_0", "rs_6_0", "rs_7_0"]);
+  // History is append-only within a context segment (up to ten exchanges), so
+  // each request extends the previous one and reuses its cached prefix.
+  const reasoning = (input: Item[]) => input.filter((item) => item.type === "reasoning").map((item) => item.id);
+  // After the first tool result, every wire request contains the previous one
+  // byte for byte: the measured provider condition for reusing its cached prompt.
+  for (let i = 1; i < requests.length - 1; i++) expect(JSON.stringify(requests[i + 1]!.slice(0, requests[i]!.length)), `request ${i + 1} extends request ${i}`).toBe(JSON.stringify(requests[i]));
+  for (const [index, request] of requests.slice(0, -1).entries()) expect(reasoning(requests[index + 1]!).slice(0, reasoning(request).length)).toEqual(reasoning(request));
+  expect(reasoning(final)).toEqual(["rs_0_0", "rs_1_0", ...(reasoningMode === "shared" ? [] : ["rs_1_1"]), "rs_2_0", "rs_3_0", "rs_4_0", "rs_5_0", "rs_6_0", "rs_7_0"]);
+  expect(final.some((item) => item.id === "fc_0_0")).toBe(true);
   expect(final.some((item) => item.type === "function_call_output" && item.call_id === "call_1_1" && /error/i.test(JSON.stringify(item.output)))).toBe(true);
   const effects = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [selected.id])).rows;
   expect(effects).toHaveLength(9);
@@ -141,7 +147,9 @@ it("holds a missing Gateway cost as unknown through the actual accounting callba
   const message = new AIMessage("Done");
   Object.assign(message, { usage_metadata: { input_tokens: 10, output_tokens: 5 }, response_metadata: { providerRequestId: "test-generation" } });
   const generation = { text: message.text, message };
-  await expect(accounting.handleLLMEnd({ generations: [[generation]] }, "accounted-call")).rejects.toThrow(/PROVIDER_USAGE_UNKNOWN/);
+  // The response is kept for the work; its cost is held as an unknown liability, never recorded as free.
+  await accounting.handleLLMEnd({ generations: [[generation]] }, "accounted-call");
+  expect(accounting.costMicrousd).toBe(0);
   const row = (await getPool().query("SELECT state,cost_status,output,reservation_microusd FROM effect WHERE job_id=$1", [selected.id])).rows[0];
   expect(row).toMatchObject({ state: "uncertain", cost_status: "unknown", output: { providerRequestId: "test-generation" } });
   expect(Number(row.reservation_microusd)).toBeGreaterThan(0);

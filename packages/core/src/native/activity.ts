@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getPool } from "../db/pool.js";
 import { getConfig } from "../config.js";
 import { nativeRunLimits } from "./profile.js";
+import { unresolvedEffectSql } from "../providers/effects.js";
 
 // Public presentation contract. Never spread request, model, trace or tool objects here.
 export const activityPayloadSchema = z.object({
@@ -14,6 +15,7 @@ export const activityPayloadSchema = z.object({
   selected: z.boolean().optional(), ordinal: z.number().int().positive().optional(),
   step: z.number().int().positive().optional(), documentHash: z.string().max(128).optional(),
   sectionId: z.string().max(96).optional(), partId: z.string().max(96).optional(),
+  sectionIds: z.array(z.string().max(96)).max(24).optional(), partIds: z.array(z.string().max(96)).max(32).optional(),
   sourceIds: z.array(z.uuid()).max(24).optional(), keptPartIds: z.array(z.string().max(96)).max(32).optional(),
   profile: z.enum(["standard", "extended"]).optional(),
   scope: z.string().max(1_200).optional(),
@@ -75,7 +77,9 @@ export async function readProjectActivity(ownerId: string, projectId: string, op
     const job = (await client.query("SELECT id,project_id,kind,state,stage,error_code,result_native_revision_id,updated_at FROM job WHERE project_id=$1 AND owner_id=$2 AND kind IN ('native-generation','native-revision') ORDER BY CASE WHEN state IN ('queued','running','cancel_requested') THEN 0 WHEN state='needs_attention' THEN 1 ELSE 2 END,created_at DESC LIMIT 1", [projectId, ownerId])).rows[0] ?? null;
     const head = (await client.query<{ revision_id: string }>("SELECT revision_id FROM native_project_head WHERE project_id=$1 AND owner_id=$2", [projectId, ownerId])).rows[0]?.revision_id ?? null;
     const step = job ? (await client.query<{ ordinal: number; result_hash: string }>("SELECT ordinal,result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal DESC LIMIT 1", [job.id])).rows[0] ?? null : null;
-    const unsafe = (await client.query("SELECT 1 FROM effect e JOIN job j ON j.id=e.job_id WHERE j.project_id=$1 AND j.owner_id=$2 AND j.kind IN ('native-generation','native-revision') AND j.state IN ('failed','cancelled','needs_attention') AND (e.cost_status='unknown' OR e.state IN ('dispatched','uncertain')) AND e.step<>'native-producer-result' LIMIT 1", [projectId, ownerId])).rowCount !== 0;
+    // A lost call whose reservation is held does not block new work; only a
+    // possibly in-flight or unrecorded effect does (same rule as job creation).
+    const unsafe = (await client.query(`SELECT 1 FROM effect e JOIN job j ON j.id=e.job_id WHERE j.project_id=$1 AND j.owner_id=$2 AND j.kind IN ('native-generation','native-revision') AND j.state IN ('failed','cancelled','needs_attention') AND ${unresolvedEffectSql("e")} AND e.step<>'native-producer-result' LIMIT 1`, [projectId, ownerId])).rowCount !== 0;
     const paused = Boolean((await client.query("SELECT 1 FROM job WHERE project_id=$1 AND owner_id=$2 AND kind IN ('native-generation','native-revision') AND state='needs_attention' LIMIT 1", [projectId, ownerId])).rowCount);
     const active = job && ["queued", "running", "cancel_requested"].includes(job.state);
     const site = await client.query<{ committed: string }>("SELECT COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS committed FROM effect");

@@ -1,4 +1,5 @@
 import type { NativeRunLimits } from "./profile.js";
+import { coded } from "../errors.js";
 
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" ? value as Record<string, unknown> : {};
 const count = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -17,7 +18,7 @@ export function nativeCompletionDiagnostic(response: unknown, outputLimit?: numb
 export function assertNativeModelCompletion(response: unknown, outputLimit?: number): void {
   const diagnostic = nativeCompletionDiagnostic(response, outputLimit);
   if (!diagnostic.incomplete) return;
-  throw new Error(`OPENAI_INCOMPLETE_RESPONSE: reason=${diagnostic.reason}; output_limit=${diagnostic.outputLimit ?? "unknown"}; output_tokens=${diagnostic.outputTokens ?? "unknown"}; reasoning_tokens=${diagnostic.reasoningTokens ?? "unknown"}. The incomplete response was not applied.`);
+  throw coded(`OPENAI_INCOMPLETE_RESPONSE: reason=${diagnostic.reason}; output_limit=${diagnostic.outputLimit ?? "unknown"}; output_tokens=${diagnostic.outputTokens ?? "unknown"}; reasoning_tokens=${diagnostic.reasoningTokens ?? "unknown"}. The incomplete response was not applied.`);
 }
 
 export function nativeOutputRecoveryBlocked(stop: string, limits: NativeRunLimits | null, hasConfirmedMusic: boolean): boolean {

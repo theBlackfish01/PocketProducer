@@ -92,7 +92,7 @@ export async function inspectNativeCapability(path: string) {
   let details: ReturnType<typeof getSchemaLocationDetails>;
   try { details = getSchemaLocationDetails(schemaPathToSchemaLocation(path as SchemaPath)); }
   catch (error) {
-    if (error instanceof Error && /^can't find field /.test(error.message)) throw new NativeSchemaPathError("Field is not in the pinned Nexus schema");
+    if (error instanceof Error && error.message.startsWith("can't find field ")) throw new NativeSchemaPathError("Field is not in the pinned Nexus schema");
     throw error;
   }
   return { version: NATIVE_CATALOG_VERSION, path, musical: musicalMeaning[root] ?? { family: "other", purpose: "Not yet curated for construction", caveat: "Discovery does not imply writable support" }, writableInPocketProducer: writable.has(root), operationContract: nativeOperationContract(root), schema: details };

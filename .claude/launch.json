@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pocket-producer-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/concurrently/dist/bin/index.js", "-n", "api,worker,web", "cd apps/api && set \"PORT=\" && node ../../node_modules/tsx/dist/cli.mjs watch src/server.ts", "cd apps/worker && node ../../node_modules/tsx/dist/cli.mjs watch src/worker.ts", "cd apps/web && node node_modules/vite/bin/vite.js"],
+      "port": 5173,
+      "url": "http://127.0.0.1:5173"
+    }
+  ]
+}

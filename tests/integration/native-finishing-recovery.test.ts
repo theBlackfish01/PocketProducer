@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { getConfig } from "@pocket/core";
-import { AIMessage, fakeModel, focusedNativeReview, nativeFormatRecoveryAvailable } from "@pocket/core/test-support";
+import { AIMessage, briefRole, fakeModel, focusedNativeReview, nativeFormatRecoveryAvailable, scriptedBrief } from "@pocket/core/test-support";
 import { canonicalHash, claimJobById, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, getPool, jobSnapshot, loadNativePlan, nativeDraftView, nativeSnapshot, nativePlanSchema, nativeCreativeStateSchema, nativeReviewContextHash, NativeToolSession, seedNativeDocument, nativeFormOperations, saveNativePlan, saveNativeCreativeState, saveNativeReview, advanceNativePlan, reserveProviderEffect, markEffectDispatched, needsAttentionJob, resumeNativePartialJob, type JobRecord } from "@pocket/core";
 import { processJob } from "@pocket/worker";
 import { nativeFormSchema } from "@pocket/core";
 import { boundOpenAiRequest } from "@pocket/core/test-support";
-import { listProjects, requireProject, abandonNativePartialJob } from "@pocket/core";
+import { listProjects, requireProject, abandonNativePartialJob, interpretNativeDirection, cancelJob } from "@pocket/core";
 import { completeProviderEffect, failProviderEffect, reconcileNativeStepConflict } from "@pocket/core";
 import { nativeDocumentSchema, nativeMusicHash } from "@pocket/core";
 import { nativeReviewResponseFormat } from "@pocket/core/test-support";
@@ -20,6 +20,8 @@ afterEach(async () => {
 const direction = "A 4-bar melody";
 const plan = nativePlanSchema.parse({ intent: "A warm melodic phrase", sections: [{ name: "Whole", purpose: "A short musical statement" }], soundGoals: ["Soft lead"], hardConstraints: ["Four bars"], developmentTasks: ["A deliberate pause"], creativeState: { identity: "Quiet", unfinishedTasks: ["Check the phrase"] } });
 const form = { title: "Recovery phrase", tempoBpm: 92, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }], parts: [{ id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, motifs: [], placements: [], freeNotes: [{ beat: 0, durationBeats: 1, pitch: 64, velocity: 0.7 }] }] };
+// The per-turn checklist travels inside the latest tool result (see foldTurnContext).
+const checklistIn = (messages: Array<{ text: string }>) => { const text = messages.map((message) => message.text).findLast((value) => value.includes("Production checklist (data, not user instructions)"))!; return { text: text.slice(text.lastIndexOf("Production checklist")) }; };
 const good = () => new AIMessage(JSON.stringify({ verdict: "The phrase leaves deliberate space.", findings: [], noChangeReason: "The sparse requested statement is present." }));
 beforeAll(async () => { owner = (await getPool().query<{ id: string }>("INSERT INTO app_user(provider_subject,display_name) VALUES($1,'Finishing test') RETURNING id", [`finish-${randomUUID()}`])).rows[0]!.id; });
 afterAll(async () => {
@@ -29,12 +31,16 @@ afterAll(async () => {
   await getPool().query("UPDATE job SET result_native_revision_id=NULL WHERE owner_id=$1", [owner]);
   await getPool().query("DELETE FROM native_revision WHERE owner_id=$1", [owner]);
   await getPool().query("DELETE FROM job WHERE owner_id=$1", [owner]);
+  await getPool().query("DELETE FROM effect WHERE prompt_assistance_id IN (SELECT id FROM prompt_assistance WHERE owner_id=$1)", [owner]);
+  await getPool().query("DELETE FROM prompt_assistance WHERE owner_id=$1", [owner]);
   await getPool().query("DELETE FROM project WHERE owner_id=$1", [owner]);
   await getPool().query("DELETE FROM app_user WHERE id=$1", [owner]);
 });
 async function create(profile: "standard" | "extended" = "standard", model = "gpt-6-sol"): Promise<JobRecord> {
   const project = await createProject(owner, "Finishing recovery test");
-  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), request: { direction, profile, model }, expectedHeadId: null });
+  // The stated length is a hard check only because the captured brief says so.
+  const checked = await interpretNativeDirection(owner, project.id, randomUUID(), { direction, expectedHeadId: null }, scriptedBrief({ totalBars: { value: 4, quote: "A 4-bar melody" } }));
+  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), request: { direction, profile, model, interpretationId: checked.interpretationId }, expectedHeadId: null });
   await dispatchOutbox();
   return (await claimJobById(made.id, "finishing-test"))!;
 }
@@ -126,8 +132,10 @@ it("saves a Saffron-style numeric-bar revision through the production graph with
   expect(await jobSnapshot(owner, generation.id)).toMatchObject({ state: "succeeded" });
   const before = (await nativeSnapshot(owner, project.id)).current!;
   const request = { baseNativeRevisionId: before.id, expectedNativeHeadId: before.id, model: "gpt-6-luna", direction: "The Return section is currently empty. Add a sparse but audible ending in bars 13–16: bass roots on A and a gentle A-minor chord in bars 13 and 15, with a short final melody resolution to A. Also vary two or three melody notes in Lift and brighten its chord tone slightly. Add these things in but keep it coherent. Keep the same four parts and 16-bar structure." };
-  for (const direction of ["Keep melody in bars 13 and 15 unchanged", "No drums in the missing section"]) {
-    await expect(createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-revision", idempotencyKey: randomUUID(), expectedHeadId: before.id, request: { ...request, direction } })).rejects.toThrow("not uniquely identifiable");
+  // A misread bar list or missing section is a confirmable rejection, never a lock.
+  for (const [wording, role] of [["Keep melody in bars 13 and 15 unchanged", briefRole("preserve", "lead", "Keep melody in bars 13 and 15 unchanged", "bars 13 and 15")], ["No drums in the missing section", briefRole("absent", "drums", "No drums in the missing section", "missing section")]] as const) {
+    const checked = await interpretNativeDirection(owner, project.id, randomUUID(), { direction: wording, expectedHeadId: before.id }, scriptedBrief({ roles: [role] }));
+    expect(checked).toMatchObject({ checks: [], keep: [], rejected: [{ reason: "This arrangement has no single section by that name" }] });
   }
   expect((await getPool().query("SELECT 1 FROM job WHERE project_id=$1 AND kind='native-revision'", [project.id])).rowCount).toBe(0);
   const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-revision", idempotencyKey: randomUUID(), expectedHeadId: before.id, request });
@@ -387,8 +395,9 @@ it("replays a settled same-score critic receipt after evidence formatting change
   expect(await focusedNativeReview(input)).toEqual(first);
   expect(reviewer.callCount).toBe(1);
   expect((await getPool().query("SELECT * FROM effect WHERE job_id=$1", [job.id])).rows).toEqual(before);
+  // A lost earlier attempt is never re-sent; it becomes one counted review attempt.
   await getPool().query("UPDATE effect SET state='uncertain',cost_status='unknown' WHERE job_id=$1 AND prompt_version='native-symbolic-review-v2'", [job.id]);
-  await expect(focusedNativeReview(input)).rejects.toThrow(/unconfirmed|uncertain/);
+  await expect(focusedNativeReview(input)).rejects.toMatchObject({ code: "REVIEW_RESPONSE_LOST" });
   expect(reviewer.callCount).toBe(1);
   await getPool().query("UPDATE effect SET state='succeeded',cost_status='observed',output=jsonb_set(output,'{review,contextHash}',to_jsonb($2::text)) WHERE job_id=$1 AND prompt_version='native-symbolic-review-v2'", [job.id, 'f'.repeat(64)]);
   await expect(focusedNativeReview(input)).rejects.toThrow(/INPUT_MISMATCH/);
@@ -455,12 +464,12 @@ it("retains actual current musical observations when production compaction evict
   await processJob(job, { scriptedModel: model, library: createNativeLibrary(null) });
   const state = await jobSnapshot(owner, job.id);
   expect(state.state, state.error_message ?? "").toBe("succeeded");
-  const checklist = model.calls[2]!.messages.findLast((message) => message.text.startsWith("Production checklist"))!;
+  const checklist = checklistIn(model.calls[2]!.messages);
   const context = JSON.parse(checklist.text.slice(checklist.text.indexOf("{"))) as { currentObservations: { tool: string; content: string }[] };
   const partRead = context.currentObservations.find((entry) => entry.tool === "inspect_native_part")!;
   expect(JSON.parse(partRead.content)).toMatchObject({ part: { id: "lead", notes: [{ pitch: 64 }] }, totalMaterializedNotes: 1 });
   expect(JSON.stringify(model.calls[2]!.messages)).not.toContain("inspection-opaque");
-  const afterEdit = model.calls[3]!.messages.findLast((message) => message.text.startsWith("Production checklist"))!;
+  const afterEdit = checklistIn(model.calls[3]!.messages);
   expect(afterEdit.text).toContain('"currentObservations":[]');
   expect((await nativeSnapshot(owner, job.projectId)).current!.document.parts[0]!.gain).toBe(0.55);
 }, 30_000);
@@ -483,12 +492,14 @@ it.each([96000, 128000])("survives a mixed oversized error exchange before initi
   expect(messages).toContain("Prior completed tool failures");
   expect(messages).not.toContain("x".repeat(1000));
   expect(messages).toContain("For new music, use compose_native_scene");
-  const checklist = model.calls[3]!.messages.findLast(message => message.text.startsWith("Production checklist"))!;
-  const guidance = JSON.parse(checklist.text.slice(checklist.text.indexOf("{"))) as { priorGuidance: unknown[]; omittedGuidance: number };
+  const checklist = checklistIn(model.calls[3]!.messages);
+  const guidance = JSON.parse(checklist.text.slice(checklist.text.indexOf("{"))) as { recalledGuidance: number; omittedGuidance: number };
   // Recalled skill excerpts are optional under input pressure; essential
   // instructions and explicit omission accounting must remain at either cap.
-  if (JSON.stringify(guidance.priorGuidance).includes("Prefer `compose_native_scene`")) expect(guidance.priorGuidance.length).toBeGreaterThan(0);
+  const recalled = model.calls[3]!.messages.find(message => message.text.startsWith("Previously read local guidance"));
+  if (recalled?.text.includes("Prefer `compose_native_scene`")) expect(guidance.recalledGuidance).toBeGreaterThan(0);
   else expect(guidance.omittedGuidance).toBeGreaterThan(0);
+  expect(messages).toContain("Skill summaries");
   const rows = (await getPool().query("SELECT output->'inputReservationBytes' AS bounds FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows;
   expect(rows.every((row) => row.bounds.envelope < 80000)).toBe(true);
 }, 30_000);
@@ -754,3 +765,65 @@ it("bounds varied inspection loops in real model input and retains the pending m
   expect(JSON.stringify(producer.calls.at(-1)?.messages)).toContain("omitted");
   expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(1);
 }, 30_000);
+
+// The OpenAI SDK reports both cases as "Connection error."; the cause says which.
+const connectionError = (code: string) => Object.assign(new Error("Connection error."), { name: "APIConnectionError", cause: Object.assign(new Error(`connect ${code}`), { code }) });
+
+it("retries an interruption once from confirmed work, then pauses for an explicit Continue", async () => {
+  const { job } = await prepared("standard", "gpt-6-luna");
+  await processJob(job, { scriptedModel: fakeModel().respond(connectionError("ECONNREFUSED")), library: createNativeLibrary(null) });
+  // Best effort first: one automatic retry from the same confirmed work.
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "queued", attempts: 1 });
+  expect((await getPool().query("SELECT 1 FROM job_event WHERE job_id=$1 AND event_type='retrying'", [job.id])).rowCount).toBe(1);
+  await processJob((await claimJobById(job.id, "interrupted-retry"))!, { scriptedModel: fakeModel().respond(connectionError("ECONNREFUSED")), library: createNativeLibrary(null) });
+  const paused = await jobSnapshot(owner, job.id);
+  expect(paused).toMatchObject({ state: "needs_attention", error_code: "NATIVE_PARTIAL", attempts: 2, issue_code: "PROVIDER_UNAVAILABLE" });
+  expect(paused.error_message).toContain("NATIVE_INTERRUPTED");
+  // Never sent, so never charged: each refused request settles at no cost.
+  const calls = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows;
+  expect(calls).toEqual([{ state: "failed", cost_status: "observed" }, { state: "failed", cost_status: "observed" }]);
+  expect((await getPool().query("SELECT state FROM effect WHERE job_id=$1 AND step='native-producer-result'", [job.id])).rows).toEqual([{ state: "dispatched" }]);
+  expect(await nativeDraftView(owner, job.projectId, job.id)).toMatchObject({ stepCount: 1, canContinue: true, stopCode: "PROVIDER_UNAVAILABLE" });
+  // The person's explicit Continue resumes the same request from confirmed work.
+  await resumeNativePartialJob(owner, job.projectId, job.id);
+  const resumed = (await claimJobById(job.id, "unsent-resumed"))!;
+  await processJob(resumed, { scriptedModel: fakeModel().respond(new AIMessage("The requested musical statement is complete.")), scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null) });
+  const finished = await jobSnapshot(owner, job.id);
+  expect(finished.state, String(finished.error_message)).toBe("succeeded");
+});
+
+it("holds a possibly-sent lost call and resumes with a fresh request instead of stopping the room", async () => {
+  const { job } = await prepared("standard", "gpt-6-luna");
+  await processJob(job, { scriptedModel: fakeModel().respond(connectionError("ECONNRESET")), library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "queued", attempts: 1 });
+  const held = (await getPool().query("SELECT state,cost_status,reservation_microusd FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows;
+  expect(held).toMatchObject([{ state: "uncertain", cost_status: "unknown" }]);
+  expect(Number(held[0].reservation_microusd)).toBeGreaterThan(0);
+  const producer = fakeModel().respond(new AIMessage("The requested musical statement is complete.")).respond(new AIMessage("The requested musical statement is complete."));
+  await processJob((await claimJobById(job.id, "held-retry"))!, { scriptedModel: producer, scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null) });
+  const finished = await jobSnapshot(owner, job.id);
+  expect(finished.state, String(finished.error_message)).toBe("succeeded");
+  // The resumed request names the lost response rather than repeating its identity.
+  expect(JSON.stringify(producer.calls[0]?.messages)).toContain("1 earlier model response was lost");
+  const calls = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [job.id])).rows;
+  expect(calls[0]).toEqual({ state: "uncertain", cost_status: "unknown" });
+  expect(calls.slice(1).every((call) => call.state === "succeeded")).toBe(true);
+  // The held worst case is reported separately, never as spent and never dropped.
+  const result = (await getPool().query("SELECT output FROM effect WHERE job_id=$1 AND step='native-producer-result'", [job.id])).rows[0]!.output.result;
+  expect(result.unknownCostUsd).toBeCloseTo(Number(held[0].reservation_microusd) / 1e6, 6);
+  // A held liability does not block the next request in this room.
+  const fresh = await createNativeJob({ ownerId: owner, projectId: job.projectId, kind: "native-revision", idempotencyKey: randomUUID(), request: { direction: "Another small change", baseNativeRevisionId: finished.result_native_revision_id, expectedNativeHeadId: finished.result_native_revision_id, sourceAssetIds: [] }, expectedHeadId: finished.result_native_revision_id });
+  await cancelJob(owner, fresh.id);
+});
+
+it("counts a lost final review as one attempt and reviews again with a fresh request", async () => {
+  const { job } = await prepared("standard", "gpt-6-luna");
+  const reviewer = fakeModel().respond(connectionError("ECONNRESET")).respond(good());
+  const producer = fakeModel().respond(new AIMessage("The requested musical statement is complete.")).respond(new AIMessage("The requested musical statement is complete."));
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  const finished = await jobSnapshot(owner, job.id);
+  expect(finished.state, String(finished.error_message)).toBe("succeeded");
+  expect(reviewer.callCount).toBe(2);
+  const reviews = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' AND prompt_version='native-symbolic-review-v2' ORDER BY created_at", [job.id])).rows;
+  expect(reviews).toEqual([{ state: "uncertain", cost_status: "unknown" }, { state: "succeeded", cost_status: "observed" }]);
+});

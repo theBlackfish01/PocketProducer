@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { AIMessage, fakeModel } from "@pocket/core/test-support";
+import { AIMessage, fakeModel, scriptedBrief } from "@pocket/core/test-support";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { claimJobById, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, getPool, jobSnapshot, nativeArcEvidence, nativeDraftView, nativeFormOperations, nativeSnapshot, readNativeExample, readProjectActivity, type NativeOperation } from "@pocket/core";
 import { processJob } from "@pocket/worker";
+import { interpretNativeDirection } from "@pocket/core";
 
 let ownerId = "", projectId = "";
 beforeAll(async () => {
@@ -17,6 +18,8 @@ afterAll(async () => {
   await getPool().query("UPDATE job SET result_native_revision_id=NULL WHERE project_id=$1", [projectId]);
   await getPool().query("DELETE FROM native_revision WHERE project_id=$1", [projectId]);
   await getPool().query("DELETE FROM job WHERE project_id=$1", [projectId]);
+  await getPool().query("DELETE FROM effect WHERE prompt_assistance_id IN (SELECT id FROM prompt_assistance WHERE project_id=$1)", [projectId]);
+  await getPool().query("DELETE FROM prompt_assistance WHERE project_id=$1", [projectId]);
   await getPool().query("DELETE FROM project WHERE id=$1", [projectId]);
   await getPool().query("DELETE FROM app_user WHERE id=$1", [ownerId]);
 });
@@ -37,7 +40,9 @@ describe("scripted producer groove-to-rise production path", () => {
       { kind: "setDelayBus", bus: { id: "short-echo", name: "Short echo", feedbackFactor: 0.27, stepCount: 2, stepLengthIndex: 2 } },
       { kind: "setSend", partId: "lead", busId: "short-echo", gain: 0.16 }
     ];
-    const created = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: "groove-then-rise", request: { direction, sourceAssetIds: [], expectedNativeHeadId: null }, expectedHeadId: null });
+    // The requested upswing is a hard check because the captured brief records it.
+    const checked = await interpretNativeDirection(ownerId, projectId, randomUUID(), { direction, expectedHeadId: null }, scriptedBrief({ construction: [{ kind: "rise", quote: "a very prominent upswing" }] }));
+    const created = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: "groove-then-rise", request: { direction, sourceAssetIds: [], expectedNativeHeadId: null, interpretationId: checked.interpretationId }, expectedHeadId: null });
     await dispatchOutbox();
     const job = await claimJobById(created.id, "sound-craft-fixture");
     expect(job).not.toBeNull();

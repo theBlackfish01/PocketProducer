@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
 import { mkdir, writeFile } from "node:fs/promises"
 import { cpus, platform } from "node:os"
-import { encodeWav, type NativeDocument } from "@pocket/core"
+import { encodeWav, nativeFingerprint, type NativeDocument } from "@pocket/core"
 
 const evidence = ".local/evidence"
 const projectId = "visual-room"
@@ -32,8 +32,15 @@ function documentFixture(): NativeDocument {
   }
 }
 
-async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean; paused?: boolean; audiotool?: boolean; ownedSound?: boolean; verifiedMapping?: string } = {}) {
-  const before = documentFixture(), after = structuredClone(before)
+async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean; short?: boolean; paused?: boolean; audiotool?: boolean; ownedSound?: boolean; verifiedMapping?: string } = {}) {
+  const before = documentFixture()
+  if (options.short) {
+    // A 16-bar piece whose third section has a long agent-written name.
+    before.bars = 16
+    before.sections = ["Opening", "Bloom", "Middle — open the window and let the light in", "Release"].map((name, i) => ({ id: `section-${i}`, name, startBar: i * 4, endBar: (i + 1) * 4, intent: "Space for the theme to develop" }))
+    for (const part of before.parts) { part.notes = part.notes.filter((note) => note.startTick < 16 * 3840); part.automation = [] }
+  }
+  const after = structuredClone(before)
   after.parts[0]!.notes[0]!.pitch += 12; after.parts[0]!.notes[0]!.startTick += 480; after.parts[0]!.notes[0]!.durationTicks += 240
   after.parts[0]!.notes.splice(1, 1)
   if (options.large) {
@@ -45,7 +52,7 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
   let sampleFeedback: { sampleName: string; contentHash: string; rating: string; note: string; updatedAt: string } | null = null
   const sampleHash = "a".repeat(64), sampleName = "samples/fixture-short-hit"
   const job = () => ({ id: "visual-job", project_id: projectId, kind: "native-revision", state: abandoned ? "cancelled" : completed ? "succeeded" : options.paused ? "needs_attention" : "running", stage: "constructing", error_code: abandoned ? "NATIVE_ABANDONED" : options.paused ? "NATIVE_PARTIAL" : null })
-  const version = (document: NativeDocument, ordinal: number) => ({ id: `version-${ordinal}`, parentRevisionId: ordinal === 2 ? "version-1" : null, ordinal, document, documentHash: `hash-${ordinal}`, changeSummary: "Shape the opening pulse", producer: {}, structuralDiff: { addedParts: [], changedParts: ["part-0"], changedSections: [], protectionChange: { added: [], removed: [] } }, createdAt: "2026-09-26T00:00:00Z" })
+  const version = (document: NativeDocument, ordinal: number) => ({ id: `version-${ordinal}`, parentRevisionId: ordinal === 2 ? "version-1" : null, ordinal, document, documentHash: `hash-${ordinal}`, changeSummary: "Shape the opening pulse", producer: {}, structuralDiff: { addedParts: [], changedParts: ["part-0"], changedSections: [], protectionChange: { added: [], removed: [] } }, createdAt: "2026-09-26T00:00:00Z", fingerprint: nativeFingerprint(document) })
   const versions = [version(after, 2), version(before, 1)]
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname
@@ -54,12 +61,12 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
     else if (path.endsWith("/integrations/audiotool/profile")) json = { profile: { userName: "fixture", displayName: "Fixture musician", avatarUrl: null } }
     else if (path.endsWith("/producer-models")) json = { models: [{ id: "gpt-6-luna", label: "GPT-6 Luna", provider: "openai", available: true }] }
     else if (path.endsWith("/status")) json = { providers: { openai: false, gemini: false, audiotool: Boolean(options.audiotool) }, uploadFormats: ["audio/wav"], nexus: { sdk: "fixture", liveExportVerified: false, connection: options.audiotool ? "authorized" : "unconfigured", oauth: options.audiotool ? { clientId: "fixture", redirectUrl: "http://127.0.0.1:15174/auth/audiotool/callback", scope: "project:write" } : null, session: { connected: Boolean(options.audiotool), userName: options.audiotool ? "fixture" : null, expiresAt: null } } }
-    else if (path.endsWith("/projects")) json = { projects: [{ id: projectId, title: "Night Drive", currentRevisionId: null, version: 1, createdAt: "2026-09-26" }] }
+    else if (path.endsWith("/projects")) json = { projects: [{ id: projectId, title: "Night Drive", currentRevisionId: "version-2", version: 1, createdAt: "2026-09-26", workspaceStatus: "ready", fingerprint: nativeFingerprint(after) }] }
     else if (path.endsWith(`/projects/${projectId}`)) json = { project: { id: projectId, title: "Night Drive", currentRevisionId: null }, assets: options.ownedSound ? [{ id: "owned-fixture", name: "Own sound", audioUrl: "/api/v1/assets/fixture/audio", durationSeconds: 8, sampleRate: 8_000, channels: 2 }] : [], revisions: [], analyses: [], latestJob: null, currentRevision: null }
     else if (path.endsWith("/activity/stream")) { await route.abort(); return }
     else if (path.endsWith("/activity")) json = { events: [], cursor: 0, nextCursor: 0, hasOlder: false, job: options.draft ? job() : null, headId: completed ? "version-3" : "version-2", draft: options.draft ? { step, hash: `draft-${step}` } : null, actions: { canSubmit: abandoned || completed || !options.draft, canStop: Boolean(options.draft && !options.paused), canAbandon: options.paused && !abandoned, issue: options.paused && !abandoned ? "paused" : null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } }
     else if (path.endsWith("/native")) json = { currentRevisionId: completed ? "version-3" : "version-2", headVersion: completed ? 3 : 2, current: completed ? version(after, 3) : versions[0], versions: completed ? [version(after, 3), ...versions] : versions, context: null, comparisons: {}, synchronization: options.verifiedMapping ? { state: "verified", mappingVersion: options.verifiedMapping, projectId: "projects/fixture", revisionId: "version-2", url: "https://offline.invalid/studio" } : { state: "local_only", projectId: null, revisionId: null, url: null }, playback: "deferred" }
-    else if (path.endsWith("/preservation-preview")) json = { revisionId: "version-2", sectionId: null, namedParts: [], theme: null, unresolved: [] }
+    else if (path.endsWith("/interpretations")) json = { interpretationId: "00000000-0000-4000-8000-000000000b1e", provenance: "fixture", checks: [], keep: [], guidance: [], rejected: [] }
     else if (path.endsWith("/capabilities")) json = { matches: [], totalEntities: 0, version: "test" }
     else if (path.endsWith("/sound-recipes")) json = { version: "local-palette-v2", recipes: [{ id: "rubber-pulse", name: "Rubber pulse", character: "Short syncopated bass with upper harmonics", role: "bass", provenance: "Original parameter recipe; unheard", version: "local-palette-v2", configurationHash: "b".repeat(64), auditionStatus: "unheard", guidance: { register: "Low register", articulation: "Short syncopated notes", usefulMotion: "Open the filter", failureMode: "Too much low sustain" }, device: { type: "heisenberg", parameters: {} }, effects: [], heard: false }] }
     else if (path.endsWith("/library/samples")) json = { samples: [{ name: sampleName, displayName: "Short hit", ownerName: "Fixture artist", durationSeconds: 1, bpm: 120, sampleKind: "one-shot", tags: [] }], nextPageToken: "", provenance: "Fixture metadata" }
@@ -151,7 +158,7 @@ test("welcome explains the creative loop and compact session status stays access
   await expect(working.locator("small")).toHaveCount(0)
   const boxes = await working.evaluate((node) => {
     const title = node.querySelector(".rail-session-title")!.getBoundingClientRect()
-    const icon = node.querySelector("svg")!.getBoundingClientRect()
+    const icon = node.querySelector(".rail-session-status")!.getBoundingClientRect()
     return { separate: title.right < icon.left, sameRow: Math.abs((title.top + title.height / 2) - (icon.top + icon.height / 2)) < 2 }
   })
   expect(boxes).toEqual({ separate: true, sameRow: true })
@@ -163,7 +170,7 @@ test("welcome explains the creative loop and compact session status stays access
   await expect(github).not.toContainText("private")
   await page.screenshot({ path: `${evidence}/welcome-desktop.png`, fullPage: true })
   await page.emulateMedia({ reducedMotion: "reduce" })
-  expect(await working.locator("svg").evaluate((node) => getComputedStyle(node).animationName)).toBe("none")
+  expect(await working.locator(".rail-session-status").evaluate((node) => getComputedStyle(node).animationName)).toBe("none")
   await page.setViewportSize({ width: 390, height: 844 })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await expect(page.getByRole("main").getByRole("button", { name: "New session" })).toBeInViewport()
@@ -197,7 +204,8 @@ test("start controls form one footer and early creation focuses on the conversat
   await page.route("**/native/requests/visual-job/draft", (route) => route.fulfill({ json: { jobId: "visual-job", state: "running", document: null, documentHash: null, stepCount: 0, canContinue: false, canExtend: false } }))
   await page.reload()
   await expect(page.getByRole("heading", { name: "What would you like to make?" })).toBeVisible()
-  await page.getByRole("button", { name: "I reviewed the updated scope" }).click()
+  // With nothing written there is no request to review, so no scope notice blocks the composer.
+  await expect(page.getByRole("button", { name: "I reviewed the updated scope" })).toHaveCount(0)
   await page.getByRole("textbox", { name: "Describe your arrangement" }).fill("A warm melody over a soft pulse, with plenty of space.")
   const submit = page.getByRole("button", { name: "Create arrangement" })
   const rewrite = page.getByRole("button", { name: "Rewrite prompt" })
@@ -339,6 +347,91 @@ test("creation availability fails closed and recovers without losing the directi
   await expect(page.getByRole("combobox", { name: "Producer model" })).toHaveCount(0)
   await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible()
   expect(room.writes()).toBe(0)
+})
+
+test("unmatched direction words ask before they are sent as guidance, never as a silent lock", async ({ page }) => {
+  await mockRoom(page)
+  const checked = "00000000-0000-4000-8000-000000000b2e"
+  let check: { status: number; json: unknown } = { status: 200, json: { interpretationId: checked, provenance: "luna", checks: [], keep: [], guidance: [], rejected: [{ quote: "leave room for the pad", reason: "This arrangement has no single section by that name" }] } }
+  const checks: string[] = [], sent: Array<Record<string, unknown>> = []
+  await page.route("**/native/interpretations", async (route) => { checks.push(String(route.request().headers()["idempotency-key"])); await route.fulfill({ status: check.status, json: check.json }) })
+  await page.route("**/native/revisions", async (route) => { sent.push(route.request().postDataJSON() as Record<string, unknown>); await route.fulfill({ status: 409, json: { code: "HEAD_CHANGED", message: "Native head changed; refresh before continuing" } }) })
+  const input = page.getByRole("textbox", { name: "Describe your arrangement" })
+  await input.fill("Add a soft answer and leave room for the pad")
+  await page.getByRole("button", { name: "Make this change" }).click()
+  const dialog = page.getByRole("dialog", { name: "Check these words" })
+  await expect(dialog).toContainText("leave room for the pad")
+  await expect(dialog).toContainText("no single section by that name")
+  await page.screenshot({ path: `${evidence}/brief-check-desktop.png` })
+  await dialog.getByRole("button", { name: "Edit direction" }).click()
+  await expect(dialog).toBeHidden()
+  await expect(input).toBeFocused()
+  expect(sent).toHaveLength(0)
+  await page.getByRole("button", { name: "Make this change" }).click()
+  await page.getByRole("dialog", { name: "Check these words" }).getByRole("button", { name: "Send as guidance" }).click()
+  await expect.poll(() => sent.length).toBe(1)
+  expect(sent[0]).toMatchObject({ direction: "Add a soft answer and leave room for the pad", interpretationId: checked })
+  // A stopped request maps its stable code to copy, shown beside the submit button.
+  const issue = page.locator("#next-direction-form .direction-issue")
+  await expect(issue).toContainText("This piece changed while you were working.")
+  await expect(issue).toHaveAttribute("role", "alert")
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).press("End")
+  await page.getByRole("textbox", { name: "Describe your arrangement" }).press("Space")
+  await expect(issue).toHaveCount(0)
+  check = { status: 503, json: { code: "INTERPRETATION_UNAVAILABLE", message: "Your direction couldn't be checked right now." } }
+  await page.getByRole("button", { name: "Make this change" }).click()
+  const unchecked = page.getByRole("dialog", { name: "Send without checks?" })
+  await expect(unchecked).toContainText("nothing in it will be enforced")
+  await unchecked.getByRole("button", { name: "Send as guidance" }).click()
+  await expect.poll(() => sent.length).toBe(2)
+  expect(sent[1]).not.toHaveProperty("interpretationId")
+  // Resending an unchanged direction replays its paid check; a failed check is never replayed.
+  expect(checks[1]).toBe(checks[0])
+  await page.getByRole("button", { name: "Make this change" }).click()
+  await expect(page.getByRole("dialog", { name: "Send without checks?" })).toBeVisible()
+  expect(checks.at(-1)).not.toBe(checks.at(-2))
+})
+
+test("short pieces fit, phones choose sections from a strip and long pieces fade where more bars remain", async ({ page }) => {
+  await mockRoom(page, { short: true })
+  const scroll = page.locator(".score-scroll")
+  await expect(scroll).toBeVisible()
+  expect(await scroll.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+  await expect(page.locator(".score-scroll-hint")).toHaveCount(0)
+  const box = (await scroll.boundingBox())!, last = (await page.locator(".score-form-ruler .score-ruler-section").last().boundingBox())!
+  expect(last.x + last.width).toBeLessThanOrEqual(box.x + box.width + 1)
+  await expect(page.locator(".score-form-ruler").getByRole("button")).toHaveCount(4)
+  await page.screenshot({ path: `${evidence}/score-short-desktop.png` })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  const strip = page.getByRole("group", { name: "Choose a section" })
+  await expect(strip).toHaveCount(1)
+  await expect(strip.getByRole("button", { name: "Whole piece" })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.locator(".score-form-ruler").getByRole("button")).toHaveCount(0)
+  const long = strip.locator(".score-section-choice").nth(2)
+  // The long name wraps to two lines instead of hiding behind an ellipsis.
+  expect(await long.locator("strong").evaluate((element) => element.getClientRects().length && element.scrollHeight > parseFloat(getComputedStyle(element).lineHeight) * 1.5)).toBe(true)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: `${evidence}/score-strip-phone.png`, fullPage: true })
+  await long.click()
+  await expect(page.locator(".score-detail")).toBeVisible()
+  await expect(strip.locator(".score-section-choice").nth(2)).toHaveAttribute("aria-pressed", "true")
+
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await mockRoom(page)
+  await page.reload()
+  const frame = page.locator(".score-scroll-frame")
+  await expect(page.locator(".score-scroll-hint")).toHaveText("Scroll sideways for all 64 bars.")
+  await expect(frame).toHaveAttribute("data-more", "true")
+  await page.locator(".score-scroll").evaluate((element) => { element.scrollLeft = element.scrollWidth })
+  await expect(frame).not.toHaveAttribute("data-more", "true")
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.getByRole("button", { name: "Versions", exact: true }).click()
+  const rail = page.locator(".version-rail")
+  await expect(rail).toBeVisible()
+  expect(await rail.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(2)
+  await page.screenshot({ path: `${evidence}/versions-phone-grid.png` })
 })
 
 test("connected identity is quiet, supports missing avatars and remains keyboard accessible", async ({ page }) => {
@@ -698,6 +791,10 @@ test("a next direction survives completion, while long activity stays bounded an
   count++
   await expect(page.getByRole("button", { name: "New updates" })).toBeVisible()
   expect(await feed.evaluate((element) => element.scrollTop)).toBe(0)
+  // At the end of the feed the bar follows the last message instead of covering it.
+  await feed.evaluate((element) => { element.scrollTop = element.scrollHeight })
+  const lastMessage = (await page.locator(".producer-message").last().boundingBox())!
+  expect(lastMessage.y + lastMessage.height).toBeLessThanOrEqual((await page.locator(".producer-new-updates").boundingBox())!.y + 1)
   await page.getByRole("button", { name: "Earlier activity" }).click()
   await expect(page.getByRole("button", { name: "Return to latest" })).toBeVisible()
   await expect(page.locator(".producer-message")).toHaveCount(30)
@@ -748,7 +845,7 @@ test("delayed terminal copy readback updates the header without reload or duplic
 test("copy owner-busy response is explained without retrying the POST", async ({ page }) => {
   await mockRoom(page, { audiotool: true })
   let posts = 0
-  await page.route("**/native/synchronizations", async route => { posts++; await route.fulfill({ status: 429, json: { message: "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request." } }) })
+  await page.route("**/native/synchronizations", async route => { posts++; await route.fulfill({ status: 429, json: { code: "ACTIVE_REQUEST_LIMIT", message: "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request." } }) })
   await page.getByRole("button", { name: "Copy to Audiotool", exact: true }).click()
   await expect(page.getByText(/already running in one of your sessions/)).toBeVisible()
   expect(posts).toBe(1)
@@ -824,7 +921,7 @@ test("history and Audiotool use compact dialogs with focus return and no implici
 test("step-limit recovery requires explicit extension and resumes the same request without copying", async ({ page }) => {
   const room = await mockRoom(page, { draft: true, paused: true, audiotool: true })
   await page.route("**/native/requests/visual-job/draft", async (route) => {
-    await route.fulfill({ json: { jobId: "visual-job", state: "needs_attention", document: room.after, documentHash: "draft-1", stepCount: 1, selected: false, headMatches: true, canContinue: false, stopReason: "MODEL_CALL_LIMIT_EXCEEDED", canExtend: true, runLimits: { maxCalls: 40 }, extensionCeiling: { maxCalls: 120 } } })
+    await route.fulfill({ json: { jobId: "visual-job", state: "needs_attention", document: room.after, documentHash: "draft-1", stepCount: 1, selected: false, headMatches: true, canContinue: false, stopCode: "CALL_LIMIT", stopReason: "MODEL_CALL_LIMIT_EXCEEDED", canExtend: true, runLimits: { maxCalls: 40 }, extensionCeiling: { maxCalls: 120 } } })
   })
   const actions: string[] = []
   await page.route("**/native/requests/visual-job/extend", async (route) => { actions.push("extend"); expect(route.request().postDataJSON()).toEqual({ maxCalls: 80 }); await route.fulfill({ json: { extended: true } }) })
@@ -837,5 +934,163 @@ test("step-limit recovery requires explicit extension and resumes the same reque
   await page.keyboard.press("Escape"); await expect(resume).toBeFocused()
   await resume.click(); await page.getByRole("button", { name: "Extend and continue" }).click()
   await expect.poll(() => actions).toEqual(["extend", "continue"])
+  expect(room.writes()).toBe(0)
+})
+
+test("wayfinding header, section ruler, note contours, fingerprints and version rail", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message))
+  const room = await mockRoom(page, { audiotool: true })
+  const header = page.locator(".producer-workspace-header")
+  const copy = header.getByRole("button", { name: "Copy to Audiotool", exact: true })
+  await expect(copy).toBeVisible()
+  await expect(header.getByRole("navigation", { name: "Session tools" }).getByRole("button", { name: "Sounds", exact: true })).toBeVisible()
+  await expect(header.getByRole("navigation", { name: "Session tools" }).getByRole("button", { name: "Versions", exact: true })).toBeVisible()
+  expect(await copy.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe("rgb(37, 72, 59)")
+  await expectReadableText(copy)
+  // Sections live in the ruler; there is no separate chip row above the overview.
+  const ruler = page.locator(".score-heading-row").getByRole("group", { name: "Choose a section" })
+  await expect(ruler.locator(".score-section-choice")).toHaveCount(5)
+  await expect(page.locator(".score-form-strip")).toHaveCount(0)
+  await expectReadableText(ruler.locator(".score-section-choice strong").first())
+  await expect(page.locator(".score-lane .score-contour")).toHaveCount(8)
+  await expect(page.locator(".score-lane .score-density")).toHaveCount(0)
+  await expect(page.getByRole("complementary", { name: "Session navigation" }).locator(".rail-thumb path")).not.toHaveCount(0)
+  await page.screenshot({ path: `${evidence}/wayfinding-desktop.png` })
+  await ruler.locator(".score-section-choice").filter({ hasText: "Ascent" }).click()
+  const strip = page.locator(".score-form-strip")
+  await expect(strip.locator(".score-section-choice[aria-pressed=true]")).toContainText("Ascent")
+  await page.getByRole("button", { name: "Show whole-piece overview" }).click()
+  await expect(page.locator(".score-heading-row .score-ruler-section[data-active]")).toContainText("Ascent")
+  await expect(page.locator(".score-heading-row button")).toHaveCount(0)
+  await strip.getByRole("button", { name: "Whole piece", exact: true }).click()
+  await expect(strip).toHaveCount(0)
+  const versions = page.getByRole("button", { name: "Versions", exact: true })
+  await versions.click()
+  const history = page.getByRole("dialog", { name: "Version history" })
+  const cards = history.locator(".version-rail button")
+  await expect(cards).toHaveCount(2)
+  await expect(cards.first()).toContainText("Version 1")
+  await expect(cards.locator(".version-thumb path")).not.toHaveCount(0)
+  await history.screenshot({ path: `${evidence}/wayfinding-version-rail.png` })
+  await cards.filter({ hasText: "Version 1" }).click()
+  await expect(page.getByRole("dialog", { name: "Before and after" })).toContainText("Version 1 → 2")
+  await page.keyboard.press("Escape"); await page.keyboard.press("Escape")
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+  expect((await copy.boundingBox())!.width).toBeGreaterThan(300)
+  await page.evaluate(() => window.scrollTo(0, 0))
+  await page.screenshot({ path: `${evidence}/wayfinding-phone.png`, fullPage: true })
+  expect(errors).toEqual([]); expect(room.writes()).toBe(0)
+})
+
+test("producer messages point at stored parts and sections without changing scope", async ({ page }) => {
+  const room = await mockRoom(page)
+  const events = [
+    { cursor: 1, jobId: "old-job", createdAt: "2026-09-26T12:00:00Z", payload: { version: 1, kind: "request", text: "Give the lead more air in Ascent", scope: "Ascent · Slow lead", sectionId: "section-3", partId: "part-4" } },
+    { cursor: 2, jobId: "old-job", createdAt: "2026-09-26T12:01:00Z", payload: { version: 1, kind: "music", text: "Updated Slow lead.", partIds: ["part-4"], sectionIds: ["section-3"] } },
+    { cursor: 3, jobId: "old-job", createdAt: "2026-09-26T12:02:00Z", payload: { version: 1, kind: "music", text: "Updated Wide pad and Glass keys." } },
+    { cursor: 4, jobId: "old-job", createdAt: "2026-09-26T12:03:00Z", payload: { version: 1, kind: "approach", text: "A slow lift with the lead answering the pad." } },
+  ]
+  await page.route("**/api/v1/projects/visual-room/activity*", async (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/stream")) { await route.abort(); return }
+    await route.fulfill({ json: { events, cursor: 4, nextCursor: 4, hasOlder: false, job: null, headId: "version-2", draft: null, actions: { canSubmit: true, canStop: false, issue: null }, allowance: { remainingUsd: 5, standardUsd: 5, extendedUsd: 5 } } })
+  })
+  await page.reload()
+  const messages = page.locator(".producer-message")
+  await expect(messages).toHaveCount(4)
+  await expect(messages.nth(3).getByRole("button", { name: "Show in score" })).toHaveCount(0)
+  // Content arriving under a resting pointer is not a hover preview.
+  await messages.nth(2).dispatchEvent("pointermove", { pointerType: "mouse", movementX: 0, movementY: 0 })
+  await expect(page.locator(".score-lane[data-highlighted]")).toHaveCount(0)
+  await messages.nth(2).hover()
+  await expect(page.locator('.score-lane[data-part-id="part-2"]')).toHaveAttribute("data-highlighted", "true")
+  await expect(page.locator('.score-lane[data-part-id="part-3"]')).toHaveAttribute("data-highlighted", "true")
+  await expect(page.locator('.score-lane[data-part-id="part-4"]')).not.toHaveAttribute("data-highlighted", "true")
+  await page.mouse.move(5, 5)
+  await expect(page.locator(".score-lane[data-highlighted]")).toHaveCount(0)
+  await messages.nth(1).getByRole("button", { name: "Show in score" }).click()
+  await expect(page.locator(".score-detail-lane[data-part-id='part-4']")).toHaveAttribute("data-highlighted", "true")
+  await expect(page.locator(".score-form-strip .score-section-choice[aria-pressed=true]")).toContainText("Ascent")
+  await expect(page.locator(".score-detail .score-lane-flash")).toHaveCount(1)
+  await page.screenshot({ path: `${evidence}/wayfinding-feed-pointer.png` })
+  await expect(page.getByLabel("Change scope")).toHaveValue("")
+  await expect(page.locator(".score-detail-lane[data-highlighted]")).toHaveCount(0, { timeout: 5_000 })
+  await page.setViewportSize({ width: 390, height: 844 }); await page.emulateMedia({ reducedMotion: "reduce" })
+  await page.getByRole("button", { name: "Producer", exact: true }).click()
+  const view = page.getByRole("button", { name: "View arrangement" })
+  const viewBox = (await view.boundingBox())!, heading = (await page.locator(".producer-heading").boundingBox())!
+  expect(heading.x + heading.width - (viewBox.x + viewBox.width)).toBeGreaterThanOrEqual(8)
+  expect(Math.abs((viewBox.y + viewBox.height / 2) - (heading.y + heading.height / 2))).toBeLessThan(4)
+  const request = page.locator(".producer-message-request")
+  await request.getByRole("button", { name: "Show in score" }).click()
+  await expect(page.getByRole("button", { name: "Arrangement", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await expect(page.locator(".score-detail-lane[data-part-id='part-4']")).toHaveAttribute("data-highlighted", "true")
+  expect(await page.locator(".score-lane-flash").first().evaluate((node) => getComputedStyle(node).animationName)).toBe("none")
+  expect(room.writes()).toBe(0)
+})
+
+test("construction progress shows the recorded stage and keeps planned sections outlined", async ({ page }) => {
+  const room = await mockRoom(page, { draft: true })
+  const plan = (stage: string) => ({ plan: { intent: "A slow lift", sections: [{ name: "Opening", purpose: "State the pulse" }, { name: "Bloom", purpose: "Let the theme open" }, { name: "Coda", purpose: "A quiet farewell" }], soundGoals: ["Warm pad"], hardConstraints: [], developmentTasks: ["Write the coda"] }, stage, inspectedDocumentHash: null, review: null })
+  let stage = "planned", document: NativeDocument | null = null
+  await page.route("**/native/requests/visual-job/draft", (route) => route.fulfill({ json: { jobId: "visual-job", state: "running", document, documentHash: document ? "draft-2" : "draft-1", selected: false, stepCount: document ? 2 : 1, baseRevisionId: "version-2", headMatches: true, canContinue: false, canExtend: false, continuationReason: null, plan: plan(stage) } }))
+  await page.reload()
+  const progress = page.getByRole("region", { name: "Construction progress" })
+  await expect(progress.locator("[aria-current=step]")).toContainText("Build")
+  // Each step's dot is centred over its label, so the tracker is symmetric.
+  const offsets = await progress.locator(".stage-tracker li").evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(), dot = item.querySelector(".stage-dot")!.getBoundingClientRect(); return Math.abs((box.left + box.right) / 2 - (dot.left + dot.right) / 2) }))
+  expect(Math.max(...offsets)).toBeLessThan(1)
+  await expect(progress.locator(".ghost-section.is-planned")).toHaveCount(3)
+  await expect(progress).toContainText("not music")
+  stage = "refining"; document = structuredClone(room.before)
+  room.setDraft(room.before, 2)
+  await expect(progress.locator("[aria-current=step]")).toContainText("Refine", { timeout: 10_000 })
+  await expect(progress.locator(".ghost-section.is-has-music")).toHaveCount(2)
+  await expect(progress.locator(".ghost-section.is-planned")).toContainText("Coda")
+  await expectReadableText(progress.locator(".ghost-section.is-has-music strong").first())
+  await progress.screenshot({ path: `${evidence}/wayfinding-construction-progress.png` })
+  expect(room.writes()).toBe(0)
+})
+
+test("pinned notes stay local until added to an editable, scoped direction", async ({ page }) => {
+  const room = await mockRoom(page)
+  const lane = page.locator('.score-lane[data-part-id="part-4"] .score-lane-picture')
+  const box = (await lane.boundingBox())!
+  const bar = box.width / 64
+  await page.mouse.move(box.x + bar * 0.5, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + bar * 2.5, box.y + box.height / 2, { steps: 4 })
+  await expect(lane.locator(".score-pin-selection")).toHaveCount(1)
+  await page.mouse.up()
+  const dialog = page.getByRole("dialog", { name: "Pin a note" })
+  await expect(dialog).toContainText("Slow lead · bars 1–3")
+  await expect(dialog.getByRole("textbox", { name: "What should change here?" })).toBeFocused()
+  await expect(dialog.getByRole("button", { name: "Pin note" })).toBeDisabled()
+  await dialog.getByRole("textbox", { name: "What should change here?" }).fill("Too busy, leave more space")
+  await dialog.getByRole("button", { name: "Pin note" }).click()
+  await expect(dialog).toBeHidden()
+  await expect(page.getByRole("button", { name: /^Inspect Slow lead,/ })).toBeFocused()
+  await expect(lane.locator(".score-pin")).toHaveCount(1)
+  // Keyboard path: a protected part's note is kept visible but not sent as a change request.
+  const kept = page.getByRole("button", { name: /^Inspect Sub foundation,/ })
+  await kept.focus(); await page.keyboard.press("Enter")
+  await page.getByRole("dialog", { name: "Sub foundation" }).getByRole("button", { name: "Pin a note" }).click()
+  const keyboardDialog = page.getByRole("dialog", { name: "Pin a note" })
+  await expect(keyboardDialog).toContainText("Sub foundation · bars 1–64")
+  await keyboardDialog.getByLabel("To bar").fill("4")
+  await keyboardDialog.getByRole("textbox", { name: "What should change here?" }).fill("Warmer")
+  await keyboardDialog.getByRole("button", { name: "Pin note" }).click()
+  const tray = page.getByRole("region", { name: /Pinned notes · 2/ })
+  await expect(tray).toContainText("Kept unchanged")
+  await page.reload()
+  await expect(tray).toBeVisible()
+  await tray.screenshot({ path: `${evidence}/wayfinding-pin-tray.png` })
+  await page.screenshot({ path: `${evidence}/wayfinding-pins-desktop.png` })
+  await tray.getByRole("button", { name: "Add 1 note to direction" }).click()
+  await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toHaveValue("In Opening, Slow lead (bars 1–3): Too busy, leave more space.")
+  await expect(page.getByRole("textbox", { name: "Describe your arrangement" })).toBeFocused()
+  await expect(page.getByLabel("Change scope")).toHaveValue("section-0")
+  await expect(page.locator(".producer-panel")).toContainText("Slow lead ×")
+  await expect(page.getByRole("region", { name: /Pinned notes · 1/ })).toContainText("Sub foundation")
   expect(room.writes()).toBe(0)
 })

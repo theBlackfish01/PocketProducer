@@ -3,8 +3,9 @@ import { motion } from "motion/react"
 import type { NativeDocument, NativePart } from "../../lib/api"
 import { materializedSectionNotes, sectionClips } from "./score"
 import { barLabel, controlName, controlPath, documentEnd, noteChanged, noteGeometry, pitchName, roleNames, scoreWindow } from "./score-presentation"
+import { pinBars, type ScorePin } from "./score-pins"
 
-export function ScoreDetailLane({ document, reference, before, part, from, to, width, family, inspect, animate, changeKey }: { document: NativeDocument; reference?: NativeDocument; before?: NativeDocument; part: NativePart; from: number; to: number; width: number; family: string | null; inspect(): void; animate: boolean; changeKey: string }) {
+export function ScoreDetailLane({ document, reference, before, part, from, to, width, family, inspect, animate, changeKey, pins = [], highlighted = false, flash = null }: { document: NativeDocument; reference?: NativeDocument; before?: NativeDocument; part: NativePart; from: number; to: number; width: number; family: string | null; inspect(): void; animate: boolean; changeKey: string; pins?: ScorePin[]; highlighted?: boolean; flash?: number | null }) {
   const view = useMemo(() => scoreWindow(document, reference, part.id, from, to), [document, reference, part.id, from, to])
   const prior = useMemo(() => before ? materializedSectionNotes(before, part.id, from, to, 120).notes : [], [before, part.id, from, to])
   const old = new Map(prior.map((note) => [note.key, note]))
@@ -16,7 +17,9 @@ export function ScoreDetailLane({ document, reference, before, part, from, to, w
   const currentPart = document.parts.find((item) => item.id === part.id)
   const oldPart = before?.parts.find((item) => item.id === part.id)
   const changedCurves = before ? [...new Set([...(oldPart?.automation ?? []).map((curve) => curve.target), ...(currentPart?.automation ?? []).map((curve) => curve.target)])].filter((target) => JSON.stringify(oldPart?.automation.filter((curve) => curve.target === target)) !== JSON.stringify(currentPart?.automation.filter((curve) => curve.target === target))) : []
-  return <><div className="score-detail-lane" data-part-id={part.id} data-pitch-range={`${view.low}:${view.high}`}>
+  const windowPins = pins.filter((pin) => pin.startBar * width < to && pin.endBar * width > from)
+  const span = (start: number, end: number) => { const x = Math.max(0, (start - from) / (to - from) * 1000); return { x, width: Math.max(4, Math.min(1000, (end - from) / (to - from) * 1000) - x) } }
+  return <><div className="score-detail-lane" data-part-id={part.id} data-pitch-range={`${view.low}:${view.high}`} data-highlighted={highlighted || undefined}>
     <button type="button" onClick={inspect}><small>{roleNames[part.role] ?? part.role}</small><strong>{part.name}</strong><span className="score-pitch-range">{view.current.pitchRange ? `${pitchName(view.current.pitchRange[0])}–${pitchName(view.current.pitchRange[1])}` : "No notes"}</span></button>
     <svg key={changeKey} viewBox="0 0 1000 68" preserveAspectRatio="none" role="img" aria-label={`${part.name}: ${view.current.total} notes, ${clips.length} clips; bars ${barLabel(from, width)}–${to / width}`}>
       {Array.from({ length: Math.round((to - from) / 960) + 1 }, (_, index) => <line key={index} x1={index * 960 / (to - from) * 1000} x2={index * 960 / (to - from) * 1000} y1="0" y2="68" className={index * 960 % width === 0 ? "score-bar-line" : "score-beat-line"} />)}
@@ -31,7 +34,8 @@ export function ScoreDetailLane({ document, reference, before, part, from, to, w
         return animate && index < 80 && (modified || added) ? <motion.rect key={note.key} data-motion-note={modified ? "modified" : "added"} initial={modified ? noteGeometry(previous, from, to, view.low, view.high) : { ...geometry, opacity: 0.2 }} animate={{ ...geometry, opacity: 1 }} transition={{ duration: 0.36, ease: "easeOut" }} rx="2" className={className}><title>{title}</title></motion.rect> : <rect key={note.key} {...geometry} rx="2" className={className}><title>{title}</title></rect>
       })}
       {!view.current.total && !clips.length ? <text x="12" y="31" className="score-rest">{currentPart ? "Rest" : "Part absent in this version"}</text> : null}
-    </svg><span className="score-detail-count">{view.current.total}{view.current.truncated ? "+" : ""} notes{clips.length ? ` · ${clips.length} clips` : ""}</span>
+      {windowPins.map((pin) => <rect key={pin.id} className="score-pin" {...span(pin.startBar * width, pin.endBar * width)} y="1" height="66" rx="3"><title>Pinned note, {pinBars(pin)}: {pin.note}</title></rect>)}
+    </svg>{flash !== null ? <span key={flash} className="score-lane-flash" aria-hidden="true" /> : null}<span className="score-detail-count">{view.current.total}{view.current.truncated ? "+" : ""} notes{clips.length ? ` · ${clips.length} clips` : ""}</span>
   </div>{changedCurves.slice(0, 3).map((target) => {
     const previous = oldPart?.automation.find((curve) => curve.target === target), next = currentPart?.automation.find((curve) => curve.target === target)
     const values = [...(previous?.points ?? []), ...(next?.points ?? [])].map((point) => point.value)

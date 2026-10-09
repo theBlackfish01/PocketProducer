@@ -1,5 +1,50 @@
 # Architecture — native construction is the current path
 
+## Captured briefs, typed errors and cache-stable producer context (2026-10-08)
+
+**Direction checks.** A direction becomes hard checks only through a captured brief ([ADR 004](adr/004-captured-brief-interpretation.md)).
+
+- `POST /api/v1/projects/:projectId/native/interpretations` is a same-origin, idempotent helper call. It makes one structured GPT-6 Luna request (low reasoning, strict JSON schema, prompt cache key `pocket-native-brief`).
+- `captureNativeBrief` keeps an item only if it quotes the user's words, its numbers are written there and its identities exist. Anything else is rejected (shown to the person) or softened into guidance.
+- Create/revise accept the returned `interpretationId`. `createNativeJob` copies the capture into the request as `_brief` after checking that the direction hash, head and scope still match (`INTERPRETATION_STALE` otherwise). `_brief` never takes part in request identity.
+- Completion, preservation and the producer's `briefChecks` read only `_brief`. No server path parses direction text.
+- Every new request records its brief: a checked capture, or an explicit `provenance: "none"` when sent without checks (shown in its request scope as "Sent without enforced checks"). A request from before captured briefs has no `_brief`; when it next runs, the producer makes one best-effort check of its original direction (a stable per-job key, so a replay is free) and attaches it. If that check is unavailable, the work continues as guidance only.
+- Luna's proposal is read item by item. An item outside a checkable range (for example 300 BPM, a two-chord vamp, or a seventeenth guidance note) is shown to the person with its reason instead of voiding the whole paid check. A written start bar plus a length becomes a full span, so the start is checked too. Stored guidance and rejected lists are capped at 64.
+
+**Shared helper calls.** Writing help and interpretation share `runJoblessProviderCall`: the same ledger, budget lock, idempotency and dispatched-liability fence. Both use the `prompt_assistance` record and effect rows; interpretations use step `native-brief`.
+
+**Typed errors.**
+- Classification uses error classes and codes (`CodedError`, `errorCode`, `hasErrorCode`), with system codes and class names for transport failures. Coded messages keep their historical `CODE[:QUALIFIER]: detail` text. Agent middleware wraps a thrown error once per layer, so lookups follow the cause chain (up to 16 levels).
+- Request conflicts carry a stable `IssueCode` (for example `HEAD_CHANGED`, `OUTCOME_UNCERTAIN`, `ALLOWANCE_USER`). The API sends it as `code`. `nativeDraftView` adds `continuationCode` and `stopCode`, and `jobSnapshot` adds `issue_code`.
+- The browser chooses copy from these codes only (`friendlyIssue`). Worker transient failures that exhaust retries are stored as `PROVIDER_UNAVAILABLE`. A direction check that is still settling (`INTERPRETATION_PENDING`), or whose response was lost on the way, keeps its key so sending again replays it at no cost; a stale one is discarded so the next send checks again.
+
+**Producer context.**
+- History is append-only within a context segment of up to ten exchanges. Notes and recalled guidance sit right after the brief, so each request extends the previous one's cached prefix.
+- Requests carry a per-job `promptCacheKey`. Replayed reasoning counts by its bytes until the provider has measured a request containing it (see the calibrated bound).
+- The provider reuses its cached prompt only when a request contains the previous request in full. Live probes on real traced requests: an extension that dropped or changed the previous request's per-turn context reused only the static 1,623-token prefix, while one that kept it reused 5,403 of 5,406. Every run before this change, earlier ones included, cached only the system prompt, tools and brief (about 9.7k tokens on the scene menu, 17k on batch), because the regenerated per-turn state and checklist were replaced on every call.
+- So per-turn context is sticky (`foldTurnContext`). It travels inside the latest tool result, and every earlier tool result is re-sent with exactly the notes it carried, so after the first tool result each request extends the last byte for byte. An integration test asserts this on the wire. Stored tool results stay unchanged for the evidence readers. The context measure and input bound count the notes, and a window reset still starts a fresh cache segment.
+- Each note says a later turn context supersedes it. The full current document is repeated only when it changed, or when the note that last carried it has left the request window; otherwise the note names the unchanged document hash.
+- The first request carries short skill summaries (`agent-skills/*/SUMMARY.md`), the local recipe shortlist and, for revisions, the targeted material. Full skills stay readable on demand, because the first request is never compacted.
+- Tool menus remain, but always-available tools are ordered before menu tools so a menu switch keeps the shared tool prefix cached. Sending every menu's tools would add 35–60 KB per request against the byte-based input bound.
+
+**Calibrated input bound.**
+- The byte-based bound stays the safety rule: no request exceeds the cap, and the reservation remains an upper bound. Tool schemas alone are about 42–76 KB, so before calibration history was trimmed after two or three exchanges and the cache broke on almost every call.
+- A request that extends one the provider already measured is now bounded by that request's reported input tokens plus the UTF-8 bytes of the messages added (and of the tool envelope, if it changed). Nothing unmeasured is estimated: replayed reasoning in new messages counts by its bytes, and once measured it counts exactly as billed.
+- Effect identity still hashes the deterministic byte bound, so a replay after restart names the same effect. The calibrated bound is recorded as `inputReservationBytes.calibrated`.
+
+**Recovery from interruptions (best effort).**
+- A failed call is free only when it provably never left (refused, DNS, connect timeout) or the provider answered with an error status. Any other failure (a dropped connection, a timeout, an error after the response arrived) may have been billed, so the call becomes a *held* liability: state `uncertain`, its worst-case reservation counted by every budget, and its request never sent again.
+- A held call blocks nothing. Continuation, extension, adoption, completion, abandonment and new requests require only that no effect is possibly in flight (`reserved`/`dispatched`) or finished with an unrecorded cost (`unresolvedEffectSql`). A completed result reports the held amount as `unknownCostUsd`, never as spent.
+- A response that arrived with missing usage is kept for the work; only its cost is held. Calls a run dispatched but never saw end are held when the run stops.
+- Interruptions (transport failures, rate limits, held responses; `isRecoverableInterruption`) resume from confirmed work: the worker retries once automatically, then pauses the request as resumable `NATIVE_PARTIAL` (`NATIVE_INTERRUPTED`) for the person's Continue. The resumed request states how many earlier responses were lost, so it can never repeat a held request's identity.
+- A lost or refused final review counts as one review attempt (cost settled or held) and the next attempt is a fresh request within the review allowance. A lost sample analysis is optional opinion: construction continues from measured facts.
+- Only a possibly in-flight call or durable history that no longer replays stops a request as `PROVIDER_OUTCOME_UNCERTAIN` for reconciliation. A non-resumable run fails its zero-cost aggregate, which operator repair starts from.
+
+**Grounding.**
+- A remote preset or sample is applicable only after a search or inspection in the same request returned it, or when it is already accepted in the job's documents.
+- Read-only library outages get one retry, then up to two correctable "unavailable" replies per job before the request stops.
+- In new music the empty starting sketch part is reserved and cannot hold notes.
+
 ## Producer request envelope and tool surface (2026-09-28)
 
 Preflight and accounting share final-system/message/schema coverage. The byte guard is a conservative reservation, not measured token usage; effect settlement retains actual provider usage plus non-content sizing components. Complete replay groups compact locally before dispatch. Scoped compounds use the existing serialized `NativeToolSession.apply`; optional post-commit reads never turn a committed receipt into a failed write. Default scene/edit tools and on-demand specialist sets reduce advertised schema size without changing registration or authority. Inspection caching is invocation-local and exact-document-hash scoped. See [contracts and evidence boundaries](producer-efficiency-implementation.md).
@@ -53,6 +98,10 @@ Migration **015_public_activity.sql** adds owner/project-scoped presentation his
 `GET /api/v1/projects/:id/activity` returns a repeatable-read snapshot of head, current construction, draft identity, safe actions, allowance and bounded history. `after` pages forward, `before` pages older entries. A cursor beyond the stored watermark returns `reset=true` with recent history, supporting restored local databases. `/activity/stream` honors `Last-Event-ID`, verifies ownership/origin before opening, and repeatedly rechecks access. Shared per-room one-second tail reads use short database transactions, not a connection per browser. Batches are at most 100, total streams 64, queued output bounded; backpressure ends a stream and application shutdown closes it before awaiting connections.
 
 The browser has one activity consumer: snapshot then SSE; on interruption it closes SSE and polls the same cursor endpoint with bounded backoff (2–15 seconds), without simultaneously running both. Reload reattempts SSE. Delivery is deduplicated and ignored after room/unmount changes; mounted conversation rows are bounded to 30 with explicit older pages. Canonical draft retrieval follows changed step/hash or lifecycle identity, not every text update. Public narration cannot apply music, select a version, authorize spending or feed an unbounded conversation into the model. LangSmith remains a private diagnostic boundary with unchanged defaults.
+
+## Presentation identities and fingerprints — 2026-10-08
+
+Confirmed `music` activity may include `partIds` (≤32) and `sectionIds` (≤24) derived from the step's operations and filtered to the saved document. They let the room point at stored material; like all activity they grant no authority to change scope, music or spending. `GET /api/v1/projects` and the native snapshot's versions include an optional `fingerprint` (version 1, 32 columns, up to six parts) computed by `nativeFingerprint` and cached per immutable revision ID. The list reads documents only for revision IDs returned by the same owner-scoped query. Fingerprints are display outlines, not audio, loudness or quality evidence.
 
 ## Focused correctness additions (2026-09-26)
 

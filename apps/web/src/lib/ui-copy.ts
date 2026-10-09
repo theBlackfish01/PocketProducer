@@ -1,28 +1,30 @@
 import type { Job, NativeVersion } from "./api"
 
-export function friendlyIssue(message: string | null | undefined, fallback: string, hasMusic = true) {
-  const text = issueMessage(message, fallback)
-  return hasMusic ? text : text.replace("Your draft is saved.", "Your approach is saved; no music has been created yet.")
+const issueCopy: Record<string, string> = {
+  ACTIVE_REQUEST_LIMIT: "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request.",
+  STUDIO_BUSY: "The shared studio is busy. Please try again shortly.",
+  HEAD_CHANGED: "This piece changed while you were working. Reopen it before trying again.",
+  OUTCOME_UNCERTAIN: "We need to check what happened before another attempt can start.",
+  CALL_LIMIT: "The producer reached this request’s step limit.",
+  NO_PROGRESS: "The producer repeated steps without making progress. Your draft is saved.",
+  INPUT_LIMIT: "The producer’s conversation became too long. Your draft is saved.",
+  REVIEW_EXHAUSTED: "The final musical review could not be completed. Your draft is saved.",
+  INCOMPLETE_RESPONSE: "The producer could not finish its response. Your draft is saved.",
+  ALLOWANCE_USER: "You’ve reached your usage limit. Your draft is saved.",
+  ALLOWANCE_SHARED: "The shared demo allowance is unavailable for the next step. Your draft is saved.",
+  ALLOWANCE_PROVIDER: "This model’s shared allowance has been used. Your draft is saved.",
+  USAGE_UNKNOWN: "The model’s usage is still being checked. Your draft is saved.",
+  SPEND_ALLOWANCE: "The authorized spending allowance cannot cover another step. Your draft is saved.",
+  PROVIDER_UNAVAILABLE: "The connection was interrupted. Your saved work is still here.",
+  NETWORK: "The connection was interrupted. Your saved work is still here.",
+  INTERPRETATION_PENDING: "Your direction is still being checked. Try sending again in a moment.",
+  INTERPRETATION_STALE: "Your direction or the selected version changed after it was checked. Send it again to check the current words."
 }
 
-function issueMessage(message: string | null | undefined, fallback: string) {
-  if (!message) return fallback
-  if (/already running in one of your sessions|Let your current request finish/i.test(message)) return "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request."
-  if (/shared studio is busy/i.test(message)) return "The shared studio is busy. Please try again shortly."
-  if (/stale|head changed|version conflict|expected.*revision/i.test(message)) return "This piece changed while you were working. Reopen it before trying again."
-  if (/uncertain|reconcil|unknown.*outcome/i.test(message)) return "We need to check what happened before another attempt can start."
-  if (/MODEL_CALL_LIMIT|model-call allowance|step limit/i.test(message)) return "The producer reached this request’s step limit."
-  if (/REPEATED_NO_PROGRESS/i.test(message)) return "The producer repeated steps without making progress. Your draft is saved."
-  if (/INPUT_LIMIT/i.test(message)) return "The producer’s conversation became too long. Your draft is saved."
-  if (/REVIEW_EXHAUSTED|final review.*review allowance/i.test(message)) return "The final musical review could not be completed. Your draft is saved."
-  if (/input or output|(?:input|output|response) allowance|INCOMPLETE_RESPONSE|tokens/i.test(message)) return "The producer could not finish its response. Your draft is saved."
-  if (/MODEL_BUDGET_EXCEEDED:USER/i.test(message)) return "You’ve reached your usage limit. Your draft is saved."
-  if (/MODEL_BUDGET_EXCEEDED:(?:MODEL|SITE)/i.test(message)) return "The shared demo allowance is unavailable for the next step. Your draft is saved."
-  if (/MODEL_BUDGET_EXCEEDED:PROVIDER/i.test(message)) return "This model’s shared allowance has been used. Your draft is saved."
-  if (/PROVIDER_USAGE_UNKNOWN/i.test(message)) return "The model’s usage is still being checked. Your draft is saved."
-  if (/budget|spend|allowance|reservation|charges/i.test(message)) return "The authorized spending allowance cannot cover another step. Your draft is saved."
-  if (/connection|network|fetch|timeout|unavailable/i.test(message)) return "The connection was interrupted. Your saved work is still here."
-  return fallback
+/** User-facing copy for a server issue code; anything unmapped uses the caller's fallback. */
+export function friendlyIssue(code: string | null | undefined, fallback: string, hasMusic = true) {
+  const text = (code && issueCopy[code]) || fallback
+  return hasMusic ? text : text.replace("Your draft is saved.", "Your approach is saved; no music has been created yet.")
 }
 
 export function jobProgress(job: Job) {

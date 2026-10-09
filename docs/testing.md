@@ -1,5 +1,58 @@
 # Verification record
 
+## Review fixes and best-effort recovery — October 9
+
+Pinned local binaries, isolated `_test` PostgreSQL (Docker Desktop started locally), fixture/scripted providers, tracing disabled. No provider calls.
+
+- Unit: **274/274**, 45 files. New or changed:
+  - `errors.test.ts`: provider error status, which failed calls are free, recoverable interruptions versus in-flight/history conflicts, `NATIVE_INTERRUPTED` copy.
+  - `brief.test.ts`: item-by-item reading (out-of-range tempo, two-chord vamp, surplus guidance), the 64-entry cap, a span from a written start and length (and different starts as a contradiction), lowercase chords.
+  - `convergence.test.ts`: replayed reasoning counts by bytes until measured; a measured prefix then bounds exactly.
+- Integration (`npx vitest run --config vitest.config.ts tests/integration`, alone): **172/172**, 14 files. New or changed:
+  - a refused connection retries once automatically, then pauses resumable (`PROVIDER_UNAVAILABLE` copy) and finishes on Continue;
+  - a reset connection holds the call, resumes with a fresh request naming the lost response, reports `unknownCostUsd`, and does not block the next request;
+  - a lost final review counts as one attempt and the second review succeeds;
+  - a lost sample analysis is held and construction still saves a version;
+  - an unmetered response is kept with its cost held;
+  - malformed interpreter fields are visible rejections, while unreadable output is still a paid failed attempt;
+  - explicit "Sent without enforced checks" briefs, and a one-time check for an older request.
+  - Two earlier full runs overlapped ESLint and the visual suite; under that load one test per run lost its 3-second test lease (a different test each time), and each passed alone.
+- Visual: **34/34** (alone; one context-teardown timeout under parallel load passed alone and in the full rerun).
+- Application browser: **18/18**. Hosted browser: **2/2**.
+- `npx tsc -b`, `npx eslint . --max-warnings=0` and `vite build` (apps/web) pass; the existing >500 kB bundle warning remains. `git diff --check` is clean and nothing is staged.
+
+## Producer agent pass and UI fixes — October 8 (evening)
+
+Installed pinned binaries, isolated `_test` PostgreSQL, fixture/scripted providers, tracing disabled; database-sharing suites ran serially. Live evidence is recorded separately in [STATUS](STATUS.md).
+
+- Unit (`npx vitest run --config vitest.config.ts --exclude tests/{integration,e2e,visual,hosted}/**`): **270/270**, 45 files. New:
+  - `errors.test.ts`: codes, wrapped causes, transport classes and stop issues;
+  - `brief.test.ts`: capture validation, the "leave room for the pad" and bar-list cases, and completion from captured briefs (replaces `intent.test.ts`);
+  - `grounding.test.ts`;
+  - convergence prefix, window, calibrated-bound and sticky-fold tests;
+  - `ui-copy.test.ts` now asserts copy is chosen by code, never by message text.
+- Integration (`npx vitest run --config vitest.config.ts tests/integration`): **170/170**, 14 files.
+  - New `brief-interpretation.test.ts`: fixture guidance-only capture; scripted capture on the job; key replay without a second call; changed-direction and other-owner stale refusal; worded keeps reported with the request; invalid output recorded as a paid attempt.
+  - New connection-failure cases: a refused connection pauses resumable work and continues to a saved version on explicit Continue; a reset connection stops as uncertain at once, with no retry.
+  - Wire-level assertion: after the first tool result, every request contains the previous one byte for byte.
+  - Updated fixtures: inspect a preset/sample before applying it; capture briefs rather than relying on text parsing; first notes in a real part rather than the reserved sketch; append-only prefix assertions; Sol → Luna handoff through wrapped middleware errors.
+- Visual (`npx playwright test --config tests/visual.playwright.config.ts`): **34/34**. New: the check dialog (edit, send as guidance, unavailable check, key replay, in-composer issue), short-piece fit, phone section grid, long-piece fade/hint, phone version grid, and New updates not covering the last message.
+- Application browser (`npx tsx scripts/prepare-e2e.ts`, then `npx playwright test --config tests/playwright.config.ts`): **18/18**, including the scope reset after a finished revision.
+- Hosted browser (`npx playwright test --config tests/hosted.playwright.config.ts`): **2/2**.
+- `npx tsc -b`, `npx eslint . --max-warnings=0` and `npx vite build` (apps/web) pass. The existing >500 kB bundle warning remains.
+
+## Wayfinding UI increment — October 8
+
+Installed pinned binaries, isolated `_test` PostgreSQL (Docker Desktop started locally), fixture/injected providers, tracing disabled; database-sharing suites ran serially. No live model, OAuth consent, Audiotool mutation or deployment.
+
+- `npx vitest run --config vitest.config.ts --exclude tests/{integration,e2e,visual,hosted}/**`: **253/253**, 43 files. New: `packages/core/src/native/fingerprint.test.ts` (columns, rests, transposed motifs, clip-only activity, six-lane cap, revision cache, activity identity bounds) and `apps/web/src/features/native/wayfinding.test.ts` (feed target resolution, stage mapping, ghost sections, contour merging/fallback, pin composition/state/storage).
+- `npx vitest run --config vitest.config.ts tests/integration --maxWorkers=1`: **164/164**, 13 files. New activity case: real worker music events carry existing part IDs named in their text; list and snapshot fingerprints match; another owner's list excludes the project.
+- `npx playwright test --config tests/visual.playwright.config.ts`: **32/32**. New: header/ruler/contours/fingerprints/version rail (desktop + 390px), feed pointers (hover, resting pointer, reveal, phone reduced motion), construction progress with recorded stage and outlined plan, pins (drag, keyboard path via part details, persistence, kept-part exclusion, scoped direction text).
+- `npx tsx scripts/prepare-e2e.ts`, then `npx playwright test --config tests/playwright.config.ts`: **18/18**.
+- `npx vite build` (apps/web) then `npx playwright test --config tests/hosted.playwright.config.ts`: **2/2**. An earlier hosted run served the previous `dist`; it is not counted.
+- `npx tsc -b`, `npx eslint --max-warnings=0 .`, `git diff --check`: pass. Existing >500 kB bundle warning remains.
+
+
 ## Focused reliability repairs — October 7
 
 Installed pinned binaries, isolated `_test` PostgreSQL, fixture/injected providers and tracing disabled; queue-sharing database/application/hosted suites ran serially. No live model, OAuth consent, Audiotool mutation or Railway change:

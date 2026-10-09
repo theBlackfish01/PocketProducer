@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { analyzeNativeSection, applyNativeOperations, canonicalHash, discoverNativeCapabilities, fixtureConstruct, fixtureRevise, inspectNativeCapability, materializedNotes, nativeCompletionIssues, nativeDiff, nativeMusicHash, NativeToolSession, pinnedContext, protectedPartHash, seedNativeDocument, toNexusTicks, validateNativeOffline, type JobRecord } from "@pocket/core";
-import { createOfflineDocument } from "@pocket/core/test-support";
+import { capturedBrief, createOfflineDocument } from "@pocket/core/test-support";
 import { nativePresetFingerprint, type NativePreset } from "@pocket/core";
 
 function session(direction: string) { return new NativeToolSession({} as JobRecord, seedNativeDocument(direction), false); }
@@ -54,7 +54,8 @@ describe("native construction contracts", () => {
       { kind: "setStructure", bars: 12, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 6, intent: "" }, { id: "chorus", name: "Chorus", startBar: 6, endBar: 12, intent: "" }] },
       { kind: "addNotes", partId: "starting-voice", notes: [{ id: "theme", startTick: 0, durationTicks: 960, pitch: 62, velocity: 0.7 }] }
     ]);
-    expect(nativeCompletionIssues(document, document.direction, "generation")).toEqual(expect.arrayContaining([expect.stringContaining("86 BPM"), expect.stringContaining("3/4"), expect.stringContaining("intro at bars 1–4") ]));
+    const brief = capturedBrief(document.direction, { tempoBpm: { value: 86, quote: "at 86 BPM" }, meter: { numerator: 3, denominator: 4, quote: "in 3/4" }, sections: [{ section: { sectionId: null, name: "intro", position: null }, bars: null, startBar: 1, endBar: 4, quote: "intro 1-4" }] });
+    expect(nativeCompletionIssues(document, brief, "generation")).toEqual(expect.arrayContaining([expect.stringContaining("86 BPM"), expect.stringContaining("3/4"), expect.stringContaining("intro at bars 1–4") ]));
   });
   it("reports sounding notes crossing a section boundary separately from new onsets", () => {
     const base = seedNativeDocument("A held transition over the boundary");

@@ -14,6 +14,8 @@ interface Props {
   partName: string | undefined; clearPart(): void; protectedNames: string[]
   profile: "standard" | "extended"; onProfile(value: "standard" | "extended"): void
   children?: ReactNode
+  /** Why the last submission could not start, shown beside the submit button. */
+  issue?: string | null
   onAddSound?(): void
 }
 
@@ -96,7 +98,7 @@ export function DirectionComposer(props: Props) {
     <span className="sr-only" role="status">{announcement}</span>
     {props.active ? <Button type="button" variant="ghost" aria-expanded={draftOpen} aria-controls="next-direction-form" onClick={() => setDraftOpen((value) => !value)}>{draftOpen ? "Close draft" : props.direction.trim() ? "Edit next change" : "Draft next change"}</Button> : null}
     <form id="next-direction-form" hidden={props.active && !draftOpen} className="composer native-composer" onSubmit={(event) => { event.preventDefault(); if (!props.active && !pending && props.canSubmit && !modelUnavailable) props.onSubmit(effectiveModel) }}>
-      {props.revision ? <div className="direction-scope"><label>Change scope <select aria-label="Change scope" value={props.sectionId ?? ""} onChange={(event) => props.onSection(event.target.value || null)} disabled={props.busy}><option value="">Whole piece</option>{props.sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}</select></label>{props.partName ? <Button type="button" variant="ghost" size="sm" onClick={props.clearPart} aria-label={`Clear change target ${props.partName}`}>{props.partName} ×</Button> : null}</div> : null}
+      {props.revision ? <div className="direction-scope"><label>Change scope <select aria-label="Change scope" value={props.sectionId ?? ""} onChange={(event) => props.onSection(event.target.value || null)} disabled={props.busy}><option value="">Whole piece</option>{props.sections.map((section, index) => <option key={section.id} value={section.id} title={section.name}>{String(index + 1).padStart(2, "0")} · {section.name.length > 28 ? `${section.name.slice(0, 27)}…` : section.name}</option>)}</select></label>{props.partName ? <Button type="button" variant="ghost" size="sm" onClick={props.clearPart} aria-label={`Clear change target ${props.partName}`}>{props.partName} ×</Button> : null}</div> : null}
       <label htmlFor="native-direction" className="sr-only">Describe your arrangement</label>
       <Textarea id="native-direction" value={props.direction} maxLength={32_768} onChange={(event) => {
         controller.current?.abort(); controller.current = null; setPending(false); setMessage(null); props.onDirection(event.target.value)
@@ -109,6 +111,7 @@ export function DirectionComposer(props: Props) {
         {props.onAddSound && !props.active ? <Button type="button" variant="ghost" size="sm" onClick={props.onAddSound}><Plus size={15} />{props.sourceIds.length ? `Sounds (${props.sourceIds.length})` : "Add sound"}</Button> : null}
         {!props.active ? <Button type="button" variant="ghost" size="sm" onClick={() => setOptionsOpen(true)}>Options</Button> : null}
       </div>
+      {!props.active && props.issue ? <p id="direction-issue" className="direction-issue" role="alert">{props.issue}</p> : null}
       {!props.active ? <Button className="direction-submit" type="submit" disabled={pending || !props.canSubmit || modelUnavailable}><Sparkles size={16} />{props.busy ? "Starting…" : props.revision ? "Make this change" : "Create arrangement"}<ArrowRight size={16} /></Button> : null}
       </div>
       {!props.active ? <small className="producer-model-label">GPT-6 Luna</small> : null}

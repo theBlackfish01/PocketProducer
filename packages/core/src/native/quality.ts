@@ -3,6 +3,7 @@ import { nativeDocumentSchema, type NativeDocument } from "./model.js";
 import { nativeCompletionIssues } from "./producer.js";
 import { symbolicNativeReview } from "./critique.js";
 import type { NativePlan } from "./plan.js";
+import { emptyNativeBrief, type NativeBrief } from "./brief.js";
 
 export const nativeQualityCases = [
   { id: "sparse-baseline", category: "sparse", brief: "A sparse rhythm with a memorable melody." },
@@ -15,7 +16,7 @@ export const nativeQualityCases = [
 ] as const;
 export type NativeQualityCaseId = typeof nativeQualityCases[number]["id"];
 
-export function evaluateNativeQuality(input: { caseId: NativeQualityCaseId; document: unknown; direction: string; plan?: NativePlan | null; base?: NativeDocument; targetSectionId?: string | null; selectedSourceIds?: string[] }): {
+export function evaluateNativeQuality(input: { caseId: NativeQualityCaseId; document: unknown; direction: string; brief?: NativeBrief; plan?: NativePlan | null; base?: NativeDocument; targetSectionId?: string | null; selectedSourceIds?: string[] }): {
   caseId: NativeQualityCaseId; caseMatch: boolean; documentHash: string; symbolic: ReturnType<typeof symbolicNativeReview>;
   structuralIssues: string[]; structure: { bars: number; sections: number; parts: number; notes: number; motifs: number; clips: number; controls: number; groups: number };
   humanReview: { identity: null; development: null; soundSelection: null; memorableMoments: null; heardQuality: null };
@@ -28,7 +29,7 @@ export function evaluateNativeQuality(input: { caseId: NativeQualityCaseId; docu
     caseMatch: input.direction.trim() === testCase.brief,
     documentHash: canonicalHash(document),
     symbolic,
-    structuralIssues: nativeCompletionIssues(document, input.direction, testCase.category === "revision" ? "revision" : "generation", input.selectedSourceIds ?? [], input.base, input.targetSectionId),
+    structuralIssues: nativeCompletionIssues(document, input.brief ?? emptyNativeBrief({ provenance: "none", direction: input.direction, baseRevisionId: null, targetSectionId: input.targetSectionId ?? null }), testCase.category === "revision" ? "revision" : "generation", input.selectedSourceIds ?? [], input.base, input.targetSectionId),
     structure: { bars: document.bars, sections: document.sections.length, parts: document.parts.length,
       notes: document.parts.reduce((sum, part) => sum + part.notes.length, 0) + document.motifs.reduce((sum, motif) => sum + motif.notes.length, 0),
       motifs: document.motifs.length, clips: document.parts.reduce((sum, part) => sum + part.sourceRegions.length + (part.libraryRegions?.length ?? 0), 0),

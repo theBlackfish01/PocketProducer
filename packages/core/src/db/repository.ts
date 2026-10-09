@@ -2,6 +2,9 @@ import type pg from "pg";
 import { getConfig } from "../config.js";
 import { getPool } from "./pool.js";
 import { appendPublicJobEvent } from "../native/activity.js";
+import { cachedRevisionFingerprint, revisionFingerprint, type NativeFingerprint } from "../native/fingerprint.js";
+import { nativeDocumentSchema } from "../native/model.js";
+import { stopIssue } from "../errors.js";
 
 export const DEV_SUBJECT = "dev-loopback";
 
@@ -13,6 +16,7 @@ export interface OwnedProject {
   createdAt: string;
   updatedAt: string;
   workspaceStatus?: "working" | "attention" | "ready" | "new";
+  fingerprint?: NativeFingerprint | null;
 }
 
 export interface JobRecord {
@@ -81,10 +85,25 @@ export async function listProjects(ownerId: string): Promise<OwnedProject[]> {
     WHEN EXISTS(SELECT 1 FROM job j WHERE j.project_id=p.id AND j.kind IN ('native-generation','native-revision') AND j.state='needs_attention') THEN 'attention'
     WHEN EXISTS(SELECT 1 FROM native_project_head h WHERE h.project_id=p.id) THEN 'ready' ELSE 'new' END AS workspace_status
     FROM project p LEFT JOIN native_project_head h ON h.project_id=p.id WHERE p.owner_id=$1 AND p.deleted_at IS NULL ORDER BY p.updated_at DESC`, [ownerId]);
+  const fingerprints = await currentFingerprints(ownerId, result.rows.flatMap((row) => row.current_revision_id ? [String(row.current_revision_id)] : []));
   return result.rows.map((row) => ({
     id: String(row.id), title: String(row.title), currentRevisionId: row.current_revision_id ? String(row.current_revision_id) : null,
-    version: Number(row.version), createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(), workspaceStatus: row.workspace_status as NonNullable<OwnedProject["workspaceStatus"]>
+    version: Number(row.version), createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(), workspaceStatus: row.workspace_status as NonNullable<OwnedProject["workspaceStatus"]>,
+    fingerprint: row.current_revision_id ? fingerprints.get(String(row.current_revision_id)) ?? null : null
   }));
+}
+
+// Owner-scoped: only revisions selected by this owner's own list are read or cached.
+async function currentFingerprints(ownerId: string, revisionIds: string[]): Promise<Map<string, NativeFingerprint>> {
+  const found = new Map<string, NativeFingerprint>();
+  const missing = revisionIds.filter((id) => { const cached = cachedRevisionFingerprint(id); if (cached) found.set(id, cached); return !cached; });
+  if (!missing.length) return found;
+  const rows = await getPool().query<{ id: string; document: unknown }>("SELECT id,document FROM native_revision WHERE owner_id=$1 AND id=ANY($2::uuid[])", [ownerId, missing]);
+  for (const row of rows.rows) {
+    const parsed = nativeDocumentSchema.safeParse(row.document);
+    if (parsed.success) found.set(String(row.id), revisionFingerprint(String(row.id), parsed.data));
+  }
+  return found;
 }
 
 export async function createProject(ownerId: string, title: string): Promise<OwnedProject> {
@@ -436,7 +455,7 @@ export async function jobSnapshot(ownerId: string, jobId: string) {
   const result = await getPool().query("SELECT id,project_id,kind,state,stage,attempts,result_native_revision_id,error_code,error_message,estimated_cost_usd,actual_cost_usd,created_at,updated_at FROM job WHERE id=$1 AND owner_id=$2 AND kind IN ('native-generation','native-revision','native-sync') AND EXISTS(SELECT 1 FROM project p WHERE p.id=job.project_id AND p.deleted_at IS NULL)", [jobId, ownerId]);
   if (!result.rows[0]) throw Object.assign(new Error("Job not found"), { statusCode: 404 });
   const events = await getPool().query("SELECT sequence,event_type,payload,created_at FROM job_event WHERE job_id=$1 ORDER BY sequence", [jobId]);
-  return { ...result.rows[0], events: events.rows };
+  return { ...result.rows[0], issue_code: stopIssue(result.rows[0].error_code, result.rows[0].error_message), events: events.rows };
 }
 
 export async function findCommandJob(ownerId: string, projectId: string, kind: JobRecord["kind"], idempotencyKey: string) {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { JobControlError } from "../db/repository.js";
 import { NativeSchemaPathError } from "./catalog.js";
 import { NativeLibraryError } from "./library.js";
+import { NativeCorrectableError, NativeUnknownIdError } from "./errors.js";
 
 export interface NativeToolFeedback { code: string; message: string; next: string }
 export class NativeUnexpectedToolError extends Error {
@@ -25,6 +26,7 @@ export function nativeToolArgumentFeedback(schema: unknown, args: unknown): Nati
 /** Only expected, locally correctable mistakes become model feedback. */
 export function nativeToolFeedback(toolName: string, error: unknown): NativeToolFeedback | null {
   if (error instanceof JobControlError) return null;
+  if (error instanceof NativeCorrectableError) return { code: error.code, message: error.message, next: error.next };
   if (error instanceof ToolInputParsingException || error instanceof z.ZodError) return {
     code: "INVALID_ARGUMENTS", message: "The tool arguments do not match its required fields or limits.",
     next: "Correct the arguments using the tool schema and the current workspace, then try once more."
@@ -38,11 +40,7 @@ export function nativeToolFeedback(toolName: string, error: unknown): NativeTool
     if (error.code === "invalid" || error.code === "not-found") return { code: "LIBRARY_SELECTION_INVALID", message: "That library resource could not be used.", next: "Search again and inspect an exact current result, or continue with a local sound." };
     return null; // Provider/transport failures are not model-correctable guesses.
   }
-  if (error instanceof Error && /^(?:Audiotool library is unavailable|Connect Audiotool before|Connect Audiotool to inspect)/.test(error.message)) return {
-    code: "OPTIONAL_LIBRARY_UNAVAILABLE", message: "The Audiotool library is unavailable for this request.",
-    next: "Continue with local native devices and selected owned sources; do not invent a library result."
-  };
-  if (error instanceof Error && /^Unknown (?:part|motif|section|group|target section)\b/.test(error.message) && (toolName.startsWith("inspect_native_") || toolName === "inspect_editable_sound")) return {
+  if (error instanceof NativeUnknownIdError && (toolName.startsWith("inspect_native_") || toolName === "inspect_editable_sound")) return {
     code: "UNKNOWN_DOCUMENT_ID", message: "That identifier is not in the current document.",
     next: "Read inspect_native_workspace and use an exact current identifier."
   };

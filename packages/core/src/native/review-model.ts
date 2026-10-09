@@ -4,7 +4,6 @@ import { producerChatModel, reportedGatewayCost } from "../providers/compatible-
 import { modelProvider } from "../providers/models.js";
 import { getConfig } from "../config.js";
 import { canonicalHash } from "../domain/hash.js";
-import type { JobRecord } from "../db/repository.js";
 import { boundOpenAiRequest, usageFromLlmResult } from "../agent/runtime.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "../providers/effects.js";
 import { tokenCostMicrousdAtPrice, pricingEvidence } from "../providers/pricing.js";
@@ -16,6 +15,9 @@ import { nativeReviewContextHash } from "./plan.js";
 import { getPool } from "../db/pool.js";
 import { z } from "zod";
 import { compactNativeReviewEvidence } from "./review-evidence.js";
+import { callOutcomeUnknown, CodedError, coded, hasErrorCode } from "../errors.js";
+import { JobControlError, type JobRecord } from "../db/repository.js";
+import { NativeReviewLostError } from "./errors.js";
 
 // One contract for generation and validation. Do not ask the model to produce
 // hashes/diagnostics that only the application can establish.
@@ -65,7 +67,7 @@ export async function focusedNativeReview(input: { job: JobRecord; direction: st
       const human = makeHuman(tier === "full" ? summary : compactNativeReviewEvidence(summary, tier === "minimal"));
       try { return { human, bounded: boundOpenAiRequest([[system, human]], outputBound, run?.maxInputTokens, formatOptions) }; }
       catch (error) {
-        if (tier === "minimal" || !(error instanceof Error) || !error.message.startsWith("OPENAI_INPUT_LIMIT_EXCEEDED")) throw error;
+        if (tier === "minimal" || !hasErrorCode(error, ["OPENAI_INPUT_LIMIT_EXCEEDED"])) throw error;
       }
     }
     throw new Error("No review request representation available");
@@ -85,10 +87,15 @@ export async function focusedNativeReview(input: { job: JobRecord; direction: st
   const prior = (await getPool().query<{ input_hash: string; state: string; cost_status: string; output: { review?: unknown } }>(
     "SELECT input_hash,state,cost_status,output FROM effect WHERE job_id=$1 AND idempotency_key=$2 AND step='producer-model-call' AND model=$3 AND provider=$4 AND prompt_version=$5",
     [input.job.id, idempotencyKey, modelName, modelProvider(modelName), promptVersion])).rows[0];
+  // A lost attempt is recorded as one review attempt (cost held or settled, never
+  // re-sent); the next attempt is a fresh request within the review allowance.
+  const lost = (message: string, cause?: unknown) => new NativeReviewLostError(message, { ...fallback(), verdict: "The review response was lost before it could be read; no model critique was established.", contextHash }, cause);
+  const inFlight = (state: string) => state === "reserved" || state === "dispatched";
   if (prior && prior.input_hash !== inputHash) {
-    if (prior.state !== "succeeded" || prior.cost_status !== "observed") throw new Error("Focused review outcome is uncertain for an earlier request envelope; it was not repeated");
+    if (inFlight(prior.state)) throw new CodedError("EFFECT_OUTCOME_UNCERTAIN", "An earlier focused review request may still be in flight; it was not repeated");
+    if (prior.state !== "succeeded" || prior.cost_status !== "observed") throw lost("An earlier review request for this score did not return a usable response; it was not repeated.");
     const saved = nativeReviewSchema.parse(prior.output.review);
-    if (saved.documentHash !== summary.documentHash || saved.contextHash !== contextHash) throw new Error("PROVIDER_EFFECT_INPUT_MISMATCH: saved review does not match current music and requirements");
+    if (saved.documentHash !== summary.documentHash || saved.contextHash !== contextHash) throw coded("PROVIDER_EFFECT_INPUT_MISMATCH: saved review does not match current music and requirements");
     inputHash = prior.input_hash;
   }
   const effect = await reserveProviderEffect({ job: input.job, provider: modelProvider(modelName), step: "producer-model-call", idempotencyKey, inputHash, model: modelName, promptVersion, ...(input.recovery ? { maxDistinctEffectsForPromptVersion: 1 } : {}),
@@ -104,29 +111,32 @@ export async function focusedNativeReview(input: { job: JobRecord; direction: st
           const recovered = nativeReviewSchema.parse(row.output.review);
           if (recovered.documentHash === summary.documentHash && recovered.contextHash === contextHash) return recovered;
         }
-        if (row && row.state !== "succeeded") throw new Error("Focused review recovery outcome is uncertain; reconcile before continuing");
-        if (!row) return focusedNativeReview({ ...input, recovery: { diagnostic: review.diagnostic, ...(cached.rawReviewText ? { text: cached.rawReviewText } : {}) } });
+        // A lost or failed repair leaves the original unusable review in place.
+        if (!row) return focusedNativeReview({ ...input, recovery: { diagnostic: review.diagnostic, ...(cached.rawReviewText ? { text: cached.rawReviewText } : {}) } }).catch((error: unknown) => { if (error instanceof NativeReviewLostError) return review; throw error; });
       }
       return review;
     }
-    throw new Error("Focused review has an unconfirmed provider outcome; it was not repeated");
+    if (inFlight(effect.state)) throw new CodedError("EFFECT_OUTCOME_UNCERTAIN", "This focused review request may still be in flight; it was not repeated");
+    throw lost("This review request did not return a usable response; it was not repeated.");
   }
   await markEffectDispatched(effect.id, input.job);
   let observed = false;
   try {
-    const model = input.scriptedReviewer ?? producerChatModel(modelName, outputBound, "low", 60_000);
+    const model = input.scriptedReviewer ?? producerChatModel(modelName, outputBound, "low", 60_000, "pocket-native-review");
     // This model call owns its own effect and reservation. Never inherit the
     // producer graph's accounting callback from the enclosing tool context.
     const response = await model.invoke([system, human], { ...formatOptions, callbacks: [], tags: ["native-focused-review"], ...(input.signal ? { signal: input.signal } : {}) });
     observed = true;
     const usage = usageFromLlmResult({ generations: [[{ message: response, text: response.text }]] } as unknown as Parameters<typeof usageFromLlmResult>[0]);
     const gatewayCost = reportedGatewayCost({ generations: [[{ message: response }]] });
-    if (!input.scriptedReviewer && (usage.inputTokens <= 0 || usage.outputTokens <= 0 || (modelProvider(modelName) === "gateway" && gatewayCost === undefined))) {
-      await failProviderEffect({ effectId: effect.id, job: input.job, errorClass: "ReviewUsageMissing", uncertain: true, safeDetails: { providerRequestId: typeof response.response_metadata.providerRequestId === "string" ? response.response_metadata.providerRequestId : "" } });
-      throw new Error("Focused review usage is uncertain; reconcile the provider effect before continuing");
-    }
     const parsed = parseNativeReview(response.text, input.document, response.response_metadata.finish_reason);
     const review: NativeReview = { ...(parsed.review ?? fallback()), contextHash, ...(parsed.diagnostic ? { diagnostic: parsed.diagnostic } : {}), ...(input.recovery ? { formatRecovery: true } : {}) };
+    if (!input.scriptedReviewer && (usage.inputTokens <= 0 || usage.outputTokens <= 0 || (modelProvider(modelName) === "gateway" && gatewayCost === undefined))) {
+      // The review arrived but its cost is unknown: use it and hold the call's
+      // worst-case reservation as an unknown liability (never free, never re-sent).
+      await failProviderEffect({ effectId: effect.id, job: input.job, errorClass: "ReviewUsageMissing", uncertain: true, safeDetails: { providerRequestId: typeof response.response_metadata.providerRequestId === "string" ? response.response_metadata.providerRequestId : "" } });
+      return review;
+    }
     const actualCostMicrousd = input.scriptedReviewer ? 0 : gatewayCost ?? tokenCostMicrousdAtPrice(price, usage);
     const requestId = response.response_metadata.providerRequestId;
     const state = await completeProviderEffect({ effectId: effect.id, job: input.job, output: { usage, review, ...(parsed.diagnostic ? { rawReviewText: response.text.slice(0, 6000), textTruncated: response.text.length > 6000 } : {}) }, actualCostMicrousd, ...(typeof requestId === "string" ? { providerRequestId: requestId } : {}) });
@@ -136,14 +146,17 @@ export async function focusedNativeReview(input: { job: JobRecord; direction: st
     if (parsed.diagnostic && !input.recovery && await nativeFormatRecoveryAvailable(input.job.id)) {
       try { return await focusedNativeReview({ ...input, recovery: { diagnostic: parsed.diagnostic, text: response.text.slice(0, 6000) } }); }
       catch (error) {
-        // Known pre-dispatch limits leave the original diagnostic available.
-        // Unknown effects must still stop the whole orchestration.
-        if (!(error instanceof Error) || !/^(MODEL_BUDGET_EXCEEDED|MODEL_CALL_LIMIT_EXCEEDED|OPENAI_INPUT_LIMIT_EXCEEDED|MODEL_FORMAT_RECOVERY_EXHAUSTED)/.test(error.message)) throw error;
+        // Known pre-dispatch limits and a lost repair leave the original
+        // diagnostic available. A possibly in-flight effect still stops the run.
+        if (!(error instanceof NativeReviewLostError) && !hasErrorCode(error, ["MODEL_BUDGET_EXCEEDED", "MODEL_CALL_LIMIT_EXCEEDED", "OPENAI_INPUT_LIMIT_EXCEEDED", "MODEL_FORMAT_RECOVERY_EXHAUSTED"])) throw error;
       }
     }
     return review;
   } catch (error) {
-    if (!observed) await failProviderEffect({ effectId: effect.id, job: input.job, errorClass: error instanceof Error ? error.name : "ReviewError", uncertain: error instanceof Error && /timeout|abort|network|uncertain|ECONN|socket/i.test(`${error.name} ${error.message}`) });
-    throw error;
+    if (observed) throw error;
+    await failProviderEffect({ effectId: effect.id, job: input.job, errorClass: error instanceof Error ? error.name : "ReviewError", uncertain: callOutcomeUnknown(error) });
+    // A cancelled job stops; any other failed dispatch is a lost review attempt.
+    if (input.signal?.aborted || error instanceof JobControlError) throw error;
+    throw lost("The review request failed before a response could be read; it was not repeated.", error);
   }
 }

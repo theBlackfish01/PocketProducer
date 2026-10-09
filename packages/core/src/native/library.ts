@@ -18,7 +18,20 @@ export function nativePresetFingerprint(preset: NativePreset): string {
 
 export class NativeLibraryError extends Error {
   readonly statusCode: number;
-  constructor(readonly code: "unavailable" | "not-found" | "invalid" | "provider-failed", message: string) { super(message); this.name = "NativeLibraryError"; this.statusCode = code === "not-found" ? 404 : code === "invalid" ? 422 : 409; }
+  constructor(readonly code: "unavailable" | "not-found" | "invalid" | "provider-failed" | "unauthorized", message: string) { super(message); this.name = "NativeLibraryError"; this.statusCode = code === "not-found" ? 404 : code === "invalid" ? 422 : code === "unauthorized" ? 401 : 409; }
+}
+
+// The SDK raises Connect errors carrying a numeric status code. Classify by that
+// code; a missing or unknown code stays a provider failure (never a guess).
+const connectStatus = { invalidArgument: 3, notFound: 5, permissionDenied: 7, unauthenticated: 16 } as const;
+export function libraryFailure(error: unknown, fallback: string): NativeLibraryError {
+  if (error instanceof NativeLibraryError) return error;
+  const message = error instanceof Error ? error.message : fallback;
+  const status = error instanceof Error && "code" in error && typeof error.code === "number" ? error.code : null;
+  if (status === connectStatus.notFound) return new NativeLibraryError("not-found", message);
+  if (status === connectStatus.invalidArgument) return new NativeLibraryError("invalid", message);
+  if (status === connectStatus.unauthenticated || status === connectStatus.permissionDenied) return new NativeLibraryError("unauthorized", message);
+  return new NativeLibraryError("provider-failed", message);
 }
 
 const sampleName = /^samples\/[a-zA-Z0-9-]{1,120}$/;
@@ -84,12 +97,12 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
           ).slice(0, 12);
           return { samples, nextPageToken: result.nextPageToken, provenance: "Audiotool sample metadata; usage rights are not inferred from visibility" as const };
         });
-      } catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "Sample search failed"); }
+      } catch (error) { throw libraryFailure(error, "Sample search failed"); }
     },
     async getSample(name: string) {
       if (!sampleName.test(name)) throw new NativeLibraryError("invalid", "Invalid sample identifier");
       try { return normalizeSample(await requireClient().samples.get(name)); }
-      catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "Sample lookup failed"); }
+      catch (error) { throw libraryFailure(error, "Sample lookup failed"); }
     },
     async readSampleAudio(name: string) {
       if (!sampleName.test(name)) throw new NativeLibraryError("invalid", "Invalid sample identifier");
@@ -104,7 +117,7 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
         const measured = profileOwnedSourceWav(bytes);
         if (measured.durationSeconds > 30) throw new NativeLibraryError("invalid", "Decoded sample exceeds the 30-second inspection bound");
         return { sample, bytes, contentHash: createHash("sha256").update(bytes).digest("hex"), measured, provenance: "Decoded selected WAV bytes from Audiotool; not a full-project render" as const };
-      } catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "Sample audio could not be inspected"); }
+      } catch (error) { throw libraryFailure(error, "Sample audio could not be inspected"); }
     },
     async inspectSampleAudio(name: string) {
       const inspected = await this.readSampleAudio(name);
@@ -113,12 +126,15 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
     async searchPresets(deviceType: NativePresetType, query: string) {
       if (!allowedPresetTypes.includes(deviceType) || query.length > 80) throw new NativeLibraryError("invalid", "Unsupported preset search");
       try { return { presets: (await requireClient().presets.search(deviceType, query.trim())).slice(0, 12).map(normalizePreset), provenance: "Audiotool preset metadata" as const }; }
-      catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "Preset search failed"); }
+      catch (error) { throw libraryFailure(error, "Preset search failed"); }
     },
     async getPreset(name: string) {
       if (!presetName.test(name)) throw new NativeLibraryError("invalid", "Invalid preset identifier");
-      try { const preset = await requireClient().presets.get(name); return { metadata: normalizePreset(preset), preset }; }
-      catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "Preset lookup failed"); }
+      try {
+        const preset: unknown = await requireClient().presets.get(name);
+        if (preset instanceof Error) throw preset;
+        return { metadata: normalizePreset(preset as NativePreset), preset: preset as NativePreset };
+      } catch (error) { throw libraryFailure(error, "Preset lookup failed"); }
     },
     searchGmSounds(query: string, family: "instrument" | "drums") {
       if (query.length > 80) throw new NativeLibraryError("invalid", "Use a short sound search query");
@@ -135,7 +151,7 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
       try {
         const preset = family === "drums" ? await presets.getDrums(item as typeof presets.gmDrums[number]) : await presets.getInstrument(item as typeof presets.gmInstruments[number]);
         return { metadata: normalizePreset(preset), preset };
-      } catch (error) { if (error instanceof NativeLibraryError) throw error; throw new NativeLibraryError("provider-failed", error instanceof Error ? error.message : "GM sound lookup failed"); }
+      } catch (error) { throw libraryFailure(error, "GM sound lookup failed"); }
     }
   };
 }

@@ -1,7 +1,8 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { canonicalHash } from "../domain/hash.js";
 import { getPool } from "../db/pool.js";
-import { boundOpenAiRequest } from "../agent/runtime.js";
+import { boundOpenAiRequest, type InputCalibration } from "../agent/runtime.js";
+import { coded, hasErrorCode } from "../errors.js";
 
 // Only pinned, local read-only guidance survives edits. Never cache mutable
 // music, external resource availability, reviews or user authorization here.
@@ -53,7 +54,21 @@ function currentReadEvidence(messages: BaseMessage[], hash: unknown): ReadEviden
 // final pressure pass must replace its complete exchange with diagnostics; recent successful
 // results are retained within the available envelope. Current
 // score/plan/checklist are appended as fresh human data and cannot be evicted.
-export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4, summarizeErrors = false): BaseMessage[] {
+/** Mutable per-run window: completed exchange groups before `start` are omitted.
+ * It only moves forward, so consecutive requests share their prefix. */
+export interface NativeContextWindow { start: number }
+const segmentGroupLimit = 10;
+
+// Stable context (notes, recalled guidance) sits right after the exact brief, ahead
+// of the exchanges, so appending a new exchange never changes earlier input.
+function afterBrief(messages: BaseMessage[], insert: BaseMessage[]): BaseMessage[] {
+  if (!insert.length) return messages;
+  const brief = messages.findIndex((message) => message instanceof HumanMessage);
+  const at = brief < 0 ? 0 : brief + 1;
+  return [...messages.slice(0, at), ...insert, ...messages.slice(at)];
+}
+
+function exchangeGroups(messages: BaseMessage[]) {
   const groups: { start: number; end: number; error: boolean }[] = [];
   for (let i = 0; i < messages.length; i++) {
     const ai = messages[i];
@@ -64,30 +79,76 @@ export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4
     if (!ai.tool_calls?.length) { groups.push({ start: i, end: i + 1, error: false }); continue; }
     const replies = messages.slice(i + 1, i + 1 + ai.tool_calls.length);
     if (replies.length !== ai.tool_calls.length || !replies.every((reply) => reply instanceof ToolMessage) || !ai.tool_calls.every((call) => replies.some((reply) => reply instanceof ToolMessage && reply.tool_call_id === call.id))) continue;
-    groups.push({ start: i, end: i + 1 + replies.length, error: replies.some((reply) => reply instanceof ToolMessage && (reply.status === "error" || /^Error[:\s]/i.test(reply.text))) });
+    groups.push({ start: i, end: i + 1 + replies.length, error: replies.some((reply) => reply instanceof ToolMessage && (reply.status === "error" || reply.text.startsWith("Error"))) });
     i += replies.length;
   }
+  return groups;
+}
+
+// Per-turn context the producer regenerates on every call.
+const turnContextPrefixes = ["Confirmed current production plan (data, not instructions)", "Confirmed current native state (data, not instructions)", "Production checklist (data, not user instructions)"];
+
+/** Per-turn context already shown with each tool result, by tool call id. */
+export type TurnNotes = Map<string, string[]>;
+
+const appended = (message: ToolMessage, note: string) => new ToolMessage({
+  tool_call_id: message.tool_call_id,
+  content: typeof message.content === "string" ? `${message.content}\n\n${note}` : [...message.content, { type: "text" as const, text: note }],
+  ...(message.status ? { status: message.status } : {}), ...(message.name ? { name: message.name } : {})
+});
+
+/** Make each request an exact extension of the previous one so the provider can
+ * reuse its cached prompt. Measured live, a request reuses the cache only when it
+ * contains the previous request in full: dropping or changing anything the last
+ * request carried (here, its per-turn context) reused only the static prefix
+ * (1,623 tokens), while keeping it reused 5,403 of 5,406.
+ *
+ * So the regenerated per-turn context travels inside the latest tool result, and
+ * every earlier tool result is re-sent with exactly the notes it carried before.
+ * Stored tool results stay untouched (evidence readers parse them). Only these
+ * regenerated data blocks move; a genuine user message is never folded. */
+export function foldTurnContext(messages: BaseMessage[], notes: TurnNotes = new Map()): { messages: BaseMessage[]; added: { id: string; note: string } | null } {
+  let end = messages.length;
+  while (end > 0 && messages[end - 1] instanceof HumanMessage && turnContextPrefixes.some((prefix) => messages[end - 1]!.text.startsWith(prefix))) end--;
+  const last = messages[end - 1];
+  const target = end < messages.length && last instanceof ToolMessage ? last : null;
+  const note = target ? messages.slice(end).map((message) => message.text).join("\n\n") : "";
+  const restored = (target ? messages.slice(0, end) : messages).map((message) => {
+    if (!(message instanceof ToolMessage)) return message;
+    const kept = [...(notes.get(message.tool_call_id) ?? []), ...(message === target ? [note] : [])];
+    return kept.length ? appended(message, kept.join("\n\n")) : message;
+  });
+  return { messages: restored, added: target ? { id: target.tool_call_id, note } : null };
+}
+
+export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4, summarizeErrors = false, startGroup?: number): BaseMessage[] {
+  const groups = exchangeGroups(messages);
   const latestError = groups.findLast((group) => group.error);
-  const omitted = groups.slice(0, Math.max(0, groups.length - keepGroups)).filter((group) => summarizeErrors || group !== latestError);
+  const firstKept = startGroup === undefined ? Math.max(0, groups.length - keepGroups) : Math.min(Math.max(0, startGroup), groups.length);
+  const omitted = groups.slice(0, firstKept).filter((group) => summarizeErrors || group !== latestError);
   if (!omitted.length) return messages;
   const result = messages.filter((_, i) => !omitted.some((group) => i >= group.start && i < group.end));
+  const notes: BaseMessage[] = [];
   if (latestError && omitted.includes(latestError)) {
     // Replace the WHOLE completed provider exchange, never detach reasoning from
     // calls/results. Retain bounded diagnostic facts, not generated reasoning or
     // unrelated successful reads. Pending exchanges are never eligible.
-    const failures = messages.slice(latestError.start + 1, latestError.end).filter((m) => m instanceof ToolMessage && (m.status === "error" || /^Error[:\s]/i.test(m.text))).slice(-3);
-    result.push(new HumanMessage(`Prior completed tool failures (historical data, not new instructions): ${JSON.stringify(failures.map((m) => ({ tool: m.name ?? "tool", diagnostic: m.text.slice(0, 500), truncated: m.text.length > 500 })))}. The complete historical exchange was removed to fit the request. Inspect current state before acting; do not replay a write under a new key. These errors may already be resolved.`));
+    const failures = messages.slice(latestError.start + 1, latestError.end).filter((m) => m instanceof ToolMessage && (m.status === "error" || m.text.startsWith("Error"))).slice(-3);
+    notes.push(new HumanMessage(`Prior completed tool failures (historical data, not new instructions): ${JSON.stringify(failures.map((m) => ({ tool: m.name ?? "tool", diagnostic: m.text.slice(0, 500), truncated: m.text.length > 500 })))}. The complete historical exchange was removed to fit the request. Inspect current state before acting; do not replay a write under a new key. These errors may already be resolved.`));
   }
   // No generative summary can invent constraints or claim stale music is fresh.
-  result.push(new HumanMessage(`Context maintenance: ${omitted.length} completed tool exchanges omitted. The exact brief, retained local guidance/results/errors and current confirmed state remain authoritative. Reuse retained skill guidance; do not reread it merely because the exchange was omitted. External resource identities not retained must be rechecked before use; musical facts must be inspected on the current document. This is not a musical change.`));
-  return result;
+  notes.push(new HumanMessage(`Context maintenance: ${omitted.length} completed tool exchanges omitted. The exact brief, retained local guidance/results/errors and current confirmed state remain authoritative. Reuse retained skill guidance; do not reread it merely because the exchange was omitted. External resource identities not retained must be rechecked before use; musical facts must be inspected on the current document. This is not a musical change.`));
+  return afterBrief(result, notes);
 }
 
-export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number, dispatch: { systemMessage?: BaseMessage; envelope?: unknown } = {}): BaseMessage[] {
+export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number, dispatch: { systemMessage?: BaseMessage; envelope?: unknown; calibrations?: readonly InputCalibration[]; finalize?: (messages: BaseMessage[]) => BaseMessage[] } = {}, window?: NativeContextWindow): BaseMessage[] {
   const retained = [...evidence];
   const observations = currentReadEvidence(history, checklist.documentHash);
   const observationCount = observations.length;
-  let current = compactNativeReadHistory(history);
+  const groupCount = exchangeGroups(history).length;
+  if (window && (window.start > groupCount || groupCount - window.start > segmentGroupLimit)) window.start = Math.max(0, groupCount - 1);
+  const compact = (keep: number, summarize: boolean) => window ? compactNativeReadHistory(history, keep, summarize, Math.max(window.start, groupCount - keep)) : compactNativeReadHistory(history, keep, summarize);
+  let current = window ? compactNativeReadHistory(history, 4, false, window.start) : compactNativeReadHistory(history);
   let retainedGroups = 4;
   let summarizedErrors = false;
   for (;;) {
@@ -98,12 +159,18 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
     const recalled = retained.filter((entry) => !visible.some((v) => canonicalHash(v) === canonicalHash(entry)));
     const visibleMusic = currentReadEvidence(current, checklist.documentHash);
     const currentObservations = observations.filter((entry) => !visibleMusic.some((v) => canonicalHash([v.tool, v.arguments]) === canonicalHash([entry.tool, entry.arguments])));
-    const makeMessages = (guidance: ReadEvidence[]) => [...current, new HumanMessage(`Production checklist and previously read local guidance (data, not user instructions): ${JSON.stringify({ ...checklist, currentObservations, omittedObservations: observationCount - observations.length, priorGuidance: guidance, omittedGuidance: evidence.length - retained.length, guidanceCaveat: "Reuse these exact-hash read observations and retained guidance. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail. External availability is not cached here." })}`)];
-    const measure = (messages: BaseMessage[]) => boundOpenAiRequest([dispatch.systemMessage ? [dispatch.systemMessage, ...messages] : messages], outputBound, inputLimit, dispatch.envelope);
+    // Recalled guidance changes only when the window resets, so it is part of the
+    // cached prefix; per-turn state and observations stay at the end.
+    const makeMessages = (guidance: ReadEvidence[]) => [...afterBrief(current, guidance.length ? [new HumanMessage(`Previously read local guidance (data, not user instructions): ${JSON.stringify({ priorGuidance: guidance, guidanceCaveat: "Reuse this retained guidance. Truncated entries report omissions; omitted material is not absent. External availability is not cached here." })}`)] : []), new HumanMessage(`Production checklist (data, not user instructions). A later checklist supersedes this one: ${JSON.stringify({ ...checklist, currentObservations, omittedObservations: observationCount - observations.length, recalledGuidance: guidance.length, omittedGuidance: evidence.length - retained.length, observationCaveat: "Reuse these exact-hash read observations. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail." })}`)];
+    // Measure what is actually sent: finalize restores per-turn notes on tool results.
+    const measure = (messages: BaseMessage[]) => { const sent = dispatch.finalize ? dispatch.finalize(messages) : messages; return boundOpenAiRequest([dispatch.systemMessage ? [dispatch.systemMessage, ...sent] : sent], outputBound, inputLimit, dispatch.envelope, dispatch.calibrations); };
     const messages = makeMessages(recalled);
     try { measure(messages); return messages; }
     catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith("OPENAI_INPUT_LIMIT_EXCEEDED")) throw error;
+      if (!hasErrorCode(error, ["OPENAI_INPUT_LIMIT_EXCEEDED"])) throw error;
+      // First pressure response with a window: start a fresh segment at the latest
+      // complete exchange, exactly once, before any finer trimming.
+      if (window && retainedGroups === 4 && window.start < groupCount - 1) { window.start = Math.max(0, groupCount - 1); retainedGroups = 1; current = compact(1, summarizedErrors); continue; }
       // Prefer the latest complete provider exchange over optional OLD skills
       // when trimming those skills can actually make it fit. Otherwise we would
       // repeatedly reset the inspection/action context despite ample room for
@@ -115,7 +182,7 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
           retained.splice(oldest, 1);
           continue;
         } catch (minimalError) {
-          if (!(minimalError instanceof Error) || !minimalError.message.startsWith("OPENAI_INPUT_LIMIT_EXCEEDED")) throw minimalError;
+          if (!hasErrorCode(minimalError, ["OPENAI_INPUT_LIMIT_EXCEEDED"])) throw minimalError;
         }
       }
       // An old error group must not evict the latest successful exchange. Keep
@@ -123,13 +190,14 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
       // recent complete exchange before considering removal of that exchange.
       if (retainedGroups === 1 && !summarizedErrors) {
         summarizedErrors = true;
-        current = compactNativeReadHistory(history, 1, true); continue;
+        current = compact(1, true); continue;
       }
       if (retainedGroups > 0) {
         retainedGroups = retainedGroups === 4 ? 1 : 0;
-        current = compactNativeReadHistory(history, retainedGroups, summarizedErrors); continue;
+        if (window) window.start = Math.max(window.start, groupCount - retainedGroups);
+        current = compact(retainedGroups, summarizedErrors); continue;
       }
-      if (!summarizedErrors) { summarizedErrors = true; current = compactNativeReadHistory(history, 0, true); continue; }
+      if (!summarizedErrors) { summarizedErrors = true; current = compact(0, true); continue; }
       if (!retained.length) { if (observations.length) { observations.shift(); continue; } throw error; }
       // Irreducible old replay is already gone. Exact brief, current state and
       // pending exchanges are never lost.
@@ -166,7 +234,7 @@ export function nativeReadEvidence(messages: BaseMessage[], prior: ReadEvidence[
     if (message instanceof AIMessage) for (const call of message.tool_calls ?? []) {
       if (call.id && reusableReads.has(call.name)) calls.set(call.id, { name: call.name, args: call.args });
     }
-    if (!(message instanceof ToolMessage) || message.status === "error" || /^Error[:\s]/i.test(message.text)) continue;
+    if (!(message instanceof ToolMessage) || message.status === "error" || message.text.startsWith("Error")) continue;
     const call = calls.get(message.tool_call_id);
     if (!call) continue;
     // File permission enforcement still lives in Deep Agents. Only skill reads
@@ -209,8 +277,10 @@ export class NativeConvergenceMonitor {
     const state = canonicalHash([music, [...missing].sort()]);
     this.blockedFinishAttempts = state === this.blockedFinishState ? this.blockedFinishAttempts + 1 : 1;
     this.blockedFinishState = state;
+    // A repeat restates the specific blockers, not only that repeating will not help.
+    const blockers = `${missing.slice(0, 3).join("; ")}${missing.length > 3 ? ` (and ${missing.length - 3} more)` : ""}`;
     return { repeated: this.blockedFinishAttempts > 1, next: this.blockedFinishAttempts > 1
-      ? "The same music has the same completion blockers. Calling finish again or changing metadata will not resolve them. Use the existing missing list: inspect only the named target if needed, make one valid targeted edit, then finish. Never remove a genuine user protection to satisfy a check. If instructions truly conflict, explain the conflict instead of claiming completion."
+      ? `The same music still has the same completion blockers: ${blockers}. Calling finish again or changing metadata will not resolve them. Fix exactly these: inspect only the named target if needed, make one valid targeted edit, then finish. Never remove a genuine user protection to satisfy a check. If instructions truly conflict, explain the conflict instead of claiming completion.`
       : "Resolve the listed requirements in one targeted batch before finishing again. This check spent no review call. Qualitative coherence/recognizability is not an exact lock; explicit keep-unchanged instructions and protected parts remain mandatory." };
   }
   observeState(state: unknown): { stagnantTurns: number; guidance: string } {
@@ -220,7 +290,7 @@ export class NativeConvergenceMonitor {
     const hash = canonicalHash([stable, Math.min(6, this.evidence.size - this.evidenceAtChange)]);
     this.unchanged = hash === this.last ? this.unchanged + 1 : 0;
     this.last = hash;
-    if (this.unchanged >= 12) throw new Error("NATIVE_INCOMPLETE:REPEATED_NO_PROGRESS: Repeated steps did not produce new musical work or evidence. The draft is retained for continuation.");
+    if (this.unchanged >= 12) throw coded("NATIVE_INCOMPLETE:REPEATED_NO_PROGRESS: Repeated steps did not produce new musical work or evidence. The draft is retained for continuation.");
     return { stagnantTurns: this.unchanged, guidance: this.turnsWithoutStateChange >= 4 ? "You are repeating inspection without changing the music or resolving completion requirements. Use the retained exact-hash observations. If a concrete finding needs a change, apply one targeted batch now; otherwise inspect only missing final sections, run the final review and mark reviewed. Do not restart a tour of parts and motifs. Read again only for a specific missing detail needed by that edit. Never skip unmet requirements." : "" };
   }
 }

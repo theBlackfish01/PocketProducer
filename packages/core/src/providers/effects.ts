@@ -4,9 +4,15 @@ import type { JobRecord } from "../db/repository.js";
 import { getPool } from "../db/pool.js";
 import { jobNativeRunLimits } from "../native/profile.js";
 import { assertSharedUsage } from "./limits.js";
+import { coded } from "../errors.js";
 
 export type ProviderName = "openai" | "gemini" | "gateway" | "audiotool";
 export type EffectState = "reserved" | "dispatched" | "succeeded" | "failed" | "uncertain";
+
+/** SQL predicate for effects that still need reconciliation: possibly in flight,
+ * or finished with a cost that was never recorded. A lost (uncertain) call is not
+ * unresolved: every budget already counts its worst-case reservation as held. */
+export const unresolvedEffectSql = (alias: string) => `(${alias}.state IN ('reserved','dispatched') OR (${alias}.state<>'uncertain' AND ${alias}.cost_status='unknown'))`;
 
 export interface EffectReservation {
   id: string;
@@ -56,7 +62,7 @@ export async function reserveProviderEffect(input: {
     );
     const existing = prior.rows[0];
     if (existing) {
-      if (existing.input_hash !== input.inputHash) throw new Error("PROVIDER_EFFECT_INPUT_MISMATCH");
+      if (existing.input_hash !== input.inputHash) throw coded("PROVIDER_EFFECT_INPUT_MISMATCH");
       if (existing.state === "reserved") {
         await client.query(
           "UPDATE effect SET attempt_id=$2,lease_generation=$3,updated_at=now() WHERE id=$1",
@@ -71,19 +77,19 @@ export async function reserveProviderEffect(input: {
     if (input.maxDistinctEffectsForStep !== undefined) {
       if (!Number.isSafeInteger(input.maxDistinctEffectsForStep) || input.maxDistinctEffectsForStep < 1) throw new Error("Invalid provider step-effect limit");
       const count = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND step=$2", [input.job.id, input.step]);
-      if (Number(count.rows[0]?.count ?? 0) >= input.maxDistinctEffectsForStep) throw new Error("MODEL_STEP_EFFECT_LIMIT_EXCEEDED");
+      if (Number(count.rows[0]?.count ?? 0) >= input.maxDistinctEffectsForStep) throw coded("MODEL_STEP_EFFECT_LIMIT_EXCEEDED");
     }
     if (input.maxDistinctEffectsForPromptVersion !== undefined) {
       if (!Number.isSafeInteger(input.maxDistinctEffectsForPromptVersion) || input.maxDistinctEffectsForPromptVersion < 1) throw new Error("Invalid prompt-effect limit");
       const count = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND prompt_version=$2", [input.job.id, input.promptVersion]);
-      if (Number(count.rows[0]?.count ?? 0) >= input.maxDistinctEffectsForPromptVersion) throw new Error("MODEL_FORMAT_RECOVERY_EXHAUSTED");
+      if (Number(count.rows[0]?.count ?? 0) >= input.maxDistinctEffectsForPromptVersion) throw coded("MODEL_FORMAT_RECOVERY_EXHAUSTED");
     }
     const callCount = await client.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND reservation_microusd>0",
       [input.job.id]
     );
     const nativeLimits = jobNativeRunLimits(input.job.request);
-    if (Number(callCount.rows[0]?.count ?? 0) >= (nativeLimits?.maxCalls ?? config.MAX_MODEL_CALLS_PER_JOB)) throw new Error("MODEL_CALL_LIMIT_EXCEEDED");
+    if (Number(callCount.rows[0]?.count ?? 0) >= (nativeLimits?.maxCalls ?? config.MAX_MODEL_CALLS_PER_JOB)) throw coded("MODEL_CALL_LIMIT_EXCEEDED");
     const totals = await client.query<{ overall: string; job: string }>(
       `SELECT
          COALESCE(SUM(CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END),0)::text AS overall,
@@ -97,8 +103,8 @@ export async function reserveProviderEffect(input: {
     const job = Number(totals.rows[0]?.job ?? 0);
     if (input.reservationMicrousd < 0) throw new Error("Invalid model reservation");
     if (input.provider !== "audiotool") await assertSharedUsage(client, input.job.ownerId, input.provider, input.reservationMicrousd, input.model);
-    if (overall + input.reservationMicrousd > overallLimit) throw new Error("MODEL_BUDGET_EXCEEDED:SITE");
-    if (job + input.reservationMicrousd > jobLimit) throw new Error("MODEL_BUDGET_EXCEEDED:JOB");
+    if (overall + input.reservationMicrousd > overallLimit) throw coded("MODEL_BUDGET_EXCEEDED:SITE");
+    if (job + input.reservationMicrousd > jobLimit) throw coded("MODEL_BUDGET_EXCEEDED:JOB");
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,model,prompt_version,reservation_microusd,attempt_id,lease_generation)
        VALUES($1,$2,$3,$4,'reserved',$5,$6,$7,$8,$9,$10) RETURNING id`,
@@ -151,9 +157,9 @@ export async function completeProviderEffect(input: { effectId: string; job: Job
     );
     const row = effect.rows[0];
     if (!row || row.attempt_id !== input.job.attemptId) throw new Error("Provider effect attempt identity mismatch");
-    if (row.provider_request_id && input.providerRequestId && row.provider_request_id !== input.providerRequestId) throw new Error("PROVIDER_REQUEST_ID_CONFLICT");
+    if (row.provider_request_id && input.providerRequestId && row.provider_request_id !== input.providerRequestId) throw coded("PROVIDER_REQUEST_ID_CONFLICT");
     const priorActual = Number(row.actual_cost_microusd);
-    if (["succeeded", "failed", "uncertain"].includes(row.state) && row.cost_status === "observed" && priorActual !== input.actualCostMicrousd) throw new Error("PROVIDER_USAGE_CONFLICT");
+    if (["succeeded", "failed", "uncertain"].includes(row.state) && row.cost_status === "observed" && priorActual !== input.actualCostMicrousd) throw coded("PROVIDER_USAGE_CONFLICT");
     if (row.state === "succeeded") {
       await client.query("COMMIT");
       return "succeeded";

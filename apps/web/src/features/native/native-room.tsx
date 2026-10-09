@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowRight, Check, GitCompareArrows, LockKeyhole, Music2, MoreHorizontal, ExternalLink, RotateCcw, Search } from "lucide-react"
-import { api, type Asset, type Job, type NativeDraftView, type NativeSnapshot, type SoundRecipe, type SoundFeedback } from "../../lib/api"
+import { ArrowRight, AudioLines, Check, GitCompareArrows, History, LockKeyhole, Music2, MoreHorizontal, ExternalLink, RotateCcw, Search } from "lucide-react"
+import { api, issueOf, type NativeInterpretation, type Activity, type Asset, type Job, type NativeDraftView, type NativeSnapshot, type SoundRecipe, type SoundFeedback } from "../../lib/api"
 import { arrangementSummary, friendlyIssue, jobProgress, readableDevice, readableEffect } from "../../lib/ui-copy"
 import { Button } from "../../components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu"
@@ -10,7 +10,12 @@ import { DirectionComposer } from "./direction-composer"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog"
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group"
 import { defaultNativeDirection, freshNativeDraft, nativeDraftKey, reconcileNativeDraft } from "./native-draft"
-import { NativeScore } from "./native-score"
+import { NativeScore, type ScoreHighlight } from "./native-score"
+import { ConstructionProgress } from "./construction-progress"
+import { VersionRail } from "./version-rail"
+import { PinDialog, PinTray, type PinDraft } from "./score-pin-controls"
+import { composePins, maxPins, readPins, writePins, type ScorePin } from "./score-pins"
+import { activityTargets, type ScoreTargets } from "./activity-targets"
 import { compareScoreSection } from "./score"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../components/ui/sheet"
 import { ProducerFeed } from "./producer-feed"
@@ -20,6 +25,8 @@ import { assertFreshSnapshot, reconcileRead } from "./reconcile-read"
 import { claimAudioPlayback, releaseAudioPlayback } from "../../lib/audio-coordinator"
 
 const terminal = new Set(["succeeded", "failed", "cancelled", "needs_attention"])
+// Public events that change a running request's plan or stage (music changes the draft hash).
+const planEvents = new Set(["approach", "working", "checking", "continued"])
 const clipTransform = (region: { playbackRate?: number; stretchMode?: string; pitchShiftSemitones?: number }) =>
   (region.playbackRate ? " · " + String(region.playbackRate) + "× speed" : "") + (region.stretchMode === "preservePitch" ? " · pitch preserved" : "") + (region.pitchShiftSemitones ? " · " + String(region.pitchShiftSemitones) + " semitone shift" : "")
 type Receipt = { operation: "native-generation" | "native-revision" | "native-sync"; key: string; jobId: string | null; signature: string }
@@ -47,7 +54,10 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   }, [])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ code: string | null } | null>(null)
+  // A submission that could not start is explained inside the composer.
+  const [submitIssue, setSubmitIssue] = useState<{ code: string | null } | null>(null)
+  useEffect(() => { if (submitIssue) window.requestAnimationFrame(() => document.getElementById("direction-issue")?.scrollIntoView({ block: "nearest", behavior: "smooth" })) }, [submitIssue])
   const [direction, setDirection] = useState(defaultNativeDirection())
   const [profile, setProfile] = useState<"standard" | "extended">("standard")
   const [producerModel, setProducerModel] = useState("gpt-6-luna")
@@ -85,7 +95,9 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const [compareMode, setCompareMode] = useState<"before" | "after" | "changes">("changes")
   const [compareSectionId, setCompareSectionId] = useState<string | null>(null)
   const [comparePair, setComparePair] = useState<{ beforeId: string; afterId: string } | null>(null)
-  const [preservationPreview, setPreservationPreview] = useState<Awaited<ReturnType<typeof api.nativePreservationPreview>> | null>(null)
+  // Words the submit-time check could not match (or an unavailable check): the
+  // person decides whether to send them as guidance or edit the direction.
+  const [briefCheck, setBriefCheck] = useState<{ interpretationId: string | null; rejected: NativeInterpretation["rejected"]; unavailable: boolean; model: string; fresh: boolean } | null>(null)
   const pendingCompare = useRef<{ projectId: string; jobId: string; baseId: string; sectionId: string | null } | null>(null)
   const activeProjectRef = useRef(projectId)
   const roomActiveRef = useRef(true)
@@ -111,6 +123,12 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const [libraryBusy, setLibraryBusy] = useState(false)
   const [libraryError, setLibraryError] = useState<string | null>(null)
   const [capabilities, setCapabilities] = useState<Array<{ type: string; family: string; purpose: string; writableInPocketProducer: boolean }>>([])
+  // Local listening notes; NativeRoom is keyed by project, so this read is per room.
+  const [pins, setPins] = useState<ScorePin[]>(() => readPins(projectId))
+  const [pinDraft, setPinDraft] = useState<PinDraft | null>(null)
+  const pinReturn = useRef<string | null>(null)
+  const [highlight, setHighlight] = useState<ScoreHighlight | null>(null)
+  const highlightTimer = useRef<number | undefined>(undefined)
   const assetsRef = useRef(assets)
   assetsRef.current = assets
   const current = snapshot?.current ?? null
@@ -136,7 +154,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       let stored: unknown = null
       try { stored = JSON.parse(localStorage.getItem(nativeDraftKey(projectId)) ?? "null") } catch { /* A malformed browser draft has no authority. */ }
       const restored = reconcileNativeDraft(stored, value, assetsRef.current)
-      setWorkspaceView(value.current ? "arrangement" : "producer"); setSnapshot(value); setDirection(restored.draft.direction); setProfile(restored.draft.profile ?? "standard"); setProducerModel(restored.draft.model ?? "gpt-6-luna"); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.notices); setDraftProjectId(projectId)
+      setWorkspaceView(value.current ? "arrangement" : "producer"); setSnapshot(value); setDirection(restored.draft.direction); setProfile(restored.draft.profile ?? "standard"); setProducerModel(restored.draft.model ?? "gpt-6-luna"); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.draft.direction.trim() ? restored.notices : []); setDraftProjectId(projectId)
       setLoading(false)
       try {
         const raw = localStorage.getItem(receiptKey)
@@ -158,21 +176,17 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
           else if (receipt.operation === "native-sync") void api.commandReceipt(projectId, receipt.operation, receipt.key).then(async ({ job: found }) => { if (active && found && found.project_id === projectId) { localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: found.id })); await recoverCopy(found) } }).catch(() => undefined)
         }
       } catch { /* A malformed local receipt cannot change server state. */ }
-    }).catch((cause: unknown) => { if (active) { setLoading(false); setError(cause instanceof Error ? cause.message : "Unable to load native construction") } })
+    }).catch((cause: unknown) => { if (active) { setLoading(false); setError(issueOf(cause)) } })
     return () => { active = false; roomActiveRef.current = false; libraryAudioRef.current?.pause() }
   }, [projectId, receiptKey])
+
+  useEffect(() => { writePins(projectId, pins) }, [projectId, pins])
+  useEffect(() => () => window.clearTimeout(highlightTimer.current), [])
 
   useEffect(() => {
     if (draftProjectId !== projectId) return
     localStorage.setItem(nativeDraftKey(projectId), JSON.stringify({ headId: snapshot?.currentRevisionId ?? null, direction, profile, model: producerModel, targetPartId, targetSectionId, protectedPartIds, sourceIds }))
   }, [draftProjectId, projectId, snapshot?.currentRevisionId, direction, profile, producerModel, targetPartId, targetSectionId, protectedPartIds, sourceIds])
-
-  useEffect(() => {
-    if (!current?.id || !direction.trim()) { setPreservationPreview(null); return }
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => { void api.nativePreservationPreview(projectId, direction, current.id, targetSectionId, controller.signal).then((value) => { if (!controller.signal.aborted) setPreservationPreview(value) }).catch(() => { if (!controller.signal.aborted) setPreservationPreview(null) }) }, 380)
-    return () => { controller.abort(); window.clearTimeout(timer) }
-  }, [projectId, current?.id, direction, targetSectionId])
 
   useEffect(() => {
     let active = true
@@ -208,6 +222,11 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
     return () => { active = false; controller.abort() }
   }, [projectId, activity.state?.headId, activity.state?.job?.id, activity.state?.job?.state, activity.state?.job?.stage, loading, draftProjectId, refreshReads])
 
+  // Plan and stage events of the running request re-read its draft, so the
+  // progress tracker follows recorded facts. Confirmed music already changes the
+  // draft hash, so music events need no extra read.
+  const activeJobId = activity.state?.job?.id
+  const latestJobEvent = useMemo(() => activity.events.findLast((event) => event.jobId === activeJobId && planEvents.has(event.payload.kind))?.cursor ?? 0, [activity.events, activeJobId])
   useEffect(() => {
     const page = activity.state
     const request = page?.job
@@ -220,7 +239,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       return view
     }, controller.signal).then((view) => { if (active) { setTentative((prior) => prior?.jobId === view.jobId && prior.stepCount > view.stepCount ? prior : view); setTentativeError(null) } }).catch(() => { if (active) setTentativeError("Work in progress is temporarily unavailable. Your saved arrangement is unchanged.") })
     return () => { active = false; controller.abort() }
-  }, [projectId, activity.state?.job?.id, activity.state?.job?.state, activity.state?.draft?.hash, refreshReads])
+  }, [projectId, activity.state?.job?.id, activity.state?.job?.state, activity.state?.draft?.hash, latestJobEvent, refreshReads])
 
   // Refresh the existing sidebar projection only when confirmed music gets a title.
   const displayTitle = snapshot?.current?.document.title ?? tentative?.document?.title ?? null
@@ -271,6 +290,28 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const changeSection = useCallback((id: string | null) => { setTargetSectionId(id); focusDirection() }, [focusDirection])
   const changePart = useCallback((id: string) => { setTargetPartId(id); setTargetSectionId(viewSectionId); focusDirection() }, [viewSectionId, focusDirection])
   const suggest = (value: string) => { setDirection(value); window.requestAnimationFrame(focusDirection) }
+  const openPin = useCallback((partId: string, startBar: number, endBar: number) => {
+    const document = snapshotRef.current?.current?.document
+    const part = document?.parts.find((item) => item.id === partId)
+    if (!document || !part) return
+    pinReturn.current = partId
+    setPinDraft({ partId, partName: part.name, startBar, endBar, bars: document.bars })
+  }, [])
+  const savePin = (value: { startBar: number; endBar: number; note: string }) => {
+    if (!pinDraft) return
+    setPins((prior) => [...prior, { id: crypto.randomUUID(), partId: pinDraft.partId, partName: pinDraft.partName, ...value, revisionId: current?.id ?? null, ordinal: current?.ordinal ?? null, createdAt: new Date().toISOString() }].slice(-maxPins))
+    setPinDraft(null)
+  }
+  // Pins become ordinary editable direction text; the usual preview and submit rules apply.
+  const addPinsToDirection = () => {
+    if (!current) return
+    const composed = composePins(pins, current.document, protectedPartIds)
+    if (!composed.used.length) return
+    setDirection((prior) => prior.trim() ? `${prior.trim()}\n${composed.text}` : composed.text)
+    setTargetSectionId(composed.sectionId); setTargetPartId(composed.partId)
+    setPins((prior) => prior.filter((pin) => !composed.used.includes(pin.id)))
+    focusDirection()
+  }
   const searchLibrary = async () => {
     if (!libraryQuery.trim() || libraryBusy) return
     setLibraryBusy(true); setLibrarySearched(false); setLibraryError(null); setLibraryResults([]); setSampleAnalysis(null)
@@ -332,7 +373,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
         : syncState === "applying" ? "Preparing the editable Audiotool copy…"
           : audiotoolAvailable ? `Version ${current?.ordinal ?? ""} is ready to copy.` : "Audiotool connection is not set up."
 
-  const submit = async (freshAttempt = false, submittedModel = producerModel) => {
+  const submit = async (freshAttempt = false, submittedModel = producerModel, confirmed?: { interpretationId: string | null }) => {
     if (!direction.trim() || busy || activeJob || activity.state?.actions.canSubmit === false || activity.state?.headId !== snapshot?.currentRevisionId || draftNotices.length) return
     const head = snapshot?.currentRevisionId ?? null
     const operation: Receipt["operation"] = head ? "native-revision" : "native-generation"
@@ -341,12 +382,13 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
     const key = freshAttempt ? crypto.randomUUID() : localStorage.getItem(storageKey) ?? crypto.randomUUID()
     localStorage.setItem(storageKey, key)
     const receipt: Receipt = { operation, key, jobId: null, signature }
-    localStorage.setItem(receiptKey, JSON.stringify(receipt))
     const acceptRequest = async (accepted: Job) => {
       if (!stillInProject()) return
       if (head) pendingCompare.current = { projectId, jobId: accepted.id, baseId: head, sectionId: targetSectionId }
-      localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: accepted.id }))
-      setJob(accepted); setDirection(""); directionRef.current = ""; setWorkspaceView("producer"); setDraftNotices([]); setError(null)
+      localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: accepted.id })); localStorage.removeItem(`${storageKey}:brief`)
+      setJob(accepted); setDirection(""); directionRef.current = ""; setWorkspaceView("producer"); setDraftNotices([]); setError(null); setSubmitIssue(null)
+      // The accepted request keeps its own scope; the next change starts from the whole piece.
+      setTargetPartId(null); setTargetSectionId(null); setSourceIds([])
       navigateSession(projectId, "arrange", true)
       window.requestAnimationFrame(() => document.getElementById("workspace-title")?.focus())
       if (!terminal.has(accepted.state)) return
@@ -362,12 +404,34 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds(reset.protectedPartIds); setSourceIds([]); setDraftNotices([])
       localStorage.removeItem(receiptKey)
     }
-    setBusy(true); setError(null)
+    setBusy(true); setError(null); setSubmitIssue(null)
     try {
-      if (head) { const preview = await api.nativePreservationPreview(projectId, direction.trim(), head, targetSectionId); if (!stillInProject()) return; setPreservationPreview(preview); if (preview.unresolved.length) throw new Error(preview.unresolved.join(". ")) }
+      // The direction's explicit requirements are read once, at submit, and
+      // captured for the job. Unmatched words never become a silent lock.
+      let interpretationId = confirmed?.interpretationId ?? null
+      if (!confirmed) {
+        const briefKey = `${storageKey}:brief`
+        const checkKey = (freshAttempt ? null : localStorage.getItem(briefKey)) ?? crypto.randomUUID()
+        localStorage.setItem(briefKey, checkKey)
+        let checked: NativeInterpretation
+        try { checked = await api.interpretNative(projectId, { direction: direction.trim(), expectedHeadId: head, targetSectionId: head ? targetSectionId : null, targetPartId: head ? targetPartId : null }, checkKey) }
+        catch (cause) {
+          // A check that may have finished or is still settling replays at no cost
+          // under the same key; any other outcome starts a fresh check next time.
+          const code = issueOf(cause).code
+          if (code !== "NETWORK" && code !== "INTERPRETATION_PENDING") localStorage.removeItem(briefKey)
+          if (code !== "INTERPRETATION_UNAVAILABLE") throw cause
+          if (stillInProject()) setBriefCheck({ interpretationId: null, rejected: [], unavailable: true, model: submittedModel, fresh: freshAttempt })
+          return
+        }
+        if (!stillInProject()) return
+        if (checked.rejected.length) { setBriefCheck({ interpretationId: checked.interpretationId, rejected: checked.rejected, unavailable: false, model: submittedModel, fresh: freshAttempt }); return }
+        interpretationId = checked.interpretationId
+      }
+      localStorage.setItem(receiptKey, JSON.stringify(receipt))
       const savedProtections = current?.document.protectedPartIds ?? []
       const protectionChanged = JSON.stringify([...savedProtections].sort()) !== JSON.stringify([...protectedPartIds].sort())
-      const result = head ? await api.reviseNative(projectId, { direction: direction.trim(), profile, model: submittedModel, baseNativeRevisionId: head, expectedNativeHeadId: head, ...(targetPartId ? { targetPartId } : {}), ...(targetSectionId ? { targetSectionId } : {}), ...(protectionChanged ? { protectionChange: { expectedPartIds: savedProtections, desiredPartIds: protectedPartIds } } : {}), sourceAssetIds: sourceIds }, key) : await api.constructNative(projectId, direction.trim(), sourceIds, key, profile, submittedModel)
+      const result = head ? await api.reviseNative(projectId, { direction: direction.trim(), profile, model: submittedModel, baseNativeRevisionId: head, expectedNativeHeadId: head, ...(targetPartId ? { targetPartId } : {}), ...(targetSectionId ? { targetSectionId } : {}), ...(protectionChanged ? { protectionChange: { expectedPartIds: savedProtections, desiredPartIds: protectedPartIds } } : {}), sourceAssetIds: sourceIds, ...(interpretationId ? { interpretationId } : {}) }, key) : await api.constructNative(projectId, direction.trim(), sourceIds, key, profile, submittedModel, interpretationId ?? undefined)
       if (!stillInProject()) return
       await acceptRequest(await api.job(result.jobId))
     } catch (cause) {
@@ -377,7 +441,12 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       if (!stillInProject()) return
       if (recovered?.job) {
         await acceptRequest(recovered.job)
-      } else setError(cause instanceof Error ? cause.message : "The request could not be confirmed. Your idea is still here; retrying checks the same request.")
+      } else {
+        // A check made stale by a changed direction or version is discarded, so
+        // sending again checks the current words.
+        if (issueOf(cause).code === "INTERPRETATION_STALE") localStorage.removeItem(`${storageKey}:brief`)
+        setSubmitIssue(issueOf(cause))
+      }
     }
     finally { if (stillInProject()) setBusy(false) }
   }
@@ -408,8 +477,8 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       const fresh = await api.nativeSnapshot(projectId)
       if (!stillInProject()) return
       const restored = reconcileNativeDraft({ headId: snapshot.currentRevisionId, direction, targetPartId, targetSectionId, protectedPartIds, sourceIds }, fresh, assets)
-      setSnapshot(fresh); setDirection(restored.draft.direction); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.notices); setCompareOpen(false)
-    } catch (cause) { if (stillInProject()) { setError(cause instanceof Error ? cause.message : "The selected version changed; refresh and compare again"); const fresh = await api.nativeSnapshot(projectId); if (stillInProject()) setSnapshot(fresh) } }
+      setSnapshot(fresh); setDirection(restored.draft.direction); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.draft.direction.trim() ? restored.notices : []); setCompareOpen(false)
+    } catch (cause) { if (stillInProject()) { setError(issueOf(cause)); const fresh = await api.nativeSnapshot(projectId); if (stillInProject()) setSnapshot(fresh) } }
     finally { if (stillInProject()) setBusy(false) }
   }
 
@@ -430,7 +499,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
         if (state.state === "succeeded") localStorage.removeItem(receiptKey)
       }
       setJob(state)
-    } catch (cause) { if (stillInProject()) setError(cause instanceof Error ? cause.message : "Unable to start native synchronization") }
+    } catch (cause) { if (stillInProject()) setError(issueOf(cause)) }
     finally { if (stillInProject()) setBusy(false) }
   }
 
@@ -443,7 +512,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       const stopped = await api.job(job.id)
       if (!stillInProject()) return
       setJob(stopped); setAbandonOpen(false); setError(null)
-    } catch (cause) { if (stillInProject()) setError(cause instanceof Error ? cause.message : "Unable to leave this draft") }
+    } catch (cause) { if (stillInProject()) setError(issueOf(cause)) }
     finally { if (stillInProject()) setBusy(false) }
   }
 
@@ -451,7 +520,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
     if (!job || job.error_code !== "NATIVE_PARTIAL" || busy) return
     setBusy(true); setError(null)
     try { await api.continueNative(projectId, job.id); const next = await api.job(job.id); if (stillInProject()) setJob(next) }
-    catch (cause) { if (stillInProject()) setError(cause instanceof Error ? cause.message : "Unable to continue this saved draft") }
+    catch (cause) { if (stillInProject()) setError(issueOf(cause)) }
     finally { if (stillInProject()) setBusy(false) }
   }
 
@@ -465,7 +534,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       const next = await api.job(job.id)
       if (stillInProject()) { setJob(next); setExtendOpen(false) }
     } catch (cause) {
-      if (stillInProject()) { setError(cause instanceof Error ? cause.message : "Unable to continue"); setRefreshReads((value) => value + 1) }
+      if (stillInProject()) { setError(issueOf(cause)); setRefreshReads((value) => value + 1) }
     } finally { if (stillInProject()) setBusy(false) }
   }
 
@@ -475,45 +544,80 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const earlyCreation = inWorkspace && !current && !tentative?.document;
   const displayedDocument = draftVisible ? tentative?.document : current?.document;
   const statusText = activeJob && activeJob.kind !== "native-sync" ? "Working" : job?.state === "needs_attention" ? "Paused" : job?.state === "cancelled" && !current ? "Stopped" : current ? `Version ${current.ordinal} · Current` : "Draft";
-  const callExtension = tentative?.canExtend && !tentative.canContinue && /MODEL_CALL_LIMIT_EXCEEDED/.test(tentative.stopReason ?? "") && tentative.runLimits && tentative.extensionCeiling ? Math.min(80, tentative.extensionCeiling.maxCalls) : null;
+  const callExtension = tentative?.canExtend && !tentative.canContinue && tentative.stopCode === "CALL_LIMIT" && tentative.runLimits && tentative.extensionCeiling ? Math.min(80, tentative.extensionCeiling.maxCalls) : null;
   const canExtendCalls = Boolean(callExtension && tentative?.runLimits && callExtension > tentative.runLimits.maxCalls);
+  const draftJobId = tentative?.document ? tentative.jobId : null
+  const resolveTargets = useCallback((event: Activity): (ScoreTargets & { draft: boolean }) | null => {
+    const draftEvent = Boolean(draftJobId && event.jobId === draftJobId && event.payload.kind === "music")
+    const found = activityTargets(event, draftEvent ? tentative?.document : current?.document ?? tentative?.document, snapshot?.versions ?? [], snapshot?.currentRevisionId ?? null)
+    return found ? { ...found, draft: draftEvent || !current } : null
+  }, [draftJobId, tentative?.document, current, snapshot?.versions, snapshot?.currentRevisionId])
+  const previewTargets = useCallback((targets: ScoreTargets | null) => {
+    const same = (prior: ScoreHighlight | null) => Boolean(prior && targets && prior.partIds.join() === targets.partIds.join() && prior.sectionIds.join() === targets.sectionIds.join())
+    setHighlight((prior) => prior?.reveal || same(prior) || (!prior && !targets) ? prior : targets ? { partIds: targets.partIds, sectionIds: targets.sectionIds, nonce: 0, reveal: false } : null)
+  }, [])
+  const revealTargets = useCallback((targets: ScoreTargets & { draft?: boolean }) => {
+    setWorkspaceView("arrangement")
+    if (current) setShowDraft(Boolean(targets.draft))
+    if (targets.sectionIds.length === 1) (targets.draft ? setDraftSectionId : setViewSectionId)(targets.sectionIds[0])
+    setHighlight({ partIds: targets.partIds, sectionIds: targets.sectionIds, nonce: Date.now(), reveal: true })
+    window.clearTimeout(highlightTimer.current)
+    highlightTimer.current = window.setTimeout(() => setHighlight(null), 2_600)
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const selector = targets.partIds[0] ? `.producer-canvas [data-part-id="${CSS.escape(targets.partIds[0])}"]` : ".producer-canvas .living-score"
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      document.querySelector(selector)?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reduced ? "auto" : "smooth" })
+    }))
+  }, [current])
+  const compareTwo = (firstId: string, secondId: string) => {
+    const first = snapshot?.versions.find((version) => version.id === firstId), second = snapshot?.versions.find((version) => version.id === secondId)
+    if (!first || !second) return
+    const [before, after] = first.ordinal < second.ordinal ? [first, second] : [second, first]
+    setReplay(0); setComparePartId(null); setShowUnchanged(false)
+    setCompareId(after.id); setComparePair({ beforeId: before.id, afterId: after.id }); setCompareSectionId(targetSectionId ?? before.document.sections[0]?.id ?? null); setCompareMode("changes"); setCompareOpen(true)
+  }
   const ToolOverlay = panel ? Dialog : Sheet;
   const ToolContent = panel ? DialogContent : SheetContent;
   const ToolHeader = panel ? DialogHeader : SheetHeader;
   const ToolTitle = panel ? DialogTitle : SheetTitle;
   const ToolDescription = panel ? DialogDescription : SheetDescription;
-  const composer = <><DirectionComposer projectId={projectId} headId={current?.id ?? null} direction={direction} onDirection={setDirection} revision={Boolean(current)} active={Boolean(activeJob) || job?.state === "needs_attention"} busy={busy}
+  const composer = <><DirectionComposer projectId={projectId} headId={current?.id ?? null} direction={direction} onDirection={(value) => { setDirection(value); setSubmitIssue(null) }} revision={Boolean(current)} active={Boolean(activeJob) || job?.state === "needs_attention"} busy={busy}
     canSubmit={!busy && !activeJob && activity.state?.headId === snapshot?.currentRevisionId && Boolean(activity.state?.actions.canSubmit) && draftNotices.length === 0 && direction.trim().length >= 3}
     onSubmit={(model) => { setProducerModel(model); void submit(false, model) }} onAddSound={() => setSoundsOpen(true)} sectionId={targetSectionId} partId={targetPartId} protectedPartIds={protectedPartIds} sourceIds={sourceIds}
     sections={current?.document.sections ?? []} onSection={setTargetSectionId} partName={selectedPart?.name} clearPart={() => setTargetPartId(null)}
-    protectedNames={[...new Set([...protectedPartIds.map(partName), ...(preservationPreview?.revisionId === current?.id ? preservationPreview?.namedParts.map((item) => item.name) ?? [] : []), ...(preservationPreview?.revisionId === current?.id && preservationPreview?.theme ? [`${preservationPreview.theme.label} theme phrase`] : [])])]} profile={profile} onProfile={setProfile}>
+    protectedNames={[...new Set(protectedPartIds.map(partName))]} profile={profile} onProfile={setProfile} issue={submitIssue ? friendlyIssue(submitIssue.code, "Your direction is unchanged. Check it and try again.") : null}>
     {draftNotices.length ? <div className="job-status" role="status">{draftNotices.map((notice) => <p key={notice}>{notice}</p>)}<Button size="sm" variant="outline" onClick={() => setDraftNotices([])}>I reviewed the updated scope</Button></div> : null}
-  </DirectionComposer>{current && preservationPreview?.revisionId === current.id && preservationPreview.unresolved.length ? <div className="preservation-preview" role="alert">{preservationPreview.unresolved.join(". ")}. Check the keep-unchanged wording in your direction. Use a listed section or part name, or remove that instruction if nothing needs to stay unchanged.</div> : null}</>
+  </DirectionComposer></>
 
-  const producer = <section className="producer-panel" aria-label="Producer"><div className="producer-heading"><h2>Producer</h2></div>{current || tentative?.document ? <Button className="producer-view-arrangement" variant="ghost" onClick={() => setWorkspaceView("arrangement")}>View arrangement <ArrowRight size={14} /></Button> : null}<ProducerFeed events={activity.events} connection={activity.connection} older={activity.older} onOlder={() => void activity.loadOlder().catch(() => setError("Earlier activity could not be loaded."))} onLatest={activity.closeOlder} historyBusy={activity.historyBusy} onCompare={reviewActivityVersion} />{activeJob && activeJob.kind !== "native-sync" ? <div className="producer-current" role="status"><strong>{jobProgress(activeJob)}</strong><Button size="sm" variant="outline" disabled={!activity.state?.actions.canStop} onClick={() => void api.cancel(activeJob.id).then(() => api.job(activeJob.id)).then(setJob).catch(() => setError("Unable to stop the request. Check your connection and try again."))}>Stop</Button></div> : null}{job && job.kind !== "native-sync" && terminal.has(job.state) && job.state !== "succeeded" ? <div className="job-status" role="status">
+  const producer = <section className="producer-panel" aria-label="Producer"><div className="producer-heading"><h2>Producer</h2>{current || tentative?.document ? <Button className="producer-view-arrangement" variant="ghost" onClick={() => setWorkspaceView("arrangement")}>View arrangement <ArrowRight size={14} /></Button> : null}</div>{job && job.kind !== "native-sync" && (activeJob || job.state === "needs_attention") ? <ConstructionProgress plan={tentative?.jobId === job.id ? tentative.plan : null} document={tentative?.jobId === job.id ? tentative.document : null} paused={job.state === "needs_attention"} /> : null}<ProducerFeed events={activity.events} connection={activity.connection} older={activity.older} onOlder={() => void activity.loadOlder().catch(() => setError({ code: null }))} onLatest={activity.closeOlder} historyBusy={activity.historyBusy} onCompare={reviewActivityVersion} resolveTargets={resolveTargets} onPreview={previewTargets} onReveal={revealTargets} />{activeJob && activeJob.kind !== "native-sync" ? <div className="producer-current" role="status"><strong>{jobProgress(activeJob)}</strong><Button size="sm" variant="outline" disabled={!activity.state?.actions.canStop} onClick={() => void api.cancel(activeJob.id).then(() => api.job(activeJob.id)).then(setJob).catch(() => setError({ code: null }))}>Stop</Button></div> : null}{job && job.kind !== "native-sync" && terminal.has(job.state) && job.state !== "succeeded" ? <div className="job-status" role="status">
       <strong>{job.state === "cancelled" ? "Stopped" : "Paused"}</strong>
-      <span>{job.state === "cancelled" ? "This request was stopped. Your saved versions are unchanged." : friendlyIssue(tentative?.continuationReason ?? tentative?.stopReason ?? job.error_message, "The producer could not finish this request. Your draft is saved.", tentative?.stepCount !== 0)}</span>
+      <span>{job.state === "cancelled" ? "This request was stopped. Your saved versions are unchanged." : friendlyIssue(tentative?.continuationCode ?? tentative?.stopCode ?? job.issue_code, "The producer could not finish this request. Your draft is saved.", tentative?.stepCount !== 0)}</span>
       {(tentative?.stopReason ?? job.error_message)?.trim() ? <details><summary>Details</summary><p>{tentative?.stopReason ?? job.error_message}</p></details> : null}
       {job.error_code === "NATIVE_PARTIAL" ? <>
 {tentative?.canContinue ? <Button size="sm" disabled={busy} onClick={() => void continuePartial()}>Continue arrangement</Button> : canExtendCalls ? <Button size="sm" disabled={busy} onClick={() => setExtendOpen(true)}>Continue arrangement</Button> : null}{activity.state?.actions.canAbandon ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => setAbandonOpen(true)}>End this attempt…</Button> : null}
       </> : ["failed", "cancelled"].includes(job.state) && activity.state?.actions.canSubmit ? <Button className="mt-3" variant="outline" size="sm" onClick={() => void submit(true)} disabled={busy || !direction.trim()}>Send as a new request</Button> : <p className="provider-note">A new request is paused until the earlier outcome is known.</p>}
-    </div> : null}{job && tentative?.plan && tentative.jobId === job.id && job.state !== "succeeded" ? <details className="producer-approach"><summary>Musical approach</summary><div className="section-heading"><div><h3>The approach</h3><p>{tentative.plan.stage === "planned" ? "Planning the piece" : tentative.plan.stage === "building" ? "Building the arrangement" : tentative.plan.stage === "refining" ? "Adding detail" : "Reviewing the structure"}</p></div></div><p>{tentative.plan.plan.intent}</p><ol>{tentative.plan.plan.sections.map((section, index) => <li key={`${section.name}-${index}`}><strong>{section.name}</strong> — {section.purpose}</li>)}</ol>{tentative.plan.plan.creativeState?.identity ? <p><strong>Musical identity:</strong> {tentative.plan.plan.creativeState.identity}</p> : null}{tentative.plan.plan.creativeState?.palette.length ? <p><strong>Chosen sounds:</strong> {tentative.plan.plan.creativeState.palette.map((item) => `${item.role}: ${item.resourceId}`).join(" · ")}</p> : null}{tentative.plan.plan.creativeState?.unfinishedTasks.length ? <p><strong>Still to shape:</strong> {tentative.plan.plan.creativeState.unfinishedTasks.join(" · ")}</p> : tentative.plan.plan.developmentTasks.length ? <p><strong>Still to develop:</strong> {tentative.plan.plan.developmentTasks.join(" · ")}</p> : null}{tentative.plan.review?.documentHash === tentative.documentHash ? <p><strong>Score check:</strong> {tentative.plan.review.verdict} {tentative.plan.review.modelUsed ? "A symbolic editor reviewed this structure; no audio was heard." : "Checked from note and section data only."}</p> : null}</details> : null}{composer}</section>
+    </div> : null}{job && tentative?.plan && tentative.jobId === job.id && job.state !== "succeeded" ? <details className="producer-approach"><summary>Musical approach</summary><div className="section-heading"><div><h3>The approach</h3><p>{tentative.plan.stage === "planned" ? "Planning the piece" : tentative.plan.stage === "building" ? "Building the arrangement" : tentative.plan.stage === "refining" ? "Adding detail" : "Reviewing the structure"}</p></div></div><p>{tentative.plan.plan.intent}</p><ol>{tentative.plan.plan.sections.map((section, index) => <li key={`${section.name}-${index}`}><strong>{section.name}</strong> — {section.purpose}</li>)}</ol>{tentative.plan.plan.creativeState?.identity ? <p><strong>Musical identity:</strong> {tentative.plan.plan.creativeState.identity}</p> : null}{tentative.plan.plan.creativeState?.palette.length ? <p><strong>Chosen sounds:</strong> {tentative.plan.plan.creativeState.palette.map((item) => `${item.role}: ${item.resourceId}`).join(" · ")}</p> : null}{tentative.plan.plan.creativeState?.unfinishedTasks.length ? <p><strong>Still to shape:</strong> {tentative.plan.plan.creativeState.unfinishedTasks.join(" · ")}</p> : tentative.plan.plan.developmentTasks.length ? <p><strong>Still to develop:</strong> {tentative.plan.plan.developmentTasks.join(" · ")}</p> : null}{tentative.plan.review?.documentHash === tentative.documentHash ? <p><strong>Score check:</strong> {tentative.plan.review.verdict} {tentative.plan.review.modelUsed ? "A symbolic editor reviewed this structure; no audio was heard." : "Checked from note and section data only."}</p> : null}</details> : null}{current && pins.length ? <PinTray pins={pins} document={current.document} protectedPartIds={protectedPartIds} currentId={current.id} onRemove={(id) => setPins((prior) => prior.filter((pin) => pin.id !== id))} onClear={() => setPins([])} onUse={addPinsToDirection} /> : null}{composer}</section>
   if (loading) return <div className="empty-surface" role="status">Opening your arrangement…</div>
   return <div className={`native-room producer-room ${inWorkspace ? "is-workspace" : "is-start"} ${earlyCreation ? "is-early" : ""} view-${workspaceView}`}>
+    <Dialog open={Boolean(briefCheck)} onOpenChange={(open) => { if (!open) setBriefCheck(null) }}><DialogContent><DialogHeader className="pr-8"><DialogTitle>{briefCheck?.unavailable ? "Send without checks?" : "Check these words"}</DialogTitle><DialogDescription>{briefCheck?.unavailable ? "Your direction couldn't be checked right now. It can still guide the producer, but nothing in it will be enforced." : "These words couldn't be matched to this arrangement. If you send now, they'll guide the producer without being enforced."}</DialogDescription></DialogHeader>
+      {briefCheck?.rejected.length ? <ul className="brief-check-list">{briefCheck.rejected.map((item) => <li key={`${item.quote}:${item.reason}`}><q>{item.quote}</q><span>{item.reason}</span></li>)}</ul> : null}
+      <DialogFooter><Button variant="outline" disabled={busy} onClick={() => { setBriefCheck(null); window.requestAnimationFrame(() => document.getElementById("native-direction")?.focus()) }}>Edit direction</Button><Button disabled={busy} onClick={() => { const pending = briefCheck; setBriefCheck(null); if (pending) void submit(pending.fresh, pending.model, { interpretationId: pending.interpretationId }) }}>Send as guidance</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={extendOpen} onOpenChange={setExtendOpen}><DialogContent><DialogHeader><DialogTitle>Continue this arrangement?</DialogTitle><DialogDescription>Allow up to {callExtension} total model steps for this request, keeping its existing spending limit. Completed work will not be started over.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" disabled={busy} onClick={() => setExtendOpen(false)}>Not now</Button><Button disabled={busy || !canExtendCalls} onClick={() => void extendAndContinue()}>{busy ? "Continuing…" : "Extend and continue"}</Button></DialogFooter></DialogContent></Dialog>
+    <PinDialog draft={pinDraft} onSave={savePin} onClose={() => setPinDraft(null)} returnFocus={() => pinReturn.current ? document.querySelector<HTMLElement>(`.score-part-label[data-part-id="${CSS.escape(pinReturn.current)}"]`) : null} />
     {snapshotError || tentativeError ? <div className="job-status" role="status"><p>{snapshotError ?? tentativeError}</p><Button variant="outline" size="sm" onClick={() => { setSnapshotError(null); setTentativeError(null); setRefreshReads((value) => value + 1) }}>Refresh arrangement</Button></div> : null}
     <Dialog open={abandonOpen} onOpenChange={setAbandonOpen}><DialogContent><DialogHeader><DialogTitle>End this attempt?</DialogTitle><DialogDescription>Your saved versions and confirmed work stay safe. This request will stop and cannot be continued. You can send a fresh direction afterward.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" disabled={busy} onClick={() => setAbandonOpen(false)}>Keep working on it</Button><Button disabled={busy} onClick={() => void abandonPartial()}>End attempt</Button></DialogFooter></DialogContent></Dialog>
-    {inWorkspace ? <header className="producer-workspace-header"><div><p className="workspace-state" role="status">{statusText}</p><h1 id="workspace-title" tabIndex={-1}>{displayedDocument?.title ?? "Your new arrangement"}</h1><p>{displayedDocument ? `${displayedDocument.bars} bars · ${displayedDocument.sections.length} sections · ${displayedDocument.parts.length} parts${draftVisible ? " · Draft" : ""}` : "A new piece, taking shape."}</p></div><div className="workspace-handoff">{current ? <><Button variant="outline" disabled={!currentRemoteVerification && (busy || Boolean(activeJob))} onClick={() => currentRemoteVerification && snapshot?.synchronization.url ? window.open(snapshot.synchronization.url, "_blank", "noopener,noreferrer") : ["conflict", "uncertain", "needs_attention", "applying"].includes(syncState) || !audiotoolAvailable ? setPanel("audiotool") : audiotoolConnected ? void synchronize() : onConnectAudiotool()}><ExternalLink size={16} /> {!audiotoolAvailable ? "Audiotool setup" : currentRemoteVerification ? "Open in Audiotool" : ["conflict", "uncertain", "needs_attention"].includes(syncState) ? "Review Audiotool copy" : syncState === "applying" ? "Copying…" : audiotoolConnected ? draftVisible ? `Copy Version ${current.ordinal} to Audiotool` : "Copy to Audiotool" : "Connect Audiotool"}</Button>{currentRemoteVerification ? <small>Version {current.ordinal} copied</small> : null}</> : null}</div></header> : <RoomHero status="A fresh start" title="What would you like to make?" description="A mood, a moment, or a detailed vision. Start with what you imagine." meta="" />}
-    {error ? <div className="job-status" role="alert"><strong>That action couldn't finish</strong><span>{friendlyIssue(error, "Your saved work is unchanged. Check the action and try again.")}</span></div> : null}
+    {inWorkspace ? <header className="producer-workspace-header"><div className="workspace-identity"><p className="workspace-state" role="status">{statusText}</p><h1 id="workspace-title" tabIndex={-1}>{displayedDocument?.title ?? "Your new arrangement"}</h1><p>{displayedDocument ? `${displayedDocument.bars} bars · ${displayedDocument.sections.length} sections · ${displayedDocument.parts.length} parts${draftVisible ? " · Draft" : ""}` : "A new piece, taking shape."}</p></div>
+      <div className="workspace-actions"><nav className="workspace-toolbar" aria-label="Session tools"><Button variant="ghost" onClick={() => setSoundsOpen(true)}><AudioLines aria-hidden="true" />Sounds</Button><Button variant="ghost" onClick={() => setPanel("history")}><History aria-hidden="true" />Versions</Button><DropdownMenu><DropdownMenuTrigger ref={menuRef} render={<Button variant="ghost" size="icon" aria-label="Session options" />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => { menuPanelRef.current = true; setPanel("audiotool") }}>Audiotool connection</DropdownMenuItem></DropdownMenuContent></DropdownMenu></nav>
+      {current ? <div className="workspace-handoff"><Button className="handoff-action" disabled={!currentRemoteVerification && (busy || Boolean(activeJob))} onClick={() => currentRemoteVerification && snapshot?.synchronization.url ? window.open(snapshot.synchronization.url, "_blank", "noopener,noreferrer") : ["conflict", "uncertain", "needs_attention", "applying"].includes(syncState) || !audiotoolAvailable ? setPanel("audiotool") : audiotoolConnected ? void synchronize() : onConnectAudiotool()}><ExternalLink size={16} /> {!audiotoolAvailable ? "Audiotool setup" : currentRemoteVerification ? "Open in Audiotool" : ["conflict", "uncertain", "needs_attention"].includes(syncState) ? "Review Audiotool copy" : syncState === "applying" ? "Copying…" : audiotoolConnected ? draftVisible ? `Copy Version ${current.ordinal} to Audiotool` : "Copy to Audiotool" : "Connect Audiotool"}</Button>{currentRemoteVerification ? <small>Version {current.ordinal} copied</small> : null}</div> : null}</div></header> : <RoomHero status="A fresh start" title="What would you like to make?" description="A mood, a moment, or a detailed vision. Start with what you imagine." meta="" />}
+    {error ? <div className="job-status" role="alert"><strong>That action couldn't finish</strong><span>{friendlyIssue(error.code, "Your saved work is unchanged. Check the action and try again.")}</span></div> : null}
     {inWorkspace ? <>
-      <nav className="workspace-toolbar" aria-label="Session tools"><Button variant="outline" onClick={() => setSoundsOpen(true)}>Sounds</Button><Button variant="outline" onClick={() => setPanel("history")}>Versions</Button><DropdownMenu><DropdownMenuTrigger ref={menuRef} render={<Button variant="ghost" size="icon" aria-label="Session options" />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => { menuPanelRef.current = true; setPanel("audiotool") }}>Audiotool connection</DropdownMenuItem></DropdownMenuContent></DropdownMenu></nav>
       <div className="workspace-view-switch" role="group" aria-label="Workspace view"><Button variant={workspaceView === "arrangement" ? "default" : "outline"} aria-pressed={workspaceView === "arrangement"} onClick={() => setWorkspaceView("arrangement")}>Arrangement</Button><Button variant={workspaceView === "producer" ? "default" : "outline"} aria-pressed={workspaceView === "producer"} onClick={() => setWorkspaceView("producer")}>Producer</Button></div>
       <div className="producer-workspace-grid"><section className="producer-canvas" aria-label="Arrangement workspace">{tentative?.document && current ? <div className="draft-choice" role="group" aria-label="Arrangement to inspect"><Button size="sm" variant={!showDraft ? "default" : "outline"} aria-pressed={!showDraft} onClick={() => setShowDraft(false)}>Saved arrangement</Button><Button size="sm" variant={showDraft ? "default" : "outline"} aria-pressed={showDraft} onClick={() => setShowDraft(true)}>View work in progress</Button></div> : null}{draftVisible ? <>{job && tentative?.document && tentative.jobId === job.id && job.state !== "succeeded" ? <section className="native-section native-draft-preview" aria-label="Unfinished arrangement preview">
       <div className="section-heading"><h2>Your arrangement</h2></div>
 
-      <NativeScore document={tentative.document} identity={`${projectId}:${tentative.jobId}:${tentative.documentHash}:${tentative.stepCount}`} selectedSectionId={draftSectionId} onSelectSection={setDraftSectionId} selectedPartId={draftPartId} onInspectPart={setDraftPartId} animateConfirmed motionScope={`${projectId}:${tentative.jobId}`} confirmedStepCount={tentative.stepCount} draft />
+      <NativeScore document={tentative.document} identity={`${projectId}:${tentative.jobId}:${tentative.documentHash}:${tentative.stepCount}`} selectedSectionId={draftSectionId} onSelectSection={setDraftSectionId} selectedPartId={draftPartId} onInspectPart={setDraftPartId} animateConfirmed motionScope={`${projectId}:${tentative.jobId}`} confirmedStepCount={tentative.stepCount} draft highlight={highlight} />
 
-</section> : null}</> : current ? <section className="native-section arrangement-section" aria-labelledby="arrangement-heading"><div className="section-heading"><div><h2 id="arrangement-heading">Your arrangement</h2><p>Explore a section or part. Choose “Change” when you're ready to shape it.</p></div><div className="arrangement-actions"><Button variant="ghost" size="sm" onClick={() => setPartsOpen(true)}>Manage parts</Button><Button variant="outline" size="sm" onClick={() => { setTargetSectionId(null); setTargetPartId(null); focusDirection() }}>Change whole piece</Button></div></div><NativeScore key={projectId} document={current.document} identity={`${projectId}:${current.id}:${current.documentHash}`} selectedSectionId={viewSectionId} onSelectSection={setViewSectionId} selectedPartId={inspectedPartId} onInspectPart={setInspectedPartId} onChangeSection={changeSection} onChangePart={changePart} onKeepPart={keepPart} protectedPartIds={protectedPartIds} /></section> : <section className="producer-empty-score"><Music2 size={32} /><h2>Finding the first musical shape</h2></section>}{tentativeError ? <p role="status">{tentativeError}</p> : null}</section>{producer}</div>
+</section> : null}</> : current ? <section className="native-section arrangement-section" aria-labelledby="arrangement-heading"><div className="section-heading"><div><h2 id="arrangement-heading">Your arrangement</h2><p>Explore a section or part. Choose “Change” when you're ready to shape it.</p></div><div className="arrangement-actions"><Button variant="ghost" size="sm" onClick={() => setPartsOpen(true)}>Manage parts</Button><Button variant="outline" size="sm" onClick={() => { setTargetSectionId(null); setTargetPartId(null); focusDirection() }}>Change whole piece</Button></div></div><NativeScore key={projectId} document={current.document} identity={`${projectId}:${current.id}:${current.documentHash}`} selectedSectionId={viewSectionId} onSelectSection={setViewSectionId} selectedPartId={inspectedPartId} onInspectPart={setInspectedPartId} onChangeSection={changeSection} onChangePart={changePart} onKeepPart={keepPart} protectedPartIds={protectedPartIds} highlight={highlight} pins={pins} onPinRange={openPin} /></section> : <section className="producer-empty-score"><Music2 size={32} /><h2>Finding the first musical shape</h2></section>}{tentativeError ? <p role="status">{tentativeError}</p> : null}</section>{producer}</div>
     </> : <section className="session-start-form">{composer}</section>}
     <ToolOverlay open={soundsOpen || partsOpen || panel !== null} onOpenChange={(open) => { if (!open) { setSoundsOpen(false); setPartsOpen(false); setPanel(null) } }}>
       <ToolContent className={panel ? "workspace-tool-dialog" : "workspace-tool-sheet"} finalFocus={() => { const fromMenu = menuPanelRef.current; menuPanelRef.current = false; return fromMenu ? menuRef.current : true }}><ToolHeader><ToolTitle>{soundsOpen ? "Sounds" : partsOpen ? "Parts & instruments" : panel === "history" ? "Version history" : "Your Audiotool copy"}</ToolTitle><ToolDescription>{soundsOpen ? "Record, upload or explore sounds." : panel === "history" ? "Choose a version to inspect." : panel === "audiotool" ? "Continue working on your editable music in Audiotool." : "Your saved versions stay safe."}</ToolDescription></ToolHeader><div className="workspace-tool-body">
@@ -543,7 +647,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
             {filteredParts.length > visibleParts.length ? <Button className="mt-3" variant="outline" size="sm" onClick={() => setPartLimit((count) => count + 8)}>Show more parts ({filteredParts.length - visibleParts.length} remaining)</Button> : null}
             <p className="section-footnote">“Keep” protects a part when you submit your next change. You can allow changes again before submitting.</p>
           </section></> : null}
-      {panel === "history" ? <section className="native-section versions-section">{snapshot && snapshot.versions.length > 1 ? <Button variant="outline" size="sm" onClick={() => openComparison()}><GitCompareArrows className="size-4" /> Compare</Button> : null}{snapshot?.versions.length ? <div className="version-quick-list">{snapshot.versions.map((version) => <Button variant="ghost" key={version.id} disabled={snapshot.versions.length < 2} onClick={() => openComparison(version.id)}><span>Version {version.ordinal}{version.id === snapshot.currentRevisionId ? <small className="version-badge">Current</small> : null}<span>{arrangementSummary(version)}</span></span></Button>)}</div> : <p>Your first version will appear when the arrangement is complete.</p>}</section> : null}
+      {panel === "history" ? <section className="native-section versions-section">{snapshot && snapshot.versions.length > 1 ? <Button variant="outline" size="sm" onClick={() => openComparison()}><GitCompareArrows className="size-4" /> Compare</Button> : null}{snapshot?.versions.length ? <VersionRail versions={snapshot.versions} currentId={snapshot.currentRevisionId} onCompare={(id) => openComparison(id)} onComparePair={compareTwo} /> : <p>Your first version will appear when the arrangement is complete.</p>}</section> : null}
       {panel === "audiotool" ? <><p>{current ? syncMessage : "Finish the arrangement to copy it to Audiotool."}</p>{snapshot?.synchronization.error ? <details><summary>Connection details</summary><p>{snapshot.synchronization.error}</p></details> : null}{currentRemoteVerification && snapshot?.synchronization.url ? <Button variant="outline" onClick={() => window.open(snapshot.synchronization.url!, "_blank", "noopener,noreferrer")}>Open in Audiotool</Button> : null}<Button disabled={busy || (audiotoolConnected && (!current || Boolean(activeJob))) || !audiotoolAvailable || ["conflict", "uncertain", "needs_attention", "applying"].includes(syncState)} onClick={() => audiotoolConnected ? void synchronize() : onConnectAudiotool()}>{audiotoolConnected ? currentRemoteVerification ? "Recheck Audiotool copy" : "Copy to Audiotool" : "Connect Audiotool"}</Button></> : null}
       </div></ToolContent>
     </ToolOverlay>
@@ -575,7 +679,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
         {snapshot && snapshot.versions.length > 2 ? <details className="comparison-history"><summary>Compare another saved version</summary><RadioGroup value={compareId ?? undefined} onValueChange={(id) => openComparison(id)} aria-label="Version to compare" className="version-list">{snapshot.versions.map((version) => <label key={version.id} className="version-option"><RadioGroupItem value={version.id} aria-label={`Version ${version.ordinal}`} /><span><span className="version-title">Version {version.ordinal} {version.id === snapshot.currentRevisionId ? <span className="chip"><Check className="mr-1 size-3" /> Current</span> : null}</span><p>{arrangementSummary(version)}</p></span></label>)}</RadioGroup></details> : null}
         {beforeVersion && afterVersion ? <>
           <div className="comparison-tabs" role="group" aria-label="Comparison view"><Button variant={compareMode === "before" ? "default" : "outline"} aria-pressed={compareMode === "before"} onClick={() => { setReplay(0); setCompareMode("before") }}>Before · v{beforeVersion.ordinal}{snapshot?.currentRevisionId === beforeVersion.id ? " · current" : ""}</Button><Button variant={compareMode === "after" ? "default" : "outline"} aria-pressed={compareMode === "after"} onClick={() => { setReplay(0); setCompareMode("after") }}>After · v{afterVersion.ordinal}{snapshot?.currentRevisionId === afterVersion.id ? " · current" : ""}</Button><Button variant={compareMode === "changes" ? "default" : "outline"} aria-pressed={compareMode === "changes"} onClick={() => { setReplay(0); setCompareMode("changes") }}>Changes</Button></div>
-          <div className="comparison-section-list" role="group" aria-label="Section to compare">{beforeVersion.document.sections.map((section) => <Button key={section.id} size="sm" variant={compareSection?.id === section.id ? "default" : "outline"} aria-pressed={compareSection?.id === section.id} onClick={() => { setReplay(0); setCompareSectionId(section.id) }}>{section.name}</Button>)}</div>
+          <div className="comparison-section-list" role="group" aria-label="Section to compare">{beforeVersion.document.sections.map((section) => <Button key={section.id} size="sm" variant={compareSection?.id === section.id ? "default" : "outline"} aria-pressed={compareSection?.id === section.id} title={section.name} onClick={() => { setReplay(0); setCompareSectionId(section.id) }}>{section.name}</Button>)}</div>
           {compareMode === "changes" && comparison ? <div className="comparison-facts" role="status"><strong>{compareSection?.name}: {comparison.status === "preserved" ? "musical structure unchanged" : comparison.status === "unverified" ? "some differences cannot be verified" : "structural changes found"}</strong><p>{comparison.addedNotes} added · {comparison.removedNotes} removed · {comparison.modifiedNotes} modified note events. {comparison.verifiedUnchangedParts.length ? `Verified unchanged here: ${comparison.verifiedUnchangedParts.length} ${comparison.verifiedUnchangedParts.length === 1 ? "part" : "parts"}.` : "No part is fully verified unchanged here."}</p>{comparison.caveats.map((caveat) => <p key={caveat}>{caveat}</p>)}<details><summary>Changed parts & verification details</summary><p><b>Kept, verified:</b> {comparison.verifiedUnchangedParts.join(", ") || "None verified here"}</p><ul>{comparison.parts.filter((part) => part.status !== "preserved" || part.metadataChanged).map((part) => <li key={part.partId}><b>{part.name}:</b> {part.status}{part.addedNotes.length || part.removedNotes.length || part.modifiedNotes.length ? ` · notes +${part.addedNotes.length} / −${part.removedNotes.length} / ~${part.modifiedNotes.length}` : ""}{part.clipStatus !== "preserved" ? ` · clips ${part.clipStatus}` : ""}{part.controlsChanged ? " · changing controls differ" : ""}{part.dependenciesChanged ? " · instrument or shared processing differs" : ""}{part.metadataChanged ? " · description changed" : ""}</li>)}</ul><p className="section-footnote">A verified unchanged structure is not proof that rendered audio sounds identical. Requested locks are separate from this comparison.</p></details></div> : null}
           <div className="comparison-display-options"><label><input type="checkbox" checked={showUnchanged} onChange={(event) => setShowUnchanged(event.target.checked)} /> Include unchanged parts</label><Button variant="outline" size="sm" disabled={compareMode !== "changes"} onClick={() => setReplay((value) => value + 1)}>Show the change</Button></div>
           <NativeScore document={compareMode === "before" ? beforeVersion.document : afterVersion.document} coordinateReference={compareMode === "before" ? afterVersion.document : beforeVersion.document} timelineReference={beforeVersion.document} comparisonBefore={compareMode === "changes" ? beforeVersion.document : undefined} identity={`${projectId}:compare:${comparePair?.beforeId}:${comparePair?.afterId}`} selectedSectionId={compareSection?.id ?? null} onSelectSection={setCompareSectionId} selectedPartId={comparePartId} onInspectPart={setComparePartId} detailOnly replay={compareMode === "changes" ? replay : 0} visiblePartIds={!showUnchanged && comparison?.parts.length ? comparison.parts.filter((part) => part.status !== "preserved" || part.metadataChanged).map((part) => part.partId) : undefined} />

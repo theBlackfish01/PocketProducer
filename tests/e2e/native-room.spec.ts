@@ -33,14 +33,7 @@ test("Luna-only creation migrates old drafts and rejects retired models at the A
   await page.getByRole("button", { name: "Create arrangement" }).click();
   expect((await sent).postDataJSON()).toMatchObject({ model: "gpt-6-luna" });
   await expect(page.locator(".producer-workspace-header")).toContainText("Version 1", { timeout: 90_000 });
-  const saved = await native(page, projectId);
   const coherence = "Add more things in but keep it coherent";
-  const sections = saved.current.document.sections as Array<{ id: string }>;
-  for (const targetSectionId of [null, sections[0]!.id]) {
-    const preview = await page.request.post(`/api/v1/projects/${projectId}/native/preservation-preview`, { data: { direction: coherence, targetSectionId, expectedNativeHeadId: saved.currentRevisionId } });
-    expect(preview.status()).toBe(200);
-    expect(await preview.json()).toMatchObject({ namedParts: [], theme: null, unresolved: [] });
-  }
   await producer(page);
   // The fixture has a deterministic variation operation, not a natural-language
   // composer. Keep the regression clause while selecting that supported edit.
@@ -135,11 +128,13 @@ test("native construct, protect, revise, compare and restore survives direct rel
   await page.getByRole("button", { name: "Undo rewrite" }).click();
   await page.reload();
   await expect(direction(page)).toHaveValue(pending);
-  await expect(page.getByRole("combobox", { name: "Change scope" }).locator("option:checked")).toHaveText("Ascent");
+  await expect(page.getByRole("combobox", { name: "Change scope" }).locator("option:checked")).toHaveText("04 · Ascent");
   await page.getByRole("button", { name: "Make this change" }).click();
   const compare = page.getByRole("dialog", { name: "Before and after" });
   await expect(compare).toBeVisible({ timeout: 90_000 });
   await expect(compare.getByText(/Verified unchanged here:/)).toBeVisible();
+  // The finished request kept its own scope; the next change starts from the whole piece.
+  await expect(page.locator('select[aria-label="Change scope"]')).toHaveValue("");
   const second = await native(page, projectId);
   expect(second.currentRevisionId).not.toBe(first.currentRevisionId);
   await compare.getByRole("button", { name: "Before · v1", exact: true }).click();
@@ -195,12 +190,12 @@ test("phone switches between score and Producer without losing text or compariso
   await page.screenshot({ path: `${evidence}/workspace-mobile.png`, fullPage: true });
 });
 
-test("a late preservation response cannot submit or alter another room", async ({ page }) => {
+test("a late direction check cannot submit or alter another room", async ({ page }) => {
   const id = await create(page, "A gentle 16-bar theme with bass and melody");
   await producer(page);
   let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });
   let previews = 0, revisions = 0;
-  await page.route(`**/api/v1/projects/${id}/native/preservation-preview`, async (route) => { previews++; await gate; await route.continue(); });
+  await page.route(`**/api/v1/projects/${id}/native/interpretations`, async (route) => { previews++; await gate; await route.continue(); });
   await page.route(`**/api/v1/projects/${id}/native/revisions`, async (route) => { revisions++; await route.continue(); });
   await direction(page).fill("Change the bass, but keep the melody");
   await page.getByRole("button", { name: "Make this change" }).click();
@@ -225,7 +220,7 @@ test("partial work keeps recovery available without financial UI or automatic co
     await route.fulfill({ json: { events: [], cursor: 0, nextCursor: 0, job, headId: selected.currentRevisionId, draft: { step: 2, hash: "partial" }, actions: { canSubmit: false, canStop: false, issue: "paused" }, allowance: { remainingUsd: 4.49, standardUsd: 4.49, extendedUsd: 4.49 } } });
   });
   await page.route(`**/api/v1/jobs/${jobId}`, (route) => route.fulfill({ json: job }));
-  await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, (route) => route.fulfill({ json: { jobId, state: job.state, selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 2, document: { ...selected.current.document, title: "Unselected draft" }, documentHash: "partial", canContinue: extensions > 0, canExtend: true, runLimits: { profile: "standard", maxCalls: extensions ? 60 : 40, maxInputTokens: 64000, maxOutputTokens: 16384, deadlineSeconds: 1800, maxJobCostUsd: 5 }, extensionCeiling: { maxCalls: 300, maxInputTokens: 256000, maxOutputTokens: 65536, deadlineSeconds: 21600, maxJobCostUsd: 100 }, budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 4.49, minimumNextCallUsd: 0.42, modelCalls: 3 }, continuationReason: extensions ? null : "This request has used its configured model-call allowance." } }));
+  await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, (route) => route.fulfill({ json: { jobId, state: job.state, selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 2, document: { ...selected.current.document, title: "Unselected draft" }, documentHash: "partial", canContinue: extensions > 0, canExtend: true, runLimits: { profile: "standard", maxCalls: extensions ? 60 : 40, maxInputTokens: 64000, maxOutputTokens: 16384, deadlineSeconds: 1800, maxJobCostUsd: 5 }, extensionCeiling: { maxCalls: 300, maxInputTokens: 256000, maxOutputTokens: 65536, deadlineSeconds: 21600, maxJobCostUsd: 100 }, budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 4.49, minimumNextCallUsd: 0.42, modelCalls: 3 }, continuationCode: extensions ? null : "CALL_LIMIT", continuationReason: extensions ? null : "This request has used its configured model-call allowance." } }));
   await page.reload();
   await page.getByRole("button", { name: "View work in progress" }).click();
   await expect(page.getByRole("region", { name: "Unfinished arrangement preview" })).toContainText("Your arrangement");
@@ -258,7 +253,7 @@ test("zero-step pause labels the retained approach without inventing a musical d
     await route.fulfill({ json: { events: [], cursor: 0, nextCursor: 0, job, headId: selected.currentRevisionId, draft: { step: 0, hash: null }, actions: { canSubmit: false, canStop: false, issue: "paused" }, allowance: { remainingUsd: 0.1, standardUsd: 0.1, extendedUsd: 0.1 } } });
   });
   await page.route(`**/api/v1/jobs/${jobId}`, (route) => route.fulfill({ json: job }));
-  await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, (route) => route.fulfill({ json: { jobId, state: job.state, selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 0, document: null, documentHash: null, plan: { plan: { intent: "A quiet question and answer", sections: [{ name: "Whole", purpose: "Leave room for a reply" }], soundGoals: ["Soft lead"], hardConstraints: [], developmentTasks: ["Write the reply"], creativeState: { identity: "Intimate and restrained", densityIntent: "Spacious", palette: [], unfinishedTasks: ["Write the reply"], definiteFailures: [] } }, stage: "planned", inspectedDocumentHash: null, review: null }, canContinue: false, canExtend: false, continuationReason: "The overall allowance cannot reserve another call.", budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 0.1, minimumNextCallUsd: 0.42, modelCalls: 2 } } }));
+  await page.route(`**/api/v1/projects/${id}/native/requests/${jobId}/draft`, (route) => route.fulfill({ json: { jobId, state: job.state, selected: false, baseRevisionId: selected.currentRevisionId, headMatches: true, stepCount: 0, document: null, documentHash: null, plan: { plan: { intent: "A quiet question and answer", sections: [{ name: "Whole", purpose: "Leave room for a reply" }], soundGoals: ["Soft lead"], hardConstraints: [], developmentTasks: ["Write the reply"], creativeState: { identity: "Intimate and restrained", densityIntent: "Spacious", palette: [], unfinishedTasks: ["Write the reply"], definiteFailures: [] } }, stage: "planned", inspectedDocumentHash: null, review: null }, canContinue: false, canExtend: false, continuationCode: "SPEND_ALLOWANCE", continuationReason: "The overall allowance cannot reserve another call.", budget: { spentUsd: 0.51, reservedUsd: 0, unknownUsd: 0, siteRemainingUsd: 0.1, minimumNextCallUsd: 0.42, modelCalls: 2 } } }));
   await page.reload(); await producer(page);
   await expect(page.locator(".producer-panel")).toContainText("Paused");
   await expect(page.locator(".producer-panel")).toContainText("The authorized spending allowance cannot cover another step.");

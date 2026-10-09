@@ -7,6 +7,7 @@ import { readNativeExample } from "./examples.js";
 import { nativeFormOperations } from "./form.js";
 import { nativeCompletionIssues } from "./producer.js";
 import { compactNativeReviewEvidence } from "./review-evidence.js";
+import { capturedBrief } from "../test-support.js";
 
 describe("grounded symbolic editor", () => {
   const document = applyNativeOperations(seedNativeDocument("A quiet answer"), [
@@ -114,10 +115,11 @@ describe("grounded symbolic editor", () => {
       { kind: "addPart", part: { id: "lead", name: "Lead", role: "lead", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, notes: [0, 4, 8].map((bar) => ({ id: `note-${bar}`, startTick: bar * 3840, durationTicks: 480, pitch: 60, velocity: 0.7 })), placements: [], sourceRegions: [], effects: [], automation: [] } }
     ]);
     expect(nativeArcEvidence(repeated).symbolicArcEvidenced).toBe(false);
-    expect(nativeCompletionIssues(repeated, brief, "generation")).toEqual(expect.arrayContaining([expect.stringContaining("no independently evidenced middle contrast")]));
+    const captured = capturedBrief(brief, { construction: [{ kind: "rise", quote: "a middle upswing and a payoff" }] });
+    expect(nativeCompletionIssues(repeated, captured, "generation")).toEqual(expect.arrayContaining([expect.stringContaining("no independently evidenced middle contrast")]));
     const study = readNativeExample("disco-rise-study");
     const developed = applyNativeOperations(seedNativeDocument(brief), nativeFormOperations(study.form, []));
     expect(nativeArcEvidence(developed).symbolicArcEvidenced).toBe(true);
-    expect(nativeCompletionIssues(developed, brief, "generation")).not.toEqual(expect.arrayContaining([expect.stringContaining("no independently evidenced middle contrast")]));
+    expect(nativeCompletionIssues(developed, captured, "generation")).not.toEqual(expect.arrayContaining([expect.stringContaining("no independently evidenced middle contrast")]));
   });
 });

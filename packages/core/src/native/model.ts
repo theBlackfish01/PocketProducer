@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalHash } from "../domain/hash.js";
 import { spliceSectionAutomation } from "./section.js";
+import { NativeUnknownIdError } from "./errors.js";
 
 export const NATIVE_PPQ = 960;
 const id = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
@@ -262,7 +263,7 @@ export type NativeOperation = z.infer<typeof nativeOperationSchema>;
 export function barTicks(document: Pick<NativeDocument, "meter">): number { return document.meter.numerator * NATIVE_PPQ * 4 / document.meter.denominator; }
 export function materializedNotes(document: NativeDocument, partId: string): NativeNote[] {
   const item = document.parts.find((value) => value.id === partId);
-  if (!item) throw new Error(`Unknown part ${partId}`);
+  if (!item) throw new NativeUnknownIdError("part", partId);
   const phrases = new Map(document.motifs.map((value) => [value.id, value]));
   const result = [...item.notes];
   for (const placement of item.placements) {
@@ -278,7 +279,7 @@ export function nativeHasMaterial(document: NativeDocument): boolean {
 
 export function protectedPartHash(document: NativeDocument, partId: string): string {
   const item = document.parts.find((value) => value.id === partId);
-  if (!item) throw new Error(`Unknown part ${partId}`);
+  if (!item) throw new NativeUnknownIdError("part", partId);
   const groupChain: NativeDocument["groups"] = [];
   let groupId = item.groupId;
   while (groupId) { const group = document.groups?.find((value) => value.id === groupId); if (!group) break; groupChain.push(group); groupId = group.parentId; }
@@ -315,8 +316,8 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
     // Historical bare Gakki parts remain readable, but no new edit may
     // introduce another unidentifiable sampler/kit sound.
     if ((op.kind === "addPart" && op.part.device.type === "gakki" && !op.part.device.preset) || (op.kind === "setDevice" && op.device.type === "gakki" && !op.device.preset)) throw new Error("Gakki needs an inspected, pinned preset before construction");
-  const findPart = (partId: string) => { const item = next.parts.find((value) => value.id === partId); if (!item) throw new Error(`Unknown part ${partId}`); return item; };
-  const findGroup = (groupId: string) => { const item = next.groups?.find((value) => value.id === groupId); if (!item) throw new Error(`Unknown group ${groupId}`); return item; };
+  const findPart = (partId: string) => { const item = next.parts.find((value) => value.id === partId); if (!item) throw new NativeUnknownIdError("part", partId); return item; };
+  const findGroup = (groupId: string) => { const item = next.groups?.find((value) => value.id === groupId); if (!item) throw new NativeUnknownIdError("group", groupId); return item; };
     switch (op.kind) {
       case "setTitle": next.title = op.title; break;
       case "setObjective": next.currentObjective = op.objective; break;
@@ -324,7 +325,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "setMeter": next.meter = op.meter; break;
       case "harmonizeSection": {
         const item = findPart(op.partId), section = next.sections.find((value) => value.id === op.sectionId);
-        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (!section) throw new NativeUnknownIdError("section", op.sectionId);
         if (["audio", "beatbox8"].includes(item.device.type)) throw new Error("Harmonic notes need a MIDI-capable native instrument");
         const ticksPerBar = barTicks(next), sectionStart = section.startBar * ticksPerBar, sectionEnd = section.endBar * ticksPerBar, cycleTicks = op.cycleBars * ticksPerBar, operationHash = canonicalHash(op);
         for (const chord of op.chords) {
@@ -343,7 +344,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       }
       case "sequenceSectionPattern": {
         const item = findPart(op.partId), section = next.sections.find((value) => value.id === op.sectionId);
-        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (!section) throw new NativeUnknownIdError("section", op.sectionId);
         if (["audio", "beatbox8"].includes(item.device.type)) throw new Error("Expressive pattern notes need a MIDI-capable native instrument");
         const ticksPerBar = barTicks(next), sectionStart = section.startBar * ticksPerBar, sectionEnd = section.endBar * ticksPerBar, cycleTicks = op.cycleBars * ticksPerBar, operationHash = canonicalHash(op);
         if (op.hits.some((hit) => hit.tick >= cycleTicks)) throw new Error("Pattern hit exceeds its cycle");
@@ -357,7 +358,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       }
       case "addPart": next.parts.push(op.part); break;
       case "defineMotif": next.motifs.push(op.motif); break;
-      case "replaceMotif": { const index = next.motifs.findIndex((value) => value.id === op.motif.id); if (index < 0) throw new Error(`Unknown motif ${op.motif.id}`); next.motifs[index] = op.motif; break; }
+      case "replaceMotif": { const index = next.motifs.findIndex((value) => value.id === op.motif.id); if (index < 0) throw new NativeUnknownIdError("motif", op.motif.id); next.motifs[index] = op.motif; break; }
       case "varyMotifInstance": {
         const item = findPart(op.partId);
         const placement = item.placements.find((value) => value.id === op.placementId);
@@ -391,7 +392,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "developSectionNotes": {
         const item = findPart(op.partId);
         const section = next.sections.find((value) => value.id === op.sectionId);
-        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (!section) throw new NativeUnknownIdError("section", op.sectionId);
         if (!(op.pitchShiftSemitones ?? 0) && (op.velocityFactor ?? 1) === 1 && !op.omitEvery) throw new Error("Section development must change musical material");
         const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
         const crossing = item.placements.filter((placement) => {
@@ -424,7 +425,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "setSectionClipGain": {
         const item = findPart(op.partId);
         const section = next.sections.find((value) => value.id === op.sectionId);
-        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (!section) throw new NativeUnknownIdError("section", op.sectionId);
         const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
         const allRegions = [...item.sourceRegions, ...(item.libraryRegions ?? [])];
         if (op.regionId && allRegions.filter((region) => region.id === op.regionId).length !== 1) throw new Error(`Clip ${op.regionId} must identify exactly one region on ${op.partId}`);
@@ -460,7 +461,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "moveSectionClip": {
         const item = findPart(op.partId);
         const section = next.sections.find((value) => value.id === op.sectionId);
-        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (!section) throw new NativeUnknownIdError("section", op.sectionId);
         const regions = [...item.sourceRegions, ...(item.libraryRegions ?? [])];
         const matching = regions.filter((value) => value.id === op.regionId);
         if (matching.length !== 1) throw new Error(`Clip ${op.regionId} must identify exactly one region on ${op.partId}`);
@@ -475,7 +476,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "shiftSectionClip": {
         const item = findPart(op.partId);
         const section = next.sections.find((value) => value.id === op.sectionId);
-        if (!section) throw new Error(`Unknown section ${op.sectionId}`);
+        if (!section) throw new NativeUnknownIdError("section", op.sectionId);
         const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
         const allRegions = [...item.sourceRegions, ...(item.libraryRegions ?? [])];
         if (allRegions.filter((region) => region.id === op.regionId).length !== 1) throw new Error(`Clip ${op.regionId} must identify exactly one region on ${op.partId}`);
@@ -639,7 +640,7 @@ export function pinnedContext(document: NativeDocument, revisionId: string | nul
 
 export function analyzeNativeSection(document: NativeDocument, sectionId: string, focusPartId?: string) {
   const section = document.sections.find((value) => value.id === sectionId);
-  if (!section) throw new Error(`Unknown section ${sectionId}`);
+  if (!section) throw new NativeUnknownIdError("section", sectionId);
   const start = section.startBar * barTicks(document);
   const end = section.endBar * barTicks(document);
   const overlaps = (position: number, duration: number) => position < end && position + duration > start;

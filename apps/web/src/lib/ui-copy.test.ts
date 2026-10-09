@@ -3,19 +3,24 @@ import { arrangementSummary, friendlyIssue, jobProgress, readableDevice } from "
 import type { Job, NativeVersion } from "./api"
 
 describe("Listening Room copy", () => {
-  it("turns internal recovery and budget messages into useful next-step language", () => {
-    expect(friendlyIssue("expected native head changed", "Fallback")).toMatch(/reopen it/i)
-    expect(friendlyIssue("provider budget limit exceeded", "Fallback")).toMatch(/spending allowance.*draft is saved/i)
-    expect(friendlyIssue("MODEL_CALL_LIMIT_EXCEEDED", "Fallback")).toMatch(/step limit/i)
-    expect(friendlyIssue("Increase the captured output allowance before continuing", "Fallback", false)).toBe("The producer could not finish its response. Your approach is saved; no music has been created yet.")
-    expect(friendlyIssue("REPEATED_NO_PROGRESS", "Fallback")).toMatch(/repeated steps/i)
-    expect(friendlyIssue("The final review could not finish within its review allowance. The draft is saved; another continuation would not resolve this limit.", "Fallback")).toBe("The final musical review could not be completed. Your draft is saved.")
-    expect(friendlyIssue("NATIVE_INCOMPLETE:REVIEW_EXHAUSTED", "Fallback")).not.toMatch(/spend|budget/i)
-    expect(friendlyIssue("uncertain remote outcome", "Fallback")).toMatch(/check what happened/i)
-    expect(friendlyIssue("unknown reservation outcome", "Fallback")).toMatch(/check what happened/i)
-    expect(friendlyIssue("opaque provider code 123", "Your saved work is safe.")).toBe("Your saved work is safe.")
-    expect(friendlyIssue("Let your current request finish before starting another.", "Fallback")).toMatch(/already running in one of your sessions/)
-    expect(friendlyIssue("The shared studio is busy. Please try again shortly.", "Fallback")).toMatch(/shared studio is busy/)
+  it("chooses next-step language from stable issue codes, never from message text", () => {
+    expect(friendlyIssue("HEAD_CHANGED", "Fallback")).toMatch(/reopen it/i)
+    expect(friendlyIssue("SPEND_ALLOWANCE", "Fallback")).toMatch(/spending allowance.*draft is saved/i)
+    expect(friendlyIssue("CALL_LIMIT", "Fallback")).toMatch(/step limit/i)
+    expect(friendlyIssue("INCOMPLETE_RESPONSE", "Fallback", false)).toBe("The producer could not finish its response. Your approach is saved; no music has been created yet.")
+    expect(friendlyIssue("NO_PROGRESS", "Fallback")).toMatch(/repeated steps/i)
+    expect(friendlyIssue("REVIEW_EXHAUSTED", "Fallback")).toBe("The final musical review could not be completed. Your draft is saved.")
+    expect(friendlyIssue("REVIEW_EXHAUSTED", "Fallback")).not.toMatch(/spend|budget/i)
+    expect(friendlyIssue("OUTCOME_UNCERTAIN", "Fallback")).toMatch(/check what happened/i)
+    expect(friendlyIssue("ALLOWANCE_USER", "Fallback")).toMatch(/your usage limit/i)
+    expect(friendlyIssue("ALLOWANCE_SHARED", "Fallback")).toMatch(/shared demo allowance/i)
+    expect(friendlyIssue("ACTIVE_REQUEST_LIMIT", "Fallback")).toMatch(/already running in one of your sessions/)
+    expect(friendlyIssue("STUDIO_BUSY", "Fallback")).toMatch(/shared studio is busy/)
+    expect(friendlyIssue("NETWORK", "Fallback")).toMatch(/connection was interrupted/i)
+    // Message text, unknown codes and missing codes all use the caller's fallback.
+    expect(friendlyIssue("MODEL_CALL_LIMIT_EXCEEDED: the producer hit its step limit", "Your saved work is safe.")).toBe("Your saved work is safe.")
+    expect(friendlyIssue("INVALID_REQUEST", "Your saved work is safe.")).toBe("Your saved work is safe.")
+    expect(friendlyIssue(null, "Your saved work is safe.")).toBe("Your saved work is safe.")
   })
 
   it("uses human progress and instrument labels", () => {

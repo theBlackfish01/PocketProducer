@@ -8,6 +8,7 @@ import { decodeWav, encodeWav, measureDecodedWav } from "../audio/wav.js";
 import type { JobRecord } from "../db/repository.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "./effects.js";
 import { tokenCostMicrousd } from "./pricing.js";
+import { hasErrorCode, isTransientNetworkError, isUnsentRequestError } from "../errors.js";
 
 const sourceSchema = z.object({
   observations: z.array(z.string().max(300)).max(4),
@@ -24,8 +25,8 @@ const critiqueSchema = z.object({
 });
 
 function isAmbiguousTransportFailure(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
-  return error instanceof Error && /timeout|abort|network|fetch|ENOTFOUND|ECONN|socket|TLS|UND_ERR/i.test(`${error.name} ${error.message}`);
+  if (error instanceof TypeError) return !isUnsentRequestError(error);
+  return isTransientNetworkError(error) && !isUnsentRequestError(error);
 }
 
 export interface GeminiGenerateClient {
@@ -166,7 +167,7 @@ export async function analyzePreview(input: AnalyzeInput): Promise<AudioAnalysis
     if (error instanceof Error && error.message === "MODEL_STEP_EFFECT_LIMIT_EXCEEDED") {
       return emptyAnalysis(input, "unavailable", `This request has used its ${sampleLimit} shortlisted-sample listening checks; measured slices remain available.`, config.GEMINI_MODEL);
     }
-    if (error instanceof Error && /MODEL_(?:CALL_LIMIT|BUDGET)_EXCEEDED/.test(error.message)) {
+    if (hasErrorCode(error, ["MODEL_CALL_LIMIT_EXCEEDED", "MODEL_BUDGET_EXCEEDED"])) {
       return emptyAnalysis(input, "unavailable", "Gemini analysis was skipped by the configured shared call or spending budget.", config.GEMINI_MODEL);
     }
     throw error;

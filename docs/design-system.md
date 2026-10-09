@@ -1,5 +1,22 @@
 # Listening Room design system
 
+## Direction checks, layout fit and in-place feedback — 2026-10-08
+
+Same owned components and tokens (Base UI Button/Dialog/Select, Lucide, `wayfinding.css`, `clarity.css`); no new dependency or primitive family.
+
+- **Check these words.** At submit, words the direction check could not match open a Dialog. It quotes each item with its reason and offers **Edit direction** (returns focus to the composer) or **Send as guidance**. An unavailable check shows **Send without checks?** with the same two actions. Matched requirements never interrupt.
+- **Submit problems** appear in the composer, directly above **Make this change**, as an alert that scrolls into view on phones and clears when the direction is edited. Other action errors keep the top status.
+- **Score width.** The overview's minimum width is per bar (28px desktop, 16px phone, plus the label column), so pieces up to about 20 bars fit without sideways scrolling. Longer pieces show a fading trailing edge while bars remain and a "Scroll sideways for all N bars" hint.
+- **Phone sections.** Below 700px a two-column section grid above the overview does the choosing; the ruler only orients. Long section names wrap to two lines in the strip and the compare section buttons. The scope menu uses "02 · Name" with the full name as its tooltip.
+- **Versions on phones** use a two-column grid. Wider screens show three whole cards per view, snapping with the newest card in view.
+- **New updates** is a sticky bar that ends the feed, so it never covers the last message's actions.
+- **Progress** re-reads the draft on each public event of the running request, so Plan → Build → Refine → Review follows stages the server records.
+
+## Wayfinding: fingerprints, ruler, pointers, progress and pins — 2026-10-08
+
+Owned components only (`components/fingerprint.tsx`, `features/native/{construction-progress,version-rail,score-pin-controls}.tsx`, `wayfinding.css`) over the existing Base UI Button/Dialog/Textarea, Lucide and tokens; no new dependency or primitive family. Fingerprints and contours are decorative SVG beside real text and describe stored structure, never loudness or audio. The section ruler is the overview's section navigator; a proportional form strip takes over while a section is focused. The header keeps one forest-filled Audiotool action; Sounds/Versions/options are borderless ghost tools (the global `* { border-color }` rule outranks Tailwind's `border-transparent`, so quiet controls opt out explicitly). Feed “Show in score” and hover previews are temporary highlights, never scope. Pins are local listening notes that become editable direction text only on request. Reduced motion removes the lane flash and stage pulse; forced colours keep pins and filled plan sections visible. Upgrade checks: overview node budget, phone header stacking, pin dialog focus return to the part label, resting-pointer previews and the plan-is-not-music copy.
+
+
 ## Viewport-anchored desktop navigation — September 28
 
 At desktop widths (1024px and above), the existing session rail is fixed to the viewport with dynamic viewport height. Its 202px width shares a CSS variable with the reserved grid column; the main area stays in column two. This avoids sticky navigation stopping at a short container boundary when content overflows it. Recent sessions retain their independent scroll area, with the brand and account outside it. The phone/tablet sheet and breakpoints are unchanged. No new primitive, component or dependency. Regression coverage scrolls a large room to the bottom, scrolls 40 recent sessions independently, and verifies mobile sheet scrolling and Escape focus return.

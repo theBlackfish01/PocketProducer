@@ -1,5 +1,114 @@
 # Live implementation status
 
+## Review fixes and best-effort recovery — 2026-10-09
+
+Fixes for all 14 findings of the code review of the uncommitted pass below, with the user's direction that error recovery should be best effort rather than block. Not committed, pushed or deployed. No provider calls, no live spend and no Audiotool copy in this pass.
+
+**Recovery (see "Recovery from interruptions" in [architecture](architecture.md))**
+- A lost or unmetered model call is a *held* liability: its worst-case reservation stays counted, it is never re-sent, and it no longer blocks continuing, extending, completing, abandoning or starting new requests. Only a call that may still be in flight, or history that no longer replays, stops a request for reconciliation.
+- A failed call is free only if it never left or the provider answered with an error status; anything else (including errors after a billed response) is held, not recorded as zero.
+- Interruptions retry once automatically from confirmed work, then pause as resumable for Continue. A resumed request names the lost responses, so it never repeats a held request's identity.
+- A response with missing usage is kept for the work, and its cost is held. A lost final review counts as one attempt and the next review is a fresh request. A lost sample analysis no longer stops construction.
+- Uncertain review outcomes no longer reach the model as ordinary tool errors.
+- The historical Sol → Luna handoff keeps its original strict fence.
+
+**Direction checks**
+- Luna's proposal is read item by item: an out-of-range or surplus item is shown to the person with its reason, never voiding the paid check.
+- A written start bar plus a length becomes a checked span. Stored lists are capped at 64. Lowercase chords are accepted.
+- Every request records its brief, or "Sent without enforced checks". Older requests get one best-effort check when they next run (never in scripted runs).
+- The browser keeps a check's key when the check is still settling or its response was lost, so resending replays it for free.
+
+**Context and efficiency**
+- The input bound is again a strict upper bound: replayed reasoning counts by bytes until the provider has measured it.
+- Per-turn notes say they are superseded by later ones, and the full document repeats only when it changed or left the window.
+- Draft re-reads follow plan and stage events only, and stage bookkeeping no longer reads the plan after every edit.
+- Browser word matching mirrors the server's.
+
+Verification: 274/274 unit, 172/172 integration, 34/34 visual, 18/18 application and 2/2 hosted. `tsc -b`, full ESLint and the Vite build pass; see [testing](testing.md). Two integration runs that overlapped other heavy suites lost a job's 3-second test lease under CPU contention; the isolated full run passed.
+
+Local dev data: the phone run-1 job (`1aa3c398…`) keeps its earlier `PROVIDER_OUTCOME_UNCERTAIN` state; the new rules apply to new stops and do not rewrite it.
+
+Next: the user reviews the diff; then the optional bounded live run (about $0.05, needs approval) to confirm cache reuse and an interruption recovery on the wire.
+
+## Producer agent pass, direction checks and UI fixes — 2026-10-08 (evening)
+
+Implemented locally at the user's request ("implement everything, both plans included"). Not committed, pushed or deployed. No Audiotool copy.
+
+**Agent**
+
+- **Grounding.** A remote preset or sample applies only after this request searched or inspected it. One retry, then up to two correctable library outages per job. This fixes the Willow Steps failure. New music cannot use the empty starting sketch part, and a repeated finish now restates the specific blockers.
+- **Typed errors.** Classification uses classes and codes, following wrapped causes. Request conflicts send stable issue codes, and the browser chooses copy only from codes.
+- **Direction checks ([ADR 004](adr/004-captured-brief-interpretation.md)).** A submit-time structured Luna interpretation, validated deterministically and captured on the job, replaces the regex parser (`intent.ts` removed). Unmatched words open a "Check these words" dialog and become guidance, never hidden locks. Contradictory section extents and unconfirmed revision resizes are never enforced.
+- **Caching and context.**
+  - A tumbling append-only window.
+  - A calibrated input bound: a request extending a measured one costs at most the reported tokens plus the new bytes.
+  - Sticky per-turn context, so each request contains the previous one (asserted on the wire).
+  - Reasoning sized by reported tokens, and per-job cache keys.
+- **Efficiency.** Skill summaries and the recipe shortlist are preloaded. Revisions start on the batch menu with targeted material. The batch tool unlocks after review findings. The server records stages. Section names are short.
+- **Connection failures.** A provably unsent request pauses resumable work. A possibly-sent one stops as uncertain immediately, without a doomed retry.
+- **Restored.** The broader "Updated …" part naming.
+
+**UI**
+
+All ten review issues are fixed:
+- short pieces fit the width;
+- phones choose sections from a two-column grid, and long pieces fade and hint where more bars remain;
+- long names wrap;
+- the tracker follows recorded stages;
+- New updates is a sticky bar that never covers a message;
+- submit problems appear beside the button;
+- scope resets after acceptance;
+- notices need written text;
+- phone versions use a grid.
+
+**Live evidence** (user-authorized local runs with GPT-6 Luna and no Audiotool copy):
+
+- **Shadow check, 18 phrases, $0.003.** The pad and bar-list dead ends no longer block. The upswing is now caught. One stated total was read as the melody's length and stayed guidance.
+- **Desktop run 1, before calibration.** Generation took 14 calls and 287s (first music at 92s), cost $0.039, with 32% cached. The two-pin revision took 8 calls and 119s ($0.013). A Rewrite failed validation; the semicolon clause split was restored.
+- **Phone run 1.** A genuine "Connection error." on call 15 left the request uncertain after a futile retry. This led to the unsent/uncertain handling.
+- **Phone run 2, calibrated.** Generation took 15 calls and 217s, against 34 calls and 612s this morning; it cost $0.035 with 41% cached. In the revision, "leave room for the pad" became guidance and "keep the bass" became a lock (10 calls, 98s, $0.016). A false span rejection was fixed.
+- **Desktop run 2, non-sticky fold.** Generation took 16 calls and 278s ($0.047). The revision paused because pin bar ranges were read as section spans ($0.049); fixed.
+- **Direct cache probes, about $0.0085.** These established that the provider reuses its cache only when a request contains the previous request in full: 1,623 tokens versus 5,403 of 5,406. Every earlier run, including those before this work, cached only the system prompt, tools and brief.
+- **Total** about $0.25 (ledger $0.2386 plus probes). One call from the connection drop has an unknown cost, with its reservation held.
+
+**Not yet live-verified:**
+- sticky per-turn context (verified on the wire in tests);
+- the unsent/uncertain split;
+- the extent rule;
+- the clause split.
+
+**Local dev data left behind:**
+- a "Direction check evaluation" session;
+- the phone run-1 session paused as uncertain (job `1aa3c398…`, needs reconciliation);
+- the paused "Dust After Rain" revision.
+
+Verification: 270/270 unit, 170/170 integration, 34/34 visual, 18/18 application and 2/2 hosted. `tsc -b`, full ESLint and the Vite build (existing >500 kB warning) pass; see [testing](testing.md).
+
+Next: one bounded live run (about $0.05, needs approval) to confirm conversation cache reuse with sticky context. Then the user reviews the diff and decides on commit and deploy.
+
+## UI refinements and live workflow review — 2026-10-08
+
+Follow-up to the wayfinding increment, still uncommitted. UI-only refinements: centred stage tracker (dots over labels, connectors between dots), a neutral placeholder outline for sessions without a saved version, and **View arrangement** moved into the Producer heading row. Music activity text is again byte-identical to its prior wording; `partIds` follow the same parts it names. "Inspire me" failed only because the dev pane was opened at `localhost` (prompt assistance requires `APP_ORIGIN` `127.0.0.1:5173`); `.claude/launch.json` now opens 127.0.0.1 and clears the injected `PORT` for the API. Visual **32/32**, activity integration + fingerprint/wayfinding unit **19/19**, types and lint pass.
+
+User-authorized live review on local dev (GPT-6 Luna, no Audiotool copy): desktop and phone each ran Start → Inspire/Rewrite/Undo → Options → sound upload (not selected) → create → progress/feed pointers → section/part inspection → pins → scoped revision → Before/After → version rail and explicit version choice → reload. Desktop: 16-bar piece in 275 s; pinned two-part revision in ~2 min. Phone: 12-bar 3/4 piece in 611 s; first revision was blocked before admission by the brief interpreter reading "leave room for the pad" as a preservation of an unknown section; reworded revision succeeded in ~2.3 min. No page errors, console errors, failed API calls or horizontal overflow. Luna pool commitment rose by **US$0.135** (4 prompt-assistance calls, 2 creations, 2 revisions); unknown liabilities unchanged. Screenshots/logs: `.local/evidence/workflow-2026-10-08/`; imported LangSmith traces: `.local/reviews/workflow-2026-10-08/`. Issues found are listed for the user and not yet fixed (see conversation record): stale progress stage, mobile section discovery in the ruler, parser false preservation, blocked-submit feedback placement, persistent scope after success, notice after version switching, clipped version rail on phone, "New updates" overlapping message actions. Agent findings include an opaque `The starting sketch was not replaced` blocker (reused seed part ID cost ~4 minutes / 7 finish attempts), prompt-cache reuse limited by the sliding history window, one-tool-per-turn discovery before first music, and the still-open ungrounded-preset fatal classification.
+
+
+## Wayfinding UI increment — 2026-10-08
+
+Implemented locally at the user's request (top five of a UI idea review). Not committed, pushed or deployed; no paid generation, prompt assistance, Audiotool contact, allowance/configuration change or migration.
+
+- **Fingerprints:** a server-computed, presentation-only outline of stored notes/clips (`nativeFingerprint`, 32 columns × up to six most active parts, cached per immutable revision ID) is returned on the owner's project list and on each snapshot version. The session rail shows it beside titles and Versions shows a horizontal oldest→newest rail with “Pick two” comparison. The list reads revision documents only for revision IDs selected by that owner's own list query.
+- **Score:** overview lanes draw a merged note contour (stored pitch/timing within each part's own range) above invisible per-bar hit areas, falling back to the bounded density view for very dense lanes. Section chips moved into the ruler; a proportional form strip replaces them while a section is focused.
+- **Construction progress:** active or paused requests show the recorded stage (Plan → Build → Refine → Review) and the plan's sections as outlines that become solid only when the confirmed draft has a same-named section with stored notes/clips. Copy states that a plan is not music.
+- **Feed pointers:** music activity now also carries `partIds`/`sectionIds` from the step's operations (public identities only; text names the same parts). Messages with resolvable targets preview on genuine pointer movement and offer **Show in score**, which selects a single target section for inspection and briefly flashes lanes. Older rows fall back to whole-name matching. Pointing never sets the change scope.
+- **Header:** one forest-filled Audiotool action, quiet Sounds/Versions/options tools in the header, no separate toolbar row.
+- **Pinned notes:** drag across a part's bars (mouse/pen) or use **Pin a note** in part details to keep a local, per-browser note. **Add notes to direction** inserts editable text (“In Ascent, Bass (bars 10–11): …”) and sets section/part scope when shared; kept or missing parts are listed but not sent. A scratch zero-provider check through the real brief interpreter confirmed single-section pins resolve to that section and cross-section pins stay advisory.
+
+Verification: **253/253 unit**, **164/164 integration**, **32/32 visual**, **18/18 application browser**, **2/2 hosted browser**, `tsc -b`, full ESLint, Vite build (existing >500 kB warning) and `git diff --check`. Docker Desktop was started locally for the isolated `_test` database. Desktop/phone screenshots inspected. Findings corrected before the final runs: phone header alignment, a fade that briefly lowered contrast on filled plan sections, spurious previews when content arrived under a resting pointer, a fixture step-count mismatch, and a first hosted run that had served the previous `dist` (rerun after rebuilding). Fixture/offline evidence only; no live model, physical-device, screen-reader or non-Chromium verification.
+
+Next: user review of the local diff; decide whether to commit/deploy. Bigger ideas that conflict with deferred playback (sketch playback, silent playhead) and MIDI export remain undecided.
+
+
 ## Reliability release and two hosted Luna checks — 2026-10-07
 
 Reviewed and pushed `2d68c4a` (grounded scope), `a12f976` (bounded review response) and `ab83281` (copy readback) to `main`. Railway deployment `3795ce83-6b64-4704-b8b4-a0cb5dc75229` succeeded on `ab83281`; existing migrations remained applied and API/worker startup succeeded. GitHub verification run `37571958215` passed all stages, including lint, types, unit/integration/application/hosted/visual suites, Docker build and static-course checks. No additional source patch was required by the release review.

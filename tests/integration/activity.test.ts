@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { appendPublicActivity, cancelJob, claimJobById, createNativeJob, createProject, dispatchOutbox, getPool, readProjectActivity, saveNativePlan } from "@pocket/core";
 import { processJob } from "@pocket/worker";
-import { appendJobEvent, nativeSnapshot } from "@pocket/core";
+import { appendJobEvent, listProjects, nativeFingerprint, nativeSnapshot } from "@pocket/core";
 
 let ownerId = "";
 const rooms: string[] = [];
@@ -89,6 +89,31 @@ it("recovers the same feed after a real killed process and two contending worker
     expect((await readProjectActivity(ownerId, projectId, { after: before.cursor })).events.some((event) => event.payload.kind === "saved")).toBe(true);
   } finally { for (const child of children) { if (child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill("SIGKILL"); await stopped; } } }
 }, 45_000);
+
+it("points public music updates at saved parts and outlines only the owner's listed versions", async () => {
+  const projectId = await room(), accepted = await createNativeJob(input(projectId));
+  await dispatchOutbox();
+  await processJob((await claimJobById(accepted.id, "activity-fingerprint"))!);
+  // List first so the owner-scoped revision read fills the cache, not the snapshot.
+  const listed = (await listProjects(ownerId)).find((project) => project.id === projectId)!;
+  const snapshot = await nativeSnapshot(ownerId, projectId);
+  const document = snapshot.current!.document;
+  expect(listed.fingerprint).toEqual(nativeFingerprint(document));
+  expect(listed.fingerprint!.lanes.length).toBeGreaterThan(0);
+  expect(snapshot.current!.fingerprint).toEqual(listed.fingerprint);
+  expect(snapshot.versions.every((version) => version.fingerprint?.version === 1)).toBe(true);
+  const music = (await readProjectActivity(ownerId, projectId)).events.filter((event) => event.payload.kind === "music");
+  const pointed = music.filter((event) => event.payload.partIds?.length);
+  expect(pointed.length).toBeGreaterThan(0);
+  for (const event of pointed) {
+    const names = event.payload.partIds!.map((id) => document.parts.find((part) => part.id === id)?.name);
+    expect(names.every(Boolean)).toBe(true);
+    expect(event.payload.text).toContain(names[0]!);
+  }
+  const other = (await getPool().query<{ id: string }>("INSERT INTO app_user(provider_subject,display_name) VALUES($1,'Other activity owner') RETURNING id", [`activity-other-${randomUUID()}`])).rows[0]!.id;
+  try { expect((await listProjects(other)).some((project) => project.id === projectId)).toBe(false); }
+  finally { await getPool().query("DELETE FROM app_user WHERE id=$1", [other]); }
+});
 
 it("publishes production worker changes once and references the actual saved version", async () => {
   const projectId = await room(), accepted = await createNativeJob(input(projectId));

@@ -13,6 +13,7 @@ import { tokenCostMicrousd, tokenCostMicrousdAtPrice, tokenCostUsd } from "../pr
 import { jobNativeRunLimits } from "../native/profile.js";
 import { modelProvider } from "../providers/models.js";
 import { reportedGatewayCost } from "../providers/compatible-model.js";
+import { callOutcomeUnknown, coded } from "../errors.js";
 
 let checkpointReady: Promise<PostgresSaver> | undefined;
 
@@ -84,6 +85,8 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   private requestEnvelope: unknown;
   private readonly inputBounds = new Map<string, ReturnType<typeof boundOpenAiRequest>["inputComponents"]>();
   private readonly outputBounds = new Map<string, number>();
+  private readonly requestIdentities = new Map<string, { messageHashes: string[]; envelopeHash: string }>();
+  private readonly measuredRequests = new Map<string, InputCalibration>();
   readonly usage = { inputTokens: 0, outputTokens: 0 };
   costMicrousd = 0;
 
@@ -94,6 +97,8 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
 
   setOutputTokenBound(bound: number): void { this.currentOutputTokenBound = Math.min(this.outputTokenBound, bound); }
   setRequestEnvelope(envelope: unknown): void { this.requestEnvelope = envelope; }
+  /** Recently measured requests (one per tool envelope) for calibrated bounds. */
+  get calibrations(): InputCalibration[] { return [...this.measuredRequests.values()]; }
 
   private cost(usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheWriteTokens?: number }): number {
     const capturedPrice = jobNativeRunLimits(this.job.request)?.pricing;
@@ -103,7 +108,7 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
   }
 
   override async handleChatModelStart(_llm: Serialized, messages: BaseMessage[][], runId: string): Promise<void> {
-    const request = boundOpenAiRequest(messages, this.currentOutputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens, this.requestEnvelope);
+    const request = boundOpenAiRequest(messages, this.currentOutputTokenBound, jobNativeRunLimits(this.job.request)?.maxInputTokens, this.requestEnvelope, this.calibrations);
     // A handoff can reconstruct identical musical context for a different model.
     // Keep prior Sol identities stable, but never collide with them for Luna.
     const originalModel = jobNativeRunLimits({ _nativeRun: this.job.request._nativeRun })?.model;
@@ -113,18 +118,21 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
       provider: modelProvider(this.model),
       step: "producer-model-call",
       idempotencyKey: `producer:${this.operationHash}:call:${messageHash}`,
-      inputHash: canonicalHash({ operationHash: this.operationHash, messageHash, inputTokenBound: request.inputTokenBound, outputTokenBound: request.outputTokenBound }),
+      // Identity uses the deterministic byte bound so a replay after restart,
+      // with no calibration yet, still names the same effect.
+      inputHash: canonicalHash({ operationHash: this.operationHash, messageHash, inputTokenBound: request.byteBound, outputTokenBound: request.outputTokenBound }),
       model: this.model,
       promptVersion: "deep-producer-v2",
       // No cache hit is assumed. For a write-priced model, all input may be a
       // cache creation on this dispatch, so reserve at that upper rate.
       reservationMicrousd: this.cost({ inputTokens: request.inputTokenBound, cacheWriteTokens: request.inputTokenBound, outputTokens: request.outputTokenBound })
     });
-    if (!reservation.created) throw new Error(`OPENAI_EFFECT_${reservation.state.toUpperCase()}`);
+    if (!reservation.created) throw coded(`OPENAI_EFFECT_${reservation.state.toUpperCase()}`);
     await markEffectDispatched(reservation.id, this.job);
     this.effects.set(runId, reservation.id);
     this.inputBounds.set(runId, request.inputComponents);
     this.outputBounds.set(runId, request.outputTokenBound);
+    this.requestIdentities.set(runId, { messageHashes: request.messageHashes, envelopeHash: request.envelopeHash });
   }
 
   override async handleLLMEnd(output: LLMResult, runId: string): Promise<void> {
@@ -136,34 +144,64 @@ export class AccountedOpenAICalls extends BaseCallbackHandler {
     const requestId = returned?.message?.response_metadata.providerRequestId;
     const providerRequestId = typeof requestId === "string" ? requestId : "";
     if (!getConfig().FIXTURE_MODE && (usage.inputTokens <= 0 || usage.outputTokens <= 0 || (modelProvider(this.model) === "gateway" && gatewayCost === undefined))) {
+      // The response arrived but its cost is unknown: keep the work and hold the
+      // call's worst-case reservation as an unknown liability (never free).
       await failProviderEffect({ effectId, job: this.job, errorClass: "ProviderUsageUnknown", uncertain: true, safeDetails: { providerRequestId } });
-      throw new Error("PROVIDER_USAGE_UNKNOWN: reconcile the observed response before continuing");
+      this.effects.delete(runId);
+      return;
     }
     const actualCostMicrousd = gatewayCost ?? this.cost(usage);
     const state = await completeProviderEffect({ effectId, job: this.job, output: { usage, inputReservationBytes: this.inputBounds.get(runId), completion: nativeCompletionDiagnostic(returned?.message, this.outputBounds.get(runId)) }, actualCostMicrousd, ...(providerRequestId ? { providerRequestId } : {}) });
-    if (state !== "succeeded") throw new Error("OPENAI_EFFECT_OUTCOME_UNCERTAIN");
+    this.effects.delete(runId);
+    if (state !== "succeeded") throw coded("OPENAI_EFFECT_OUTCOME_UNCERTAIN");
     this.usage.inputTokens += usage.inputTokens;
     this.usage.outputTokens += usage.outputTokens;
     this.costMicrousd += actualCostMicrousd;
+    // Only a provider-reported measurement calibrates later bounds.
+    const identity = this.requestIdentities.get(runId);
+    if (identity?.messageHashes.length && usage.inputTokens > 0) {
+      this.measuredRequests.delete(identity.envelopeHash);
+      this.measuredRequests.set(identity.envelopeHash, { ...identity, tokens: usage.inputTokens });
+      if (this.measuredRequests.size > 4) this.measuredRequests.delete(this.measuredRequests.keys().next().value!);
+    }
   }
 
   override async handleLLMError(error: Error, runId: string): Promise<void> {
     const effectId = this.effects.get(runId);
     if (!effectId) return;
+    this.effects.delete(runId);
     await failProviderEffect({
       effectId,
       job: this.job,
       errorClass: error.name,
-      uncertain: /timeout|abort|network|uncertain|ECONN|socket/i.test(`${error.name} ${error.message}`)
+      uncertain: callOutcomeUnknown(error)
     });
+  }
+
+  /** Calls dispatched in this run that never reported an end or an error (the
+   * run was interrupted around them). Their outcome is unknown, so each holds its
+   * worst-case reservation; nothing is re-sent. Best effort: a failure here leaves
+   * the effect dispatched, which still fences continuation. */
+  async holdUnfinished(): Promise<void> {
+    for (const [runId, effectId] of [...this.effects]) {
+      this.effects.delete(runId);
+      await failProviderEffect({ effectId, job: this.job, errorClass: "InterruptedCall", uncertain: true }).catch(() => undefined);
+    }
   }
 }
 
-export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound = 900, inputLimit = getConfig().MAX_OPENAI_INPUT_TOKENS, envelope?: unknown): {
+/** A request the provider has already measured: its exact message identities,
+ * its tool envelope and the input tokens the provider reported for it. */
+export interface InputCalibration { envelopeHash: string; messageHashes: string[]; tokens: number }
+
+export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound = 900, inputLimit = getConfig().MAX_OPENAI_INPUT_TOKENS, envelope?: unknown, calibrations: readonly InputCalibration[] = []): {
   normalizedMessages: unknown;
   inputTokenBound: number;
+  byteBound: number;
   outputTokenBound: number;
-  inputComponents: { messages: number; envelope: number; framing: number };
+  inputComponents: { messages: number; envelope: number; framing: number; calibrated?: number };
+  messageHashes: string[];
+  envelopeHash: string;
 } {
   const normalizedMessages = messages.map((batch) => batch.map((message) => ({
     type: message.type,
@@ -180,13 +218,32 @@ export function boundOpenAiRequest(messages: BaseMessage[][], outputTokenBound =
   // input, not part of the fixed framing allowance. This is a byte reservation
   // guard, NOT a measurement of provider tokens (settlement uses reported usage).
   // UTF-8 bytes are a conservative tokenizer-independent upper bound for the
-  // selected text-only request. This intentionally admits less than an
-  // approximate chars/4 estimate rather than risking an under-reservation.
-  const inputComponents = { messages: Buffer.byteLength(serialized, "utf8"), envelope: envelope === undefined ? 0 : Buffer.byteLength(JSON.stringify(envelope), "utf8"), framing: 768 };
-  const inputTokenBound = inputComponents.messages + inputComponents.envelope + inputComponents.framing;
+  // selected text-only request, replayed reasoning envelopes included. This
+  // intentionally admits less than an approximate chars/4 estimate rather than
+  // risking an under-reservation.
+  const inputComponents: { messages: number; envelope: number; framing: number; calibrated?: number } = { messages: Buffer.byteLength(serialized, "utf8"), envelope: envelope === undefined ? 0 : Buffer.byteLength(JSON.stringify(envelope), "utf8"), framing: 768 };
+  const byteBound = inputComponents.messages + inputComponents.envelope + inputComponents.framing;
+  // Calibration keeps the bound strict but realistic. When this request shares a
+  // leading run of messages with a request the provider already measured, those
+  // shared messages and that request's tools cost at most its reported input
+  // tokens (replayed reasoning included, exactly as billed); only the new messages
+  // (and a changed tool envelope) are still bounded by their UTF-8 bytes. Every
+  // term is an upper bound: nothing unmeasured is estimated.
+  const single = messages.length === 1 ? normalizedMessages[0]! : null;
+  const messageHashes = single ? single.map((message) => canonicalHash(message)) : [];
+  const envelopeHash = canonicalHash(envelope ?? null);
+  let inputTokenBound = byteBound;
+  if (single) for (const calibration of calibrations) {
+    let shared = 0;
+    while (shared < calibration.messageHashes.length && shared < messageHashes.length && calibration.messageHashes[shared] === messageHashes[shared]) shared++;
+    if (!shared) continue;
+    const added = single.slice(shared).reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message), "utf8"), 0);
+    inputTokenBound = Math.min(inputTokenBound, calibration.tokens + (calibration.envelopeHash === envelopeHash ? 0 : inputComponents.envelope) + added + inputComponents.framing);
+  }
+  if (inputTokenBound < byteBound) inputComponents.calibrated = inputTokenBound;
   const configuredLimit = Math.min(inputLimit, getConfig().MAX_OPENAI_INPUT_TOKENS);
   if (inputTokenBound > configuredLimit) {
-    throw new Error(`OPENAI_INPUT_LIMIT_EXCEEDED:${inputTokenBound}:${configuredLimit}`);
+    throw coded(`OPENAI_INPUT_LIMIT_EXCEEDED:${inputTokenBound}:${configuredLimit}`, { inputTokenBound, configuredLimit });
   }
-  return { normalizedMessages, inputTokenBound, outputTokenBound, inputComponents };
+  return { normalizedMessages, inputTokenBound, byteBound, outputTokenBound, inputComponents, messageHashes, envelopeHash };
 }

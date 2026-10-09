@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
-import { handoffNativeToLuna, nativeMappingVersion } from "@pocket/core";
+import { boundedStopCodes, findCodedError, handoffNativeToLuna, hasErrorCode, isRateLimited, isRecoverableInterruption, isTransientNetworkError, nativeMappingVersion, uncertainOutcomeCodes } from "@pocket/core";
 import {
   appendAttemptEvent, canonicalHash, claimNextJob, closePool, commitCancelled, createAudiotoolServerClient, dispatchOutbox, expireJob, failJob, getConfig, heartbeat, isCancelled, jobNativeRunLimits, needsAttentionJob, providerAvailability, readProjectActivity, requeueJob, profileOwnedSourceWav, safeStoragePath, AudiotoolSessionExpiredError, JobControlError, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeHasMaterial, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type JobRecord, type NativeLibrary, type NativeLibraryClient, type NativeRemoteClient, type NativeSource
 } from "@pocket/core";
@@ -278,6 +278,8 @@ export async function nativeSynchronization(job: JobRecord, signal: AbortSignal,
   } finally { await connection.awaitTokenPersistence(); }
 }
 
+const native = (job: JobRecord) => job.kind === "native-generation" || job.kind === "native-revision";
+
 export async function processJob(job: JobRecord, offlineNative?: OfflineNativeConstruction): Promise<void> {
   if (!["native-generation", "native-revision", "native-sync"].includes(job.kind)) throw new Error("Unsupported retired job kind");
   try {
@@ -286,8 +288,10 @@ export async function processJob(job: JobRecord, offlineNative?: OfflineNativeCo
       if (job.kind === "native-generation" || job.kind === "native-revision") {
         try { await nativeConstruction(job, signal, offlineNative); }
         catch (error) {
-          const denied = error instanceof Error ? /^MODEL_BUDGET_EXCEEDED:MODEL:gpt-6-sol:reservation=(\d+)$/.exec(error.message) : null;
-          if (!denied || !await handoffNativeToLuna(job, Number(denied[1]))) throw error;
+          // A Sol pool refusal before dispatch carries its reservation as structured details.
+          const refusal = findCodedError(error);
+          const denied = refusal?.code === "MODEL_BUDGET_EXCEEDED" && refusal.qualifier === "MODEL" && refusal.details.model === "gpt-6-sol" ? Number(refusal.details.reservation) : null;
+          if (denied === null || !Number.isFinite(denied) || !await handoffNativeToLuna(job, denied)) throw error;
           // New session/graph from confirmed domain state, never provider reasoning.
           await nativeConstruction(job, signal, offlineNative ? { ...offlineNative, scriptedModel: offlineNative.scriptedFallbackModel ?? offlineNative.scriptedModel } : undefined);
         }
@@ -299,12 +303,23 @@ export async function processJob(job: JobRecord, offlineNative?: OfflineNativeCo
     if (error instanceof JobControlError && error.code === "CANCELLED") await commitCancelled(job);
     else if (error instanceof JobControlError && (error.code === "LEASE_LOST" || error.code === "MONITOR_UNAVAILABLE")) return;
     else if (error instanceof JobControlError && error.code === "DEADLINE_EXCEEDED") await expireJob(job);
-    else if ((job.kind === "native-generation" || job.kind === "native-revision") && error instanceof Error && (/^(NATIVE_INCOMPLETE|MODEL_CALL_LIMIT_EXCEEDED|MODEL_BUDGET_EXCEEDED|OPENAI_INPUT_LIMIT_EXCEEDED|OPENAI_INCOMPLETE_RESPONSE)/.test(error.message) || error.name === "GraphRecursionError" || error.name === "NativeGraphInterruptedError" || /Recursion limit of \d+ reached/.test(error.message))) {
-      await needsAttentionJob(job, "NATIVE_PARTIAL", `Construction stopped before completion; no new version was selected. Confirmed work, if any, is saved under this request. ${error.message}`);
-    }
-    else if (error instanceof Error && (error.name === "NativeModelOutcomeUncertainError" || /outcome is not safely replayable|previous (?:native )?producer dispatch|NATIVE_STEP_REPLAY_CONFLICT|EFFECT_(?:DISPATCHED|UNCERTAIN)/i.test(error.message))) {
+    // Something possibly still in flight, or history that no longer replays: only
+    // reconciliation can decide, so nothing resumes or retries automatically.
+    else if (error instanceof Error && (error.name === "NativeModelOutcomeUncertainError" || hasErrorCode(error, uncertainOutcomeCodes))) {
       await needsAttentionJob(job, "PROVIDER_OUTCOME_UNCERTAIN", error.message);
-    } else if (job.attempts < 2 && error instanceof Error && /timeout|rate|ECONN|network|socket/i.test(error.message)) {
+    }
+    // An interruption (connection, rate limit, a lost response whose cost is held)
+    // resumes from confirmed work: once automatically, then on the person's Continue.
+    else if (native(job) && error instanceof Error && isRecoverableInterruption(error)) {
+      if (job.attempts < 2 && await requeueJob(job, "TRANSIENT_RETRY", error.message)) return;
+      const control = await heartbeat(job).catch(() => "LEASE_LOST" as const);
+      if (control === "CANCELLED") await commitCancelled(job);
+      else if (control === "DEADLINE_EXCEEDED") await expireJob(job);
+      else if (!control) await needsAttentionJob(job, "NATIVE_PARTIAL", `NATIVE_INTERRUPTED: The connection to the model was interrupted. Confirmed work is saved under this request; a lost step's cost stays held until it is known, and continuing never re-sends it. ${error.message}`);
+    }
+    else if (native(job) && error instanceof Error && (hasErrorCode(error, boundedStopCodes) || error.name === "GraphRecursionError" || error.name === "NativeGraphInterruptedError" || error.message.startsWith("Recursion limit of "))) {
+      await needsAttentionJob(job, "NATIVE_PARTIAL", `Construction stopped before completion; no new version was selected. Confirmed work, if any, is saved under this request. ${error.message}`);
+    } else if (job.attempts < 2 && error instanceof Error && (isTransientNetworkError(error) || isRateLimited(error))) {
       const requeued = await requeueJob(job, "TRANSIENT_RETRY", error.message);
       if (!requeued) {
         const control = await heartbeat(job).catch(() => "LEASE_LOST" as const);
@@ -312,7 +327,7 @@ export async function processJob(job: JobRecord, offlineNative?: OfflineNativeCo
         else if (control === "DEADLINE_EXCEEDED") await expireJob(job);
       }
     } else {
-      const failed = await failJob(job, "JOB_FAILED", error instanceof Error ? error.message : "Unknown worker error");
+      const failed = await failJob(job, isTransientNetworkError(error) || isRateLimited(error) ? "PROVIDER_UNAVAILABLE" : "JOB_FAILED", error instanceof Error ? error.message : "Unknown worker error");
       if (!failed) {
         const control = await heartbeat(job).catch(() => "LEASE_LOST" as const);
         if (control === "CANCELLED") await commitCancelled(job);

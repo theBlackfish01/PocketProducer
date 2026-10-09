@@ -12,12 +12,24 @@ import { jobNativeRunLimits, minimumNextNativeReservationUsd, nativeProfileSchem
 import { nativeCreativeStateSchema, nativePlanSchema, nativeStageSchema, type NativeCreativeState, type NativePlan, type NativeStage } from "./plan.js";
 import { nativeReviewSchema, type NativeReview } from "./critique.js";
 import { appendPublicActivity } from "./activity.js";
+import { revisionFingerprint } from "./fingerprint.js";
 import { modelProvider, producerModelSchema } from "../providers/models.js";
 import { sharedUsageBlock, type UsageBlock } from "../providers/limits.js";
 import { allowanceMessage, selectFundedRoute, lunaHandoffLimits } from "../providers/demo-policy.js";
 import { modelCredentials } from "../providers/models.js";
 import { nativeReviewPlanHash, nativeReviewContextHash } from "./plan.js";
-import { interpretNativeBrief, resolveNativePreservation } from "./intent.js";
+import { emptyNativeBrief, nativeBriefPreservation, nativeBriefSchema, type NativeBrief } from "./brief.js";
+import { allowanceIssue, CodedError, coded, hasErrorCode, issue, stopIssue, type ErrorCode, type IssueCode } from "../errors.js";
+import { unresolvedEffectSql } from "../providers/effects.js";
+/** Outcome and cost both known: succeeded, or failed with an observed cost (a
+ * request that never left, or one the provider refused with an error status). */
+const settled = (effect: { state: string; cost_status: string }) => (effect.state === "succeeded" || effect.state === "failed") && effect.cost_status === "observed";
+/** Nothing is in flight: the effect is settled, or its outcome was lost and its
+ * worst-case reservation stays held as an unknown liability (every budget counts
+ * an uncertain effect at that reservation). Model and analysis calls change no
+ * external state, so a held call never blocks recovery; it is just never re-sent. */
+const accounted = (effect: { state: string; cost_status: string }) => settled(effect) || effect.state === "uncertain";
+const resumableStopCodes: readonly ErrorCode[] = ["MODEL_BUDGET_EXCEEDED", "MODEL_CALL_LIMIT_EXCEEDED", "OPENAI_INPUT_LIMIT_EXCEEDED", "OPENAI_INCOMPLETE_RESPONSE"];
 
 export interface NativeRevisionRecord { id: string; parentRevisionId: string | null; ordinal: number; document: NativeDocument; documentHash: string; changeSummary: string; structuralDiff: ReturnType<typeof nativeDiff>; producer: Record<string, unknown>; createdAt: string }
 type HeadRow = { revision_id: string };
@@ -28,8 +40,8 @@ async function hostedQueueCapacity(client: pg.PoolClient, ownerId: string) {
   if (getConfig().DEV_LOCAL_AUTH) return;
   const active = await client.query<{ total: number; owned: number }>(`SELECT count(*)::int AS total,
     count(*) FILTER (WHERE owner_id=$1)::int AS owned FROM job WHERE state IN ('queued','running','cancel_requested')`, [ownerId]);
-  if (active.rows[0]!.owned >= 1) throw Object.assign(new Error("An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request."), { statusCode: 429 });
-  if (active.rows[0]!.total >= 8) throw Object.assign(new Error("The shared studio is busy. Please try again shortly."), { statusCode: 429 });
+  if (active.rows[0]!.owned >= 1) throw issue("ACTIVE_REQUEST_LIMIT", "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request.", 429);
+  if (active.rows[0]!.total >= 8) throw issue("STUDIO_BUSY", "The shared studio is busy. Please try again shortly.", 429);
 }
 
 function sharedAllowanceReason(block: UsageBlock): string {
@@ -55,6 +67,7 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
       const priorRequest = { ...existing.rows[0].request };
       delete priorRequest._nativeRun;
       delete priorRequest._nativeRunCurrent;
+      delete priorRequest._brief;
       const priorComparable = input.kind === "native-sync" ? priorRequest : { ...priorRequest, profile: priorRequest.profile ?? "standard" };
       const incomingComparable = input.kind === "native-sync" ? input.request : { ...input.request, profile: input.request.profile ?? "standard" };
       if (canonicalHash(priorComparable) !== canonicalHash(incomingComparable)) throw Object.assign(new Error("Idempotency key reused with a different request"), { statusCode: 409 });
@@ -62,13 +75,13 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
       return { id: existing.rows[0].id, duplicate: true };
     }
     const priorSameRequest = await client.query<{ id: string; state: string; error_code: string | null }>(
-      "SELECT id,state,error_code FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND (request - '_nativeRun' - '_nativeRunCurrent')=$4::jsonb ORDER BY created_at DESC LIMIT 1",
+      "SELECT id,state,error_code FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND (request - '_nativeRun' - '_nativeRunCurrent' - '_brief')=$4::jsonb ORDER BY created_at DESC LIMIT 1",
       [input.ownerId, input.projectId, input.kind, JSON.stringify(input.request)]
     );
-    if (priorSameRequest.rows[0]?.state === "needs_attention") throw Object.assign(new Error("Prior native command needs reconciliation; a new key cannot bypass it"), { statusCode: 409 });
+    if (priorSameRequest.rows[0]?.state === "needs_attention") throw issue("OUTCOME_UNCERTAIN", "Prior native command needs reconciliation; a new key cannot bypass it", 409);
     if (["failed", "cancelled"].includes(priorSameRequest.rows[0]?.state ?? "")) {
-      const unknown = await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND (state IN ('dispatched','uncertain') OR cost_status='unknown') AND NOT ($2::boolean AND step='native-producer-result') LIMIT 1", [priorSameRequest.rows[0]!.id, priorSameRequest.rows[0]!.error_code === "NATIVE_ABANDONED"]);
-      if (unknown.rowCount) throw Object.assign(new Error("Prior provider outcome or cost is uncertain; reconcile it before a fresh attempt"), { statusCode: 409 });
+      const unknown = await client.query(`SELECT 1 FROM effect e WHERE e.job_id=$1 AND ${unresolvedEffectSql("e")} AND NOT ($2::boolean AND e.step='native-producer-result') LIMIT 1`, [priorSameRequest.rows[0]!.id, priorSameRequest.rows[0]!.error_code === "NATIVE_ABANDONED"]);
+      if (unknown.rowCount) throw issue("OUTCOME_UNCERTAIN", "Prior provider outcome or cost is uncertain; reconcile it before a fresh attempt", 409);
     }
     const project = await client.query("SELECT id FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [input.projectId, input.ownerId]);
     if (project.rowCount !== 1) throw Object.assign(new Error("Project not found"), { statusCode: 404 });
@@ -76,36 +89,38 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     // must return the accepted command rather than fail the active-request guard.
     const raced = await client.query<{ id: string; request: Record<string, unknown> }>("SELECT id,request FROM job WHERE owner_id=$1 AND project_id=$2 AND kind=$3 AND idempotency_key=$4", [input.ownerId, input.projectId, input.kind, input.idempotencyKey]);
     if (raced.rows[0]) {
-      const prior = { ...raced.rows[0].request }; delete prior._nativeRun; delete prior._nativeRunCurrent;
+      const prior = { ...raced.rows[0].request }; delete prior._nativeRun; delete prior._nativeRunCurrent; delete prior._brief;
       if (canonicalHash({ ...prior, profile: prior.profile ?? "standard" }) !== canonicalHash({ ...input.request, profile: input.request.profile ?? "standard" })) throw Object.assign(new Error("Idempotency key reused with a different request"), { statusCode: 409 });
       await client.query("COMMIT"); return { id: raced.rows[0].id, duplicate: true };
     }
     if (input.kind !== "native-sync") {
       const competing = await client.query("SELECT 1 FROM job WHERE owner_id=$1 AND project_id=$2 AND kind IN ('native-generation','native-revision') AND state IN ('queued','running','cancel_requested','needs_attention') LIMIT 1", [input.ownerId, input.projectId]);
       if (competing.rowCount) throw Object.assign(new Error("A request is already active or waiting for your decision. Open Producer to continue it."), { statusCode: 409 });
-      const uncertain = await client.query("SELECT 1 FROM effect e JOIN job j ON j.id=e.job_id WHERE j.project_id=$1 AND j.owner_id=$2 AND j.kind IN ('native-generation','native-revision') AND (e.cost_status='unknown' OR e.state IN ('dispatched','uncertain')) AND e.step<>'native-producer-result' LIMIT 1", [input.projectId, input.ownerId]);
-      if (uncertain.rowCount) throw Object.assign(new Error("An earlier request has an uncertain outcome. Review it before starting another."), { statusCode: 409 });
+      const uncertain = await client.query(`SELECT 1 FROM effect e JOIN job j ON j.id=e.job_id WHERE j.project_id=$1 AND j.owner_id=$2 AND j.kind IN ('native-generation','native-revision') AND ${unresolvedEffectSql("e")} AND e.step<>'native-producer-result' LIMIT 1`, [input.projectId, input.ownerId]);
+      if (uncertain.rowCount) throw issue("OUTCOME_UNCERTAIN", "An earlier request has an uncertain outcome. Review it before starting another.", 409);
     }
     const current = await head(client, input.ownerId, input.projectId, true);
     await hostedQueueCapacity(client, input.ownerId);
-    if (current !== input.expectedHeadId) throw Object.assign(new Error("Native head changed; refresh before continuing"), { statusCode: 409 });
+    if (current !== input.expectedHeadId) throw issue("HEAD_CHANGED", "Native head changed; refresh before continuing", 409);
     if (input.kind === "native-generation" && current) throw Object.assign(new Error("This room already has a native construction; revise it instead"), { statusCode: 409 });
     if (input.kind !== "native-generation" && !current) throw Object.assign(new Error("Construct a native project first"), { statusCode: 409 });
-    if (input.kind !== "native-sync" && typeof input.request.direction === "string") {
-      const base = current ? await client.query<{ document: unknown }>("SELECT document FROM native_revision WHERE id=$1 AND owner_id=$2", [current, input.ownerId]) : null;
-      const document = base?.rows[0] ? nativeDocumentSchema.parse(base.rows[0].document) : undefined;
-      const issues = document ? resolveNativePreservation(input.request.direction, document, typeof input.request.targetSectionId === "string" ? input.request.targetSectionId : null).unresolved : interpretNativeBrief(input.request.direction).scopeIssues;
-      if (issues.length) throw Object.assign(new Error(`${issues.join(". ")}. Name a unique section or choose its scope before sending.`), { statusCode: 400 });
+    let brief: NativeBrief | null = null;
+    if (input.kind !== "native-sync") {
+      const expected = { direction: typeof input.request.direction === "string" ? input.request.direction : "", baseRevisionId: current, targetSectionId: typeof input.request.targetSectionId === "string" ? input.request.targetSectionId : null };
+      // Without a checked interpretation the request is sent as guidance only; that
+      // choice is recorded explicitly, never mistaken for an older uncaptured job.
+      brief = typeof input.request.interpretationId === "string" ? await capturedNativeBrief(client, input.ownerId, input.projectId, input.request.interpretationId, expected) : emptyNativeBrief({ ...expected, provenance: "none" });
+      requestWithLimits = { ...requestWithLimits, _brief: brief };
     }
     if (input.kind === "native-sync") {
       const activeSync = await client.query("SELECT 1 FROM job WHERE owner_id=$1 AND project_id=$2 AND kind='native-sync' AND state IN ('queued','running','cancel_requested') AND request->>'baseNativeRevisionId'=$3", [input.ownerId, input.projectId, current]);
       if (activeSync.rowCount) throw Object.assign(new Error("A native synchronization for this version is already active"), { statusCode: 409 });
       const unresolved = await client.query("SELECT state FROM native_revision_sync WHERE revision_id=$1 AND owner_id=$2 AND project_id=$3", [current, input.ownerId, input.projectId]);
-      if (["create_in_flight", "apply_in_flight", "uncertain", "conflict"].includes(String(unresolved.rows[0]?.state ?? ""))) throw Object.assign(new Error("Native remote outcome requires reconciliation before another synchronization command"), { statusCode: 409 });
+      if (["create_in_flight", "apply_in_flight", "uncertain", "conflict"].includes(String(unresolved.rows[0]?.state ?? ""))) throw issue("OUTCOME_UNCERTAIN", "Native remote outcome requires reconciliation before another synchronization command", 409);
       const sourceIds = await client.query<{ asset_id: string }>("SELECT ids.source_id::uuid AS asset_id FROM native_revision r, jsonb_array_elements_text(r.document->'sourceAssetIds') AS ids(source_id) WHERE r.id=$1 AND r.owner_id=$2", [current, input.ownerId]);
       if (sourceIds.rows.length) {
         const uncertainSample = await client.query("SELECT 1 FROM native_sample_upload WHERE owner_id=$1 AND project_id=$2 AND asset_id=ANY($3::uuid[]) AND state IN ('in_flight','uncertain') LIMIT 1", [input.ownerId, input.projectId, sourceIds.rows.map((row) => row.asset_id)]);
-        if (uncertainSample.rowCount) throw Object.assign(new Error("An owned sample upload has an unknown remote outcome; reconcile before synchronizing"), { statusCode: 409 });
+        if (uncertainSample.rowCount) throw issue("OUTCOME_UNCERTAIN", "An owned sample upload has an unknown remote outcome; reconcile before synchronizing", 409);
       }
     }
     const assetIds = Array.isArray(input.request.sourceAssetIds) ? input.request.sourceAssetIds : [];
@@ -119,7 +134,7 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     // captured routing unless model pools are configured. Reservations always enforce caps.
     if (requestedLimits && getConfig().SOL_POOL_BUDGET_USD !== undefined && getConfig().LUNA_POOL_BUDGET_USD !== undefined) {
       const selected = await selectFundedRoute(client, input.ownerId, requestedLimits);
-      if (selected.blocked) throw Object.assign(new Error(allowanceMessage(selected.blocked)), { statusCode: 409 });
+      if (selected.blocked) throw issue(allowanceIssue(selected.blocked), allowanceMessage(selected.blocked), 409);
       requestWithLimits = { ...requestWithLimits, _nativeRun: selected.limits };
     }
     const hash = canonicalHash({ version: "native-command-v1", ...input, request: requestWithLimits });
@@ -135,7 +150,9 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     const base = baseDocument ? nativeDocumentSchema.parse(baseDocument) : null;
     const desired = input.request.protectionChange && typeof input.request.protectionChange === "object" && "desiredPartIds" in input.request.protectionChange && Array.isArray(input.request.protectionChange.desiredPartIds) ? input.request.protectionChange.desiredPartIds : base?.protectedPartIds ?? [];
     const kept = base?.parts.filter((part) => desired.includes(part.id)) ?? [];
-    const scope = [base?.sections.find((section) => section.id === input.request.targetSectionId)?.name ?? "Whole piece", base?.parts.find((part) => part.id === input.request.targetPartId)?.name, kept.length ? `Asked to keep ${kept.map((part) => part.name).join(", ")}` : null].filter(Boolean).join(" · ").slice(0, 1_200);
+    const worded = brief && base ? nativeBriefPreservation(brief, base, typeof input.request.targetSectionId === "string" ? input.request.targetSectionId : null) : null;
+    const wordedNames = worded ? [...worded.namedParts.map((part) => part.name), ...(worded.theme ? [`${worded.theme.label} theme phrase`] : [])].filter((name) => !kept.some((part) => part.name === name)) : [];
+    const scope = [base?.sections.find((section) => section.id === input.request.targetSectionId)?.name ?? "Whole piece", base?.parts.find((part) => part.id === input.request.targetPartId)?.name, kept.length ? `Asked to keep ${kept.map((part) => part.name).join(", ")}` : null, wordedNames.length ? `Keeping as written: ${[...new Set(wordedNames)].join(", ")}` : null, brief?.provenance === "none" ? "Sent without enforced checks" : null].filter(Boolean).join(" · ").slice(0, 1_200);
     if (input.kind !== "native-sync") await appendPublicActivity(client, { ...input, jobId: id }, `request:${id}`, {
       version: 1, kind: "request", text: typeof input.request.direction === "string" ? input.request.direction.slice(0, 32_768) : "", baseRevisionId: current,
       profile: nativeProfileSchema.parse(input.request.profile ?? "standard"), sourceIds: assetIds as string[], keptPartIds: kept.map((part) => part.id), scope,
@@ -147,6 +164,24 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     return { id, duplicate: false };
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
+}
+
+/** A brief interpretation captured for this exact direction, selected version and
+ * scope. A changed direction or version needs a fresh check before sending. */
+async function capturedNativeBrief(client: pg.PoolClient, ownerId: string, projectId: string, interpretationId: string, expected: { direction: string; baseRevisionId: string | null; targetSectionId: string | null }): Promise<NativeBrief> {
+  const row = await client.query<{ output: unknown }>("SELECT e.output FROM prompt_assistance p JOIN effect e ON e.prompt_assistance_id=p.id WHERE p.id=$1 AND p.owner_id=$2 AND p.project_id=$3 AND e.step='native-brief' AND e.state='succeeded'", [interpretationId, ownerId, projectId]);
+  if (!row.rows[0]) throw issue("INTERPRETATION_STALE", "Check your direction again before sending.", 409);
+  const brief = nativeBriefSchema.parse(row.rows[0].output);
+  if (brief.directionHash !== canonicalHash(expected.direction) || brief.baseRevisionId !== expected.baseRevisionId || brief.targetSectionId !== expected.targetSectionId) throw issue("INTERPRETATION_STALE", "Your direction or version changed after it was checked. Check it again before sending.", 409);
+  return brief;
+}
+
+/** Store a brief captured later for a request that predates captured briefs.
+ * `_brief` is outside request identity, and an existing capture is never replaced. */
+export async function attachNativeJobBrief(job: JobRecord, brief: NativeBrief): Promise<void> {
+  const checked = nativeBriefSchema.parse(brief);
+  const updated = await getPool().query("UPDATE job SET request=request || jsonb_build_object('_brief',$3::jsonb),updated_at=now() WHERE id=$1 AND attempt_id=$2 AND state='running' AND NOT (request ? '_brief') RETURNING id", [job.id, job.attemptId, JSON.stringify(checked)]);
+  if (updated.rowCount === 1) job.request = { ...job.request, _brief: checked };
 }
 
 /** Only a pre-dispatch Sol pool refusal can request this handoff. All other
@@ -164,7 +199,8 @@ export async function handoffNativeToLuna(job: JobRecord, requiredSolReservation
     const limits = jobNativeRunLimits(stored)!;
     if (limits.model !== "gpt-6-sol" || await sharedUsageBlock(client, job.ownerId, "openai", requiredSolReservation, "gpt-6-sol") !== "MODEL") { await client.query("ROLLBACK"); return false; }
     if (await head(client, job.ownerId, job.projectId, true) !== (stored.expectedNativeHeadId ?? null)) throw new JobControlError("LEASE_LOST", "Selected version changed before model handoff");
-    const unknown = await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND step<>'native-producer-result' AND (state<>'succeeded' OR cost_status<>'observed') LIMIT 1", [job.id]);
+    // Historical Sol routing keeps its original fence: every prior call settled.
+    const unknown = await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND step<>'native-producer-result' AND (state NOT IN ('succeeded','failed') OR cost_status<>'observed') LIMIT 1", [job.id]);
     if (unknown.rowCount) { await client.query("ROLLBACK"); return false; }
     const next = lunaHandoffLimits(limits);
     const hasMusic = Boolean((await client.query("SELECT 1 FROM native_job_step WHERE job_id=$1 LIMIT 1", [job.id])).rowCount);
@@ -194,7 +230,9 @@ export async function abandonNativePartialJob(ownerId: string, projectId: string
     if (row.state === "cancelled" && row.error_code === "NATIVE_ABANDONED") { await client.query("COMMIT"); return; }
     if (row.state !== "needs_attention" || row.error_code !== "NATIVE_PARTIAL") throw Object.assign(new Error("Only safely paused work can be abandoned. Stop active work first."), { statusCode: 409 });
     const effects = await client.query<{ id: string; step: string; state: string; cost_status: string; reservation_microusd: string }>("SELECT id,step,state,cost_status,reservation_microusd::text FROM effect WHERE job_id=$1 FOR UPDATE", [jobId]);
-    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && (effect.cost_status === "unknown" || ["dispatched", "uncertain"].includes(effect.state)))) throw Object.assign(new Error("An external outcome is still uncertain; reconcile it before abandoning this request."), { statusCode: 409 });
+    // A held (lost) call keeps its reservation either way; only a possibly
+    // in-flight or unrecorded effect must be reconciled first.
+    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && !accounted(effect))) throw issue("OUTCOME_UNCERTAIN", "An external outcome is still uncertain; reconcile it before abandoning this request.", 409);
     // Unlike continuation, abandonment need not match the old head. It cannot
     // accept music or spend: retain every step, effect and charged/reserved amount.
     await client.query("UPDATE job SET state='cancelled',stage=NULL,error_code='NATIVE_ABANDONED',error_message=NULL,cancellation_requested_at=COALESCE(cancellation_requested_at,now()),lease_until=NULL,lease_owner=NULL,attempt_id=NULL,lease_generation=lease_generation+1,updated_at=now() WHERE id=$1", [jobId]);
@@ -223,7 +261,7 @@ export async function reconcileNativeStepConflict(ownerId: string, projectId: st
     if (competing.rowCount) throw new Error("Another construction request is active");
     const effects = (await client.query<{ id: string; step: string; state: string; cost_status: string; reservation_microusd: string; actual_cost_microusd: string }>("SELECT id,step,state,cost_status,reservation_microusd::text,actual_cost_microusd::text FROM effect WHERE job_id=$1 FOR UPDATE", [jobId])).rows;
     const calls = effects.filter(effect => effect.step !== "native-producer-result");
-    if (!calls.length || calls.some(effect => effect.state !== "succeeded" || effect.cost_status !== "observed")) throw new Error("An external outcome is not confirmed; reconciliation cannot retry it");
+    if (!calls.length || calls.some(effect => !accounted(effect))) throw new Error("An external outcome is not confirmed; reconciliation cannot retry it");
     const aggregates = effects.filter(effect => effect.step === "native-producer-result");
     const aggregate = aggregates[0];
     if (aggregates.length !== 1 || !aggregate || aggregate.state !== "failed" || aggregate.cost_status !== "observed" || Number(aggregate.reservation_microusd) !== 0 || Number(aggregate.actual_cost_microusd) !== 0) throw new Error("The zero-cost failed aggregate is not repairable");
@@ -258,9 +296,9 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     if (!job) throw Object.assign(new Error("Request not found"), { statusCode: 404 });
     if (!["native-generation", "native-revision"].includes(job.kind) || job.state !== "needs_attention" || job.error_code !== "NATIVE_PARTIAL") throw Object.assign(new Error("Only an unfinished native draft can continue"), { statusCode: 409 });
     const expectedHead = typeof job.request.expectedNativeHeadId === "string" ? job.request.expectedNativeHeadId : null;
-    if (await head(client, ownerId, projectId, true) !== expectedHead) throw Object.assign(new Error("The selected version changed; this saved draft cannot continue against a different head"), { statusCode: 409 });
+    if (await head(client, ownerId, projectId, true) !== expectedHead) throw issue("HEAD_CHANGED", "The selected version changed; this saved draft cannot continue against a different head", 409);
     const effects = await client.query<{ id: string; step: string; state: string; cost_status: string; reservation_microusd: string }>("SELECT id,step,state,cost_status,reservation_microusd::text FROM effect WHERE job_id=$1 FOR UPDATE", [jobId]);
-    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A provider outcome still needs reconciliation"), { statusCode: 409 });
+    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && !accounted(effect))) throw issue("OUTCOME_UNCERTAIN", "A provider outcome still needs reconciliation", 409);
     const callCount = effects.rows.filter((effect) => effect.step === "producer-model-call").length;
     const limits = jobNativeRunLimits(job.request);
     const reviewState = (await client.query<{ plan: unknown; creative_review: unknown; creative_review_count: number; creative_review_history: unknown }>("SELECT plan,creative_review,creative_review_count,creative_review_history FROM native_job_plan WHERE job_id=$1 FOR UPDATE", [jobId])).rows[0];
@@ -272,9 +310,9 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
       const contextHash = nativeReviewContextHash(typeof job.request.direction === "string" ? job.request.direction : "", nativePlanSchema.parse(reviewState.plan));
       const used = await client.query("SELECT 1 FROM effect WHERE job_id=$1 AND prompt_version='native-symbolic-review-repair-v1' LIMIT 1", [jobId]);
       const settled = await settledNativeReviewRecovery(jobId, latest?.result_hash ?? "", contextHash, client);
-      if (!valid && !settled && (last?.modelUsed !== false || used.rowCount)) throw Object.assign(new Error("The final review allowance and applicable recovery are exhausted; another continuation cannot resolve this limit"), { statusCode: 409 });
+      if (!valid && !settled && (last?.modelUsed !== false || used.rowCount)) throw issue("REVIEW_EXHAUSTED", "The final review allowance and applicable recovery are exhausted; another continuation cannot resolve this limit", 409);
     }
-    if (callCount >= (limits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB)) throw Object.assign(new Error("The request has reached its configured model-call limit; continuation needs an explicitly approved limit change"), { statusCode: 409 });
+    if (callCount >= (limits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB)) throw issue("CALL_LIMIT", "The request has reached its configured model-call limit; continuation needs an explicitly approved limit change", 409);
     if (limits) {
       const amounts = await client.query<{ job_committed: string; site_committed: string }>(`SELECT
         COALESCE(SUM(CASE WHEN job_id=$1 THEN CASE WHEN state IN ('reserved','dispatched','uncertain') THEN GREATEST(reservation_microusd,actual_cost_microusd) ELSE actual_cost_microusd END ELSE 0 END),0)::text AS job_committed,
@@ -285,14 +323,14 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
       // Advisory check only: reservations retain their budget-before-job lock order
       // and recheck atomically before dispatch, including any concurrent spending.
       const sharedBlock = route.blocked;
-      if (sharedBlock) throw Object.assign(new Error(sharedAllowanceReason(sharedBlock)), { statusCode: 409 });
-      if (limits.maxJobCostUsd - Number(amounts.rows[0]!.job_committed) / 1_000_000 < minimum || getConfig().INITIAL_BUILD_API_BUDGET_USD - Number(amounts.rows[0]!.site_committed) / 1_000_000 < minimum) throw Object.assign(new Error("A next model call cannot fit the current request or installation allowance; increase the applicable limit before continuing"), { statusCode: 409 });
+      if (sharedBlock) throw issue(allowanceIssue(sharedBlock), sharedAllowanceReason(sharedBlock), 409);
+      if (limits.maxJobCostUsd - Number(amounts.rows[0]!.job_committed) / 1_000_000 < minimum || getConfig().INITIAL_BUILD_API_BUDGET_USD - Number(amounts.rows[0]!.site_committed) / 1_000_000 < minimum) throw issue("SPEND_ALLOWANCE", "A next model call cannot fit the current request or installation allowance; increase the applicable limit before continuing", 409);
     }
     const aggregate = effects.rows.find((effect) => effect.step === "native-producer-result");
     const hasMusic = await client.query("SELECT 1 FROM native_job_step WHERE job_id=$1 LIMIT 1", [jobId]);
-    if (nativeOutputRecoveryBlocked(job.error_message ?? "", limits, Boolean(hasMusic.rowCount))) throw Object.assign(new Error("The incomplete response needs a larger effective output allowance or diagnosis before continuation"), { statusCode: 409 });
+    if (nativeOutputRecoveryBlocked(job.error_message ?? "", limits, Boolean(hasMusic.rowCount))) throw issue("INCOMPLETE_RESPONSE", "The incomplete response needs a larger effective output allowance or diagnosis before continuation", 409);
     const legacyZeroStepPause = aggregate?.state === "failed" && aggregate.cost_status === "observed" && Number(aggregate.reservation_microusd) === 0 && !hasMusic.rowCount
-      && /(?:MODEL_BUDGET_EXCEEDED|MODEL_CALL_LIMIT_EXCEEDED|OPENAI_INPUT_LIMIT_EXCEEDED|OPENAI_INCOMPLETE_RESPONSE)/.test(job.error_message ?? "");
+      && hasErrorCode(job.error_message ?? "", resumableStopCodes);
     if (legacyZeroStepPause) {
       // Repair only the old zero-step budget/limit bug under this project's
       // owner/job lock. Model effects above must all be known; no call is sent.
@@ -325,12 +363,12 @@ export async function extendNativePartialJob(ownerId: string, projectId: string,
     if (!old || (!requested && old.profile !== "standard")) throw Object.assign(new Error("This request has no available profile extension"), { statusCode: 409 });
     const expectedHead = typeof row.request.expectedNativeHeadId === "string" ? row.request.expectedNativeHeadId : null;
     const currentHead = await head(client, ownerId, projectId, true);
-    if (currentHead !== expectedHead) throw Object.assign(new Error("The selected version changed; this draft cannot extend"), { statusCode: 409 });
+    if (currentHead !== expectedHead) throw issue("HEAD_CHANGED", "The selected version changed; this draft cannot extend", 409);
     const effects = await client.query<{ step: string; state: string; cost_status: string; reservation_microusd: string }>("SELECT step,state,cost_status,reservation_microusd::text FROM effect WHERE job_id=$1 FOR UPDATE", [jobId]);
-    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && (effect.state !== "succeeded" || effect.cost_status !== "observed"))) throw Object.assign(new Error("A provider outcome needs reconciliation before extension"), { statusCode: 409 });
+    if (effects.rows.some((effect) => effect.step !== "native-producer-result" && !accounted(effect))) throw issue("OUTCOME_UNCERTAIN", "A provider outcome needs reconciliation before extension", 409);
     const aggregate = effects.rows.find((effect) => effect.step === "native-producer-result");
     const steps = await client.query("SELECT 1 FROM native_job_step WHERE job_id=$1 LIMIT 1", [jobId]);
-    const recoverableLegacy = aggregate?.state === "failed" && aggregate.cost_status === "observed" && Number(aggregate.reservation_microusd) === 0 && !steps.rowCount && /(?:MODEL_BUDGET_EXCEEDED|MODEL_CALL_LIMIT_EXCEEDED|OPENAI_INPUT_LIMIT_EXCEEDED|OPENAI_INCOMPLETE_RESPONSE)/.test(row.error_message ?? "");
+    const recoverableLegacy = aggregate?.state === "failed" && aggregate.cost_status === "observed" && Number(aggregate.reservation_microusd) === 0 && !steps.rowCount && hasErrorCode(row.error_message ?? "", resumableStopCodes);
     if (aggregate?.state !== "dispatched" && !recoverableLegacy) throw Object.assign(new Error("No safely resumable producer effect remains"), { statusCode: 409 });
     const config = getConfig();
     const target = requested ? { maxCalls: config.MAX_MODEL_CALLS_PER_JOB, maxInputTokens: config.MAX_OPENAI_INPUT_TOKENS, maxOutputTokens: config.NATIVE_MODEL_OUTPUT_TOKENS, deadlineSeconds: config.MAX_JOB_SECONDS, maxJobCostUsd: config.MAX_JOB_COST_USD } : nativeRunLimits("extended");
@@ -350,6 +388,9 @@ export async function extendNativePartialJob(ownerId: string, projectId: string,
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
 }
+
+// Presentation outline only; immutable revisions make the identity cache safe.
+const withFingerprint = (revision: NativeRevisionRecord) => ({ ...revision, fingerprint: revisionFingerprint(revision.id, revision.document) });
 
 function rowRevision(row: Record<string, unknown>): NativeRevisionRecord {
   return {
@@ -379,8 +420,8 @@ export async function nativeSnapshot(ownerId: string, projectId: string) {
   const remote = sync.rows[0] ? { state: String(sync.rows[0].state), projectId: sync.rows[0].remote_project_name ? String(sync.rows[0].remote_project_name) : null, observedHash: sync.rows[0].observed_hash ? String(sync.rows[0].observed_hash) : null, mappingVersion: sync.rows[0].mapping_version ? String(sync.rows[0].mapping_version) : null, verifiedAt: sync.rows[0].verified_at ? new Date(sync.rows[0].verified_at).toISOString() : null, url: sync.rows[0].remote_url ? String(sync.rows[0].remote_url) : null, revisionId: String(sync.rows[0].revision_id), error: sync.rows[0].error_message ? String(sync.rows[0].error_message) : null } : { state: "local", projectId: null, observedHash: null, mappingVersion: null, verifiedAt: null, url: null, revisionId: null, error: null };
   return {
     currentRevisionId: currentId, headVersion: Number(headResult.rows[0]?.version ?? 0),
-    current: current ? rowRevision(current) : null,
-    versions: versions.rows.map(rowRevision),
+    current: current ? withFingerprint(rowRevision(current)) : null,
+    versions: versions.rows.map((row) => withFingerprint(rowRevision(row))),
     comparisons: current ? Object.fromEntries(versions.rows.map((value) => [String(value.id), nativeDiff(nativeDocumentSchema.parse(current.document), nativeDocumentSchema.parse(value.document))])) : {},
     context: current ? pinnedContext(nativeDocumentSchema.parse(current.document), currentId, remote) : null,
     synchronization: remote,
@@ -414,7 +455,7 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const effects = await getPool().query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [jobId]);
   const aggregate = await getPool().query<{ state: string; cost_status: string; reservation_microusd: string }>("SELECT state,cost_status,reservation_microusd::text FROM effect WHERE job_id=$1 AND step='native-producer-result'", [jobId]);
   const otherEffects = await getPool().query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step<>'native-producer-result' AND step<>'producer-model-call'", [jobId]);
-  const effectsKnown = [...effects.rows, ...otherEffects.rows].every((effect) => effect.state === "succeeded" && effect.cost_status === "observed");
+  const effectsKnown = [...effects.rows, ...otherEffects.rows].every(accounted);
   const runLimits = jobNativeRunLimits(request);
   const callLimit = runLimits?.maxCalls ?? getConfig().MAX_MODEL_CALLS_PER_JOB;
   const budgetRows = await getPool().query<{ job_spent: string; job_reserved: string; job_unknown: string; site_committed: string }>(`SELECT
@@ -429,7 +470,7 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const stopped = row.error_message ?? "";
   const aggregateRow = aggregate.rows[0];
   const legacyZeroStepPause = aggregateRow?.state === "failed" && aggregateRow.cost_status === "observed" && Number(aggregateRow.reservation_microusd) === 0 && session.applied.length === 0
-    && /(?:MODEL_BUDGET_EXCEEDED|MODEL_CALL_LIMIT_EXCEEDED|OPENAI_INPUT_LIMIT_EXCEEDED|OPENAI_INCOMPLETE_RESPONSE)/.test(stopped);
+    && hasErrorCode(stopped, resumableStopCodes);
   const aggregateRecoverable = aggregateRow?.state === "dispatched" || legacyZeroStepPause;
   const fundedRoute = runLimits ? await selectFundedRoute(getPool(), ownerId, runLimits, session.applied.length > 0) : null;
   const minimumNextCallUsd = fundedRoute ? minimumNextNativeReservationUsd(fundedRoute.limits, session.applied.length > 0) : 0;
@@ -450,8 +491,9 @@ export async function nativeDraftView(ownerId: string, projectId: string, jobId:
   const target = runLimits?.profile === "standard" ? nativeRunLimits("extended") : null;
   const maximum = { maxCalls: config.MAX_MODEL_CALLS_PER_JOB, maxInputTokens: config.MAX_OPENAI_INPUT_TOKENS, maxOutputTokens: config.NATIVE_MODEL_OUTPUT_TOKENS, deadlineSeconds: config.MAX_JOB_SECONDS, maxJobCostUsd: config.MAX_JOB_COST_USD };
   const canExtend = row.state === "needs_attention" && row.error_code === "NATIVE_PARTIAL" && headMatches && aggregateRecoverable && effectsKnown && !siteBudgetBlocked && !sharedBlock && !!runLimits && (Object.keys(maximum) as Array<keyof typeof maximum>).some((field) => maximum[field] > runLimits[field]);
+  const continuationCode: IssueCode | null = canContinue ? null : !headMatches ? "HEAD_CHANGED" : !effectsKnown ? "OUTCOME_UNCERTAIN" : !aggregateRecoverable ? "NOT_RESUMABLE" : sharedBlock || siteBudgetBlocked ? allowanceIssue(sharedBlock ?? "SITE") : effects.rows.length >= callLimit ? "CALL_LIMIT" : budgetBlocked ? "SPEND_ALLOWANCE" : reviewBlocked ? "REVIEW_EXHAUSTED" : outputBlocked ? "INCOMPLETE_RESPONSE" : "NOT_RESUMABLE";
   const continuationReason = canContinue ? null : !headMatches ? "The selected version changed; this draft cannot continue against a different version." : !effectsKnown ? "A provider outcome needs reconciliation before continuation." : !aggregateRecoverable ? "This request has no safely resumable producer state; its original stop reason remains available." : sharedBlock || siteBudgetBlocked ? sharedAllowanceReason(sharedBlock ?? "SITE") : effects.rows.length >= callLimit ? "This request has used its captured model-call allowance; increase it before continuing." : budgetBlocked ? "This request's own cost allowance is exhausted; increase it explicitly before continuing." : reviewBlocked ? "The final review could not finish within its review allowance. The draft is saved; another continuation would not resolve this limit." : outputBlocked ? "The producer returned an incomplete response. Check the stop details before increasing limits or continuing." : row.state !== "needs_attention" ? "This request is not waiting for continuation." : "This draft cannot safely continue.";
-  return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, plan: await loadNativePlan(jobId), runLimits, budget: { spentUsd, reservedUsd, unknownUsd: Number(budget.job_unknown) / 1_000_000, siteRemainingUsd, minimumNextCallUsd, modelCalls: effects.rows.length }, extensionCeiling: maximum, suggestedProfileExtension: target, canContinue, canExtend, continuationReason, stopReason: stopped };
+  return { jobId, state: row.state, selected: false, baseRevisionId, headMatches, stepCount: session.applied.length, document: session.applied.length ? session.document : null, documentHash: session.applied.length ? canonicalHash(session.document) : null, plan: await loadNativePlan(jobId), runLimits, budget: { spentUsd, reservedUsd, unknownUsd: Number(budget.job_unknown) / 1_000_000, siteRemainingUsd, minimumNextCallUsd, modelCalls: effects.rows.length }, extensionCeiling: maximum, suggestedProfileExtension: target, canContinue, canExtend, continuationCode, continuationReason, stopCode: stopIssue(row.error_code, stopped), stopReason: stopped };
 }
 
 // A crash after effect settlement but before plan attachment must not consume
@@ -548,19 +590,33 @@ export async function loadNativeSteps(jobId: string): Promise<Array<{ key: strin
   return result.rows.map((row) => ({ key: String(row.step_key), operations: row.operations as NativeOperation[], predecessorHash: typeof row.predecessor_hash === "string" ? row.predecessor_hash : null, resultHash: String(row.result_hash) }));
 }
 
-export async function loadConfirmedNativeModelCalls(jobId: string): Promise<Array<{ usage: { inputTokens: number; outputTokens: number }; costMicrousd: number }> | null> {
-  const result = await getPool().query<{ state: string; cost_status: string; output: unknown; actual_cost_microusd: string }>("SELECT state,cost_status,output,actual_cost_microusd::text FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [jobId]);
-  if (!result.rows.length || result.rows.some((row) => row.state !== "succeeded" || row.cost_status !== "observed")) return null;
+/** Every model call of a job with its confirmed usage and cost. A held (lost)
+ * call has no reported usage; its worst-case reservation is `heldMicrousd`.
+ * Null while any call may still be in flight. */
+export async function loadConfirmedNativeModelCalls(jobId: string): Promise<Array<{ usage: { inputTokens: number; outputTokens: number }; costMicrousd: number; heldMicrousd: number }> | null> {
+  const result = await getPool().query<{ state: string; cost_status: string; output: unknown; actual_cost_microusd: string; reservation_microusd: string }>("SELECT state,cost_status,output,actual_cost_microusd::text,reservation_microusd::text FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [jobId]);
+  if (!result.rows.length || result.rows.some((row) => !accounted(row))) return null;
   return result.rows.map((row) => {
+    if (row.state === "uncertain") return { usage: { inputTokens: 0, outputTokens: 0 }, costMicrousd: 0, heldMicrousd: Math.max(Number(row.reservation_microusd), Number(row.actual_cost_microusd)) };
+    // A settled failure used no reported tokens; its observed cost still counts.
+    if (row.state === "failed") return { usage: { inputTokens: 0, outputTokens: 0 }, costMicrousd: Number(row.actual_cost_microusd), heldMicrousd: 0 };
     const usage = row.output && typeof row.output === "object" && "usage" in row.output ? (row.output).usage : null;
     if (!usage || typeof usage !== "object" || !("inputTokens" in usage) || !("outputTokens" in usage) || typeof usage.inputTokens !== "number" || typeof usage.outputTokens !== "number") throw new Error("Confirmed model effect has no trusted usage evidence");
-    return { usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }, costMicrousd: Number(row.actual_cost_microusd) };
+    return { usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }, costMicrousd: Number(row.actual_cost_microusd), heldMicrousd: 0 };
   });
 }
 
+/** Model calls whose outcome was lost (cost held). Resumed work mentions them so
+ * its fresh request can never repeat a lost one's identity. */
+export async function heldNativeModelCalls(jobId: string): Promise<number> {
+  const result = await getPool().query<{ count: string }>("SELECT count(*)::text AS count FROM effect WHERE job_id=$1 AND step='producer-model-call' AND state='uncertain'", [jobId]);
+  return Number(result.rows[0]?.count ?? 0);
+}
+
+/** No model call of the job is possibly in flight. Lost calls (held) are fine. */
 export async function nativeModelEffectsSafeToContinue(jobId: string): Promise<boolean> {
   const result = await getPool().query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call'", [jobId]);
-  return result.rows.every((row) => row.state === "succeeded" && row.cost_status === "observed");
+  return result.rows.every(accounted);
 }
 
 export async function loadNativeProducerCompletion(jobId: string, documentHash: string, stepCount: number): Promise<unknown> {
@@ -579,7 +635,7 @@ export async function recordNativeProducerCompletion(job: JobRecord, document: N
       "SELECT document_hash,step_count,result FROM native_producer_completion WHERE job_id=$1 FOR UPDATE", [job.id]
     );
     if (saved.rows[0]) {
-      if (saved.rows[0].document_hash !== documentHash || saved.rows[0].step_count !== stepCount || canonicalHash(saved.rows[0].result) !== canonicalHash(result)) throw new Error("NATIVE_COMPLETION_CONFLICT");
+      if (saved.rows[0].document_hash !== documentHash || saved.rows[0].step_count !== stepCount || canonicalHash(saved.rows[0].result) !== canonicalHash(result)) throw coded("NATIVE_COMPLETION_CONFLICT");
     } else await client.query("INSERT INTO native_producer_completion(job_id,document_hash,step_count,result) VALUES($1,$2,$3,$4)", [job.id, documentHash, stepCount, JSON.stringify(result)]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -594,7 +650,7 @@ export async function adoptUnfinishedNativeProducerEffect(job: JobRecord, effect
     const effect = await client.query<{ state: string; step: string; reservation_microusd: string }>("SELECT state,step,reservation_microusd::text FROM effect WHERE id=$1 AND job_id=$2 FOR UPDATE", [effectId, job.id]);
     if (effect.rows[0]?.state !== "dispatched" || effect.rows[0].step !== "native-producer-result" || Number(effect.rows[0].reservation_microusd) !== 0) throw new Error("Native aggregate effect cannot be adopted");
     const calls = await client.query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' FOR UPDATE", [job.id]);
-    if (calls.rows.some((row) => row.state !== "succeeded" || row.cost_status !== "observed")) throw new Error("Unknown native model outcome prevents continuation");
+    if (calls.rows.some((row) => !accounted(row))) throw new Error("Unknown native model outcome prevents continuation");
     await client.query("UPDATE effect SET attempt_id=$3,lease_generation=$4,updated_at=now() WHERE id=$1 AND job_id=$2", [effectId, job.id, job.attemptId, job.leaseGeneration]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -611,11 +667,18 @@ export async function recoverConfirmedNativeProducerResult(job: JobRecord, effec
     const completed = await client.query<{ document_hash: string; step_count: number; result: unknown }>("SELECT document_hash,step_count,result FROM native_producer_completion WHERE job_id=$1 FOR UPDATE", [job.id]);
     if (!completed.rows[0] || canonicalHash(completed.rows[0].result) !== canonicalHash((output as { result?: unknown })?.result)) throw new Error("Native creative turn has no matching durable completion evidence");
     const calls = await client.query<{ state: string; cost_status: string }>("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' FOR UPDATE", [job.id]);
-    if (!calls.rows.length || calls.rows.some((row) => row.state !== "succeeded" || row.cost_status !== "observed")) throw new Error("A native model call outcome is not confirmed; explicit reconciliation is required");
+    if (!calls.rows.length || calls.rows.some((row) => !accounted(row))) throw new CodedError("EFFECT_OUTCOME_UNCERTAIN", "A native model call outcome is not confirmed; explicit reconciliation is required");
     await client.query("UPDATE effect SET state='succeeded',output=$3,cost_status='observed',actual_cost_microusd=0,cost_usd=0,attempt_id=$4,lease_generation=$5,completed_at=now(),updated_at=now() WHERE id=$1 AND job_id=$2", [effectId, job.id, output, job.attemptId, job.leaseGeneration]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   finally { client.release(); }
+}
+
+function touchedPartIds(op: NativeOperation): string[] {
+  if (op.kind === "addPart") return [op.part.id];
+  if (op.kind === "defineMotif" || op.kind === "replaceMotif") return [op.motif.partId];
+  if (op.kind === "handoffMotif") return [op.targetPartId];
+  return "partId" in op && typeof op.partId === "string" ? [op.partId] : [];
 }
 
 export async function saveNativeStep(job: JobRecord, key: string, operations: NativeOperation[], predecessorHash: string, document: NativeDocument): Promise<void> {
@@ -629,13 +692,17 @@ export async function saveNativeStep(job: JobRecord, key: string, operations: Na
     if (active.rowCount !== 1) throw new JobControlError("LEASE_LOST", "Native step lost its lease or was cancelled");
     const prior = await client.query<{ operation_hash: string; result_hash: string; predecessor_hash: string | null }>("SELECT operation_hash,result_hash,predecessor_hash FROM native_job_step WHERE job_id=$1 AND step_key=$2", [job.id, key]);
     if (prior.rows[0]) {
-      if (prior.rows[0].operation_hash !== operationHash || prior.rows[0].result_hash !== resultHash || (prior.rows[0].predecessor_hash && prior.rows[0].predecessor_hash !== predecessorHash)) throw new Error("NATIVE_STEP_REPLAY_CONFLICT");
+      if (prior.rows[0].operation_hash !== operationHash || prior.rows[0].result_hash !== resultHash || (prior.rows[0].predecessor_hash && prior.rows[0].predecessor_hash !== predecessorHash)) throw coded("NATIVE_STEP_REPLAY_CONFLICT");
     } else {
       const latest = await client.query<{ ordinal: number; result_hash: string }>("SELECT ordinal,result_hash FROM native_job_step WHERE job_id=$1 ORDER BY ordinal DESC LIMIT 1", [job.id]);
-      if (latest.rows[0] && latest.rows[0].result_hash !== predecessorHash) throw new Error("NATIVE_STEP_PREDECESSOR_CONFLICT");
+      if (latest.rows[0] && latest.rows[0].result_hash !== predecessorHash) throw coded("NATIVE_STEP_PREDECESSOR_CONFLICT");
       await client.query("INSERT INTO native_job_step(job_id,step_key,ordinal,predecessor_hash,operation_hash,operations,result_hash,result) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [job.id, key, (latest.rows[0]?.ordinal ?? 0) + 1, predecessorHash, operationHash, JSON.stringify(operations), resultHash, JSON.stringify({ documentHash: resultHash, applied: operations.length })]);
-      const names = [...new Set(operations.flatMap((op) => "partId" in op && typeof op.partId === "string" ? document.parts.filter((part) => part.id === op.partId).map((part) => part.name) : []))];
-      await appendPublicActivity(client, { ...job, jobId: job.id }, `step:${job.id}:${key}`, { version: 1, kind: "music", text: names.length ? `Updated ${names.slice(0, 4).join(", ")}${names.length > 4 ? ` and ${names.length - 4} more parts` : ""}.` : `Saved a musical change: ${document.sections.length} sections and ${document.parts.length} parts now in progress.`, step: (latest.rows[0]?.ordinal ?? 0) + 1, documentHash: resultHash });
+      // Every part the step touched, including added parts and their phrases. Public
+      // identities only let the room point at confirmed material; they grant no authority.
+      const partIds = [...new Set(operations.flatMap(touchedPartIds))].filter((id) => document.parts.some((part) => part.id === id));
+      const sectionIds = [...new Set(operations.flatMap((op) => "sectionId" in op && typeof op.sectionId === "string" ? [op.sectionId] : []))].filter((id) => document.sections.some((section) => section.id === id));
+      const names = [...new Set(partIds.map((id) => document.parts.find((part) => part.id === id)!.name))];
+      await appendPublicActivity(client, { ...job, jobId: job.id }, `step:${job.id}:${key}`, { version: 1, kind: "music", text: names.length ? `Updated ${names.slice(0, 4).join(", ")}${names.length > 4 ? ` and ${names.length - 4} more parts` : ""}.` : `Saved a musical change: ${document.sections.length} sections and ${document.parts.length} parts now in progress.`, step: (latest.rows[0]?.ordinal ?? 0) + 1, documentHash: resultHash, ...(partIds.length ? { partIds: partIds.slice(0, 32) } : {}), ...(sectionIds.length ? { sectionIds: sectionIds.slice(0, 24) } : {}) });
     }
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -699,7 +766,7 @@ export async function selectNativeRevision(ownerId: string, projectId: string, r
     const project = await client.query("SELECT 1 FROM project WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR UPDATE", [projectId, ownerId]);
     if (!project.rowCount) throw Object.assign(new Error("Session not found"), { statusCode: 404 });
     const updated = await client.query("UPDATE native_project_head SET revision_id=$4,version=version+1,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND EXISTS(SELECT 1 FROM native_revision WHERE id=$4 AND owner_id=$1 AND project_id=$2) RETURNING project_id", [ownerId, projectId, expectedHeadId, revisionId]);
-    if (updated.rowCount !== 1) throw Object.assign(new Error("Native head changed; refresh before restoring"), { statusCode: 409 });
+    if (updated.rowCount !== 1) throw issue("HEAD_CHANGED", "Native head changed; refresh before restoring", 409);
     await client.query(`UPDATE native_sync SET revision_id=$3,
       state=COALESCE((SELECT CASE WHEN state IN ('verified','conflict','uncertain','failed') THEN state WHEN state IN ('create_in_flight','apply_in_flight') THEN 'uncertain' ELSE 'local' END FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),'local'),
       remote_project_name=(SELECT remote_project_name FROM native_revision_sync WHERE revision_id=$3 AND owner_id=$1 AND project_id=$2),
@@ -786,7 +853,7 @@ export async function advanceNativeSync(job: JobRecord, expectedState: NativeRem
        WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND state=$9 RETURNING revision_id`,
       [job.ownerId, job.projectId, revisionId, nextState, details.remoteProjectName ?? null, details.remoteUrl ?? null, details.observedHash ?? null, details.errorMessage ?? null, expectedState]
     );
-    if (updated.rowCount !== 1) throw new Error("NATIVE_SYNC_CHECKPOINT_CONFLICT");
+    if (updated.rowCount !== 1) throw coded("NATIVE_SYNC_CHECKPOINT_CONFLICT");
     await client.query("UPDATE native_sync SET state=$4,remote_project_name=COALESCE($5,remote_project_name),remote_url=COALESCE($6,remote_url),observed_hash=COALESCE($7,observed_hash),error_message=$8,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3", [job.ownerId, job.projectId, revisionId, nextState === "create_in_flight" || nextState === "created" || nextState === "apply_in_flight" ? "applying" : nextState, details.remoteProjectName ?? null, details.remoteUrl ?? null, details.observedHash ?? null, details.errorMessage ?? null]);
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
@@ -800,7 +867,7 @@ export async function finishNativeSync(job: JobRecord, remoteProjectName: string
     await assertSyncLease(client, job);
     const revisionId = String(job.request.baseNativeRevisionId);
     const updated = await client.query("UPDATE native_revision_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=COALESCE(mapping_version,'nexus-native-v8'),verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3 AND state=$7 RETURNING revision_id,mapping_version", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, expectedState]);
-    if (updated.rowCount !== 1) throw new Error("NATIVE_SYNC_CHECKPOINT_CONFLICT");
+    if (updated.rowCount !== 1) throw coded("NATIVE_SYNC_CHECKPOINT_CONFLICT");
     await client.query("UPDATE native_sync SET state='verified',remote_project_name=$4,remote_url=$5,observed_hash=$6,mapping_version=$7,verified_at=now(),error_message=NULL,updated_at=now() WHERE owner_id=$1 AND project_id=$2 AND revision_id=$3", [job.ownerId, job.projectId, revisionId, remoteProjectName, remoteUrl, observedHash, updated.rows[0].mapping_version]);
     await client.query("UPDATE job SET state='succeeded',stage=NULL,lease_owner=NULL,attempt_id=NULL,lease_until=NULL,updated_at=now() WHERE id=$1", [job.id]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [job.id]);
