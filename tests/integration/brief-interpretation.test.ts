@@ -59,6 +59,28 @@ it("captures validated checks on the job, replays a key without a second call an
   expect(stored._brief).toMatchObject({ provenance: "scripted", tempoBpm: { value: 90 }, roles: [{ kind: "absent", role: "drums" }] });
 });
 
+it("stores and replays a mistaken clear-ending role as guidance without adding an FX requirement", async () => {
+  const projectId = await room();
+  const direction = "A 16-bar lead melody with a clear ending";
+  const { calls, generator } = counted(scriptedBrief({
+    totalBars: { value: 16, quote: "A 16-bar lead melody" },
+    roles: [briefRole("required", "lead", "lead melody"), briefRole("required", "transitions", "with a clear ending")]
+  }));
+  const key = randomUUID();
+  const input = { direction, expectedHeadId: null };
+  const checked = await interpretNativeDirection(ownerId, projectId, key, input, generator);
+  expect(checked.rejected).toEqual([]);
+  expect(checked.guidance).toEqual([{ quote: "with a clear ending", reason: "Transitions can use existing parts; a separate FX part is not required" }]);
+  expect(checked.checks.join(" ")).not.toContain("transitions");
+  expect(await interpretNativeDirection(ownerId, projectId, key, input, generator)).toEqual(checked);
+  expect(calls).toHaveLength(1);
+  const made = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: randomUUID(), expectedHeadId: null, request: { direction, interpretationId: checked.interpretationId } });
+  const stored = (await getPool().query("SELECT request->'_brief' AS brief FROM job WHERE id=$1", [made.id])).rows[0]!.brief;
+  expect(stored.totalBars.value).toBe(16);
+  expect(stored.roles).toMatchObject([{ kind: "required", role: "lead" }]);
+  expect(stored.guidance).toEqual(checked.guidance);
+});
+
 it("keeps a revision's worded parts, reports them with the request and rejects unmatched words", async () => {
   const projectId = await room();
   const generation = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: randomUUID(), expectedHeadId: null, request: { direction: "A warm evolving instrumental" } });

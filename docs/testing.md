@@ -1,5 +1,13 @@
 # Verification record
 
+## Transition interpretation release correction — October 9–10
+
+- Regression reproduced before the fix: a captured `required` or `change` transitions role for "with a clear ending" created a hidden FX-part completion gate. Both cases now retain guidance without a role requirement. Explicit lead requirements, transition exclusions/protections and historical capture reading still pass.
+- Unit: **295/295**. Integration: **176/176**, including stored corrected captures and idempotent replay without a second interpreter dispatch. Pinned Vitest binaries, isolated `_test` database, fixture providers and tracing disabled.
+- Application browser: **18/18**. Hosted fixture browser: **2/2**. Targeted visual test: **1/1**, including four identical rejected entries, no duplicate-key console errors, and unchanged edit/send-as-guidance behavior. The full 34-test visual suite passed in the preceding review; only the dialog key changed since that run.
+- TypeScript, ESLint, Vite build and `git diff --check` passed. The existing large-chunk build warning remains.
+- Live local retest: Copper Window saved 16 bars/four sections/four parts with eight model calls and $0.014287 total. Trace had no tool errors, no false transition requirement and one successful finish call. A low-priority symbolic review suggestion remains; no audio was heard or copied. Existing strict inferred-bar-span confirmation required Send as guidance. This is one bounded run, not a general speed/quality guarantee.
+
 ## Pre-merge pass — October 9
 
 Pinned local binaries, isolated `_test` PostgreSQL, fixture/scripted providers, tracing disabled, dev servers stopped. No provider calls.

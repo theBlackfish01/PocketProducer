@@ -1,5 +1,13 @@
 # Live implementation status
 
+## Release check: transition interpretation — 2026-10-09
+
+The first release-check run, Copper Window (16 bars), saved Version 1 but exposed a new false hard requirement: the interpreter mapped "with a clear ending" to required transitions in Return. Finish rejected it twice until the producer added a fifth FX part. It took about 14 minutes and $0.079589 including the interpretation; a symbolic ending suggestion remained. No release was made from that check.
+
+Minimal correction: new required/change transition roles become guidance at capture, since an ending or fill can use existing parts. Interpreter instructions make the same distinction. Exclusions, part protections, other role requirements and historical captures remain unchanged. No extra paid call, model/limit change, schema migration or direction-text parser. Regression tests cover the bad proposal, completion without an FX part, unaffected lead requirements and protections, plus durable capture and free idempotent replay. The new regression failed before the fix and passed afterwards.
+
+Predeployment retest with the same prompt saved Version 1: 16 bars, four sections and four parts, on its first finish call. Eight model calls, $0.014287 including interpretation, roughly three minutes from job creation (142 seconds in the producer trace). No tool errors or false transitions requirement. One low-priority symbolic review suggestion about Beatbox8 dynamics remained; this is not listening evidence. The strict section-number check asked for confirmation of inferred bar spans; its existing Send as guidance path worked. Duplicate rejected entries exposed duplicate React keys in that dialog; a rendering-only key fix and browser regression cover this too. All 295 unit and 176 integration tests, 18 application browser journeys, two hosted fixture journeys, the targeted dialog visual test, TypeScript, lint and the production build passed. Section inspection and reload retained the saved live version. Railway release and hosted generation checks are next. No Audiotool copy is authorized for this pass. Private trace evidence stays under ignored `.local/reviews/release-1009/`.
+
 ## Pre-merge pass — 2026-10-09
 
 The symbolic helpers, review grounding and GM search were committed on `native-agent-pass-and-recovery` and merged into `main` (not pushed).

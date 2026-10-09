@@ -9,6 +9,38 @@ const melody = applyNativeOperations(seedNativeDocument("A melody"), [{ kind: "r
 const empty = { totalBars: null, tempoBpm: null, meter: null, sections: [], chordProgressions: [], roles: [], keep: [], construction: [], guidance: [] };
 
 describe("captured brief validation", () => {
+  it.each(["required", "change"] as const)("keeps a %s transition interpretation as guidance, not an extra FX-part gate", (kind) => {
+    const direction = "Bring back the lead in Return with a clear ending";
+    const brief = capturedBrief(direction, { roles: [
+      briefRole("required", "lead", "Bring back the lead", "Return"),
+      briefRole(kind, "transitions", "with a clear ending", "Return")
+    ] });
+    const base = structuredClone(melody);
+    base.sections = [{ id: "return", name: "Return", startBar: 0, endBar: base.bars, intent: "" }];
+    expect(brief.roles).toMatchObject([{ kind: "required", role: "lead" }]);
+    expect(brief.guidance).toEqual([{ quote: "with a clear ending", reason: "Transitions can use existing parts; a separate FX part is not required" }]);
+    expect(brief.rejected).toEqual([]);
+    expect(nativeCompletionIssues(base, brief, "generation")).toEqual([]);
+    // Explicit ensemble requirements still gate completion.
+    base.parts[0]!.notes = [];
+    expect(nativeCompletionIssues(base, brief, "generation")).toContain("Requested lead or melody has no constructed material in Return");
+  });
+
+  it("retains transition exclusions, existing-part protection and historical captures", () => {
+    const base = structuredClone(melody);
+    base.parts.push({ ...part("accent", "melody"), role: "fx" });
+    const absent = capturedBrief("No transition effects", { roles: [briefRole("absent", "transitions", "No transition effects")] }, base);
+    expect(absent.roles).toHaveLength(1);
+    expect(nativeCompletionIssues(base, absent, "revision", [], base).length).toBeGreaterThan(0);
+    const kept = capturedBrief("Keep transition effects unchanged", { roles: [briefRole("preserve", "transitions", "Keep transition effects unchanged")] }, base);
+    expect(nativeBriefPreservation(kept, base).namedParts.map((item) => item.id)).toEqual(["accent"]);
+    const historical = { ...absent, roles: [briefRole("required", "transitions", "No transition effects")] };
+    expect(jobNativeBrief({ _brief: historical })).toEqual(historical);
+    const invented = capturedBrief("A gentle ending", { roles: [briefRole("required", "transitions", "A loud riser")] });
+    expect(invented.guidance).toEqual([]);
+    expect(invented.rejected).toHaveLength(1);
+  });
+
   it("accepts only the user's own words, written numbers and real identities", () => {
     const base = applyNativeOperations(melody, [{ kind: "setStructure", bars: 8, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "" }, { id: "chorus", name: "Chorus", startBar: 4, endBar: 8, intent: "" }] }]);
     const direction = "Keep the lead in the intro unchanged, at 96 BPM, sixteen bars in total.";

@@ -350,9 +350,11 @@ test("creation availability fails closed and recovers without losing the directi
 })
 
 test("unmatched direction words ask before they are sent as guidance, never as a silent lock", async ({ page }) => {
+  const duplicateKeyErrors: string[] = []
+  page.on("console", (message) => { if (message.type() === "error" && message.text().includes("same key")) duplicateKeyErrors.push(message.text()) })
   await mockRoom(page)
   const checked = "00000000-0000-4000-8000-000000000b2e"
-  let check: { status: number; json: unknown } = { status: 200, json: { interpretationId: checked, provenance: "luna", checks: [], keep: [], guidance: [], rejected: [{ quote: "leave room for the pad", reason: "This arrangement has no single section by that name" }] } }
+  let check: { status: number; json: unknown } = { status: 200, json: { interpretationId: checked, provenance: "luna", checks: [], keep: [], guidance: [], rejected: Array.from({ length: 4 }, () => ({ quote: "leave room for the pad", reason: "This arrangement has no single section by that name" })) } }
   const checks: string[] = [], sent: Array<Record<string, unknown>> = []
   await page.route("**/native/interpretations", async (route) => { checks.push(String(route.request().headers()["idempotency-key"])); await route.fulfill({ status: check.status, json: check.json }) })
   await page.route("**/native/revisions", async (route) => { sent.push(route.request().postDataJSON() as Record<string, unknown>); await route.fulfill({ status: 409, json: { code: "HEAD_CHANGED", message: "Native head changed; refresh before continuing" } }) })
@@ -362,6 +364,8 @@ test("unmatched direction words ask before they are sent as guidance, never as a
   const dialog = page.getByRole("dialog", { name: "Check these words" })
   await expect(dialog).toContainText("leave room for the pad")
   await expect(dialog).toContainText("no single section by that name")
+  await expect(dialog.locator("li")).toHaveCount(4)
+  expect(duplicateKeyErrors).toEqual([])
   await page.screenshot({ path: `${evidence}/brief-check-desktop.png` })
   await dialog.getByRole("button", { name: "Edit direction" }).click()
   await expect(dialog).toBeHidden()

@@ -141,7 +141,8 @@ Hard items must be explicit and unambiguous:
 - tempoBpm and meter: stated numbers only.
 - sections: a stated section length ("an 8-bar intro") or bar span ("the chorus at bars 9-16"); bars are 1-based and inclusive, as written.
 - chordProgressions: an explicit ordered sequence of at least three chords, as symbols such as Dm9, Bbmaj7, Fmaj9, Cadd9, Am, C or G7.
-- roles: kind required (include, add, bring in), absent (no, without, remove, avoid), change (simplify, thin, vary or brighten an existing role; set reduceDensity when asking for fewer notes or hits), preserve (keep a role unchanged or exactly as it is). role is drums, bass, harmony (chords, pads), lead (melody) or transitions (risers, fills).
+- roles: kind required (include, add, bring in), absent (no, without, remove, avoid), change (simplify, thin, vary or brighten an existing role; set reduceDensity when asking for fewer notes or hits), preserve (keep a role unchanged or exactly as it is). role is drums, bass, harmony (chords, pads), lead (melody) or transitions (existing FX parts to preserve or exclude).
+Requests to add or develop transitions, risers, fills or endings belong in guidance: they can use existing instruments and do not require a separate FX part. For example, "Return with a clear ending" is guidance about the ending, never a required transitions role. Explicit keep/remove instructions for existing FX parts remain checks.
 - keep: in a revision, a named part or phrase to keep unchanged, using only ids from the document; theme true for "the theme", "the hook" or "the motif" without a specific phrase.
 - construction: shared-parallel-drums, sidechain, automation (changing controls), rise (a build, lift or upswing), shorter-ambience (shorter reverb or delay tails).
 - section: an existing section by its document id; for a new piece, the section name as written; position first or last for "the first/opening" or "the last/final" section. Use null for the whole piece.
@@ -342,6 +343,10 @@ export function captureNativeBrief(raw: unknown, context: BriefContext): NativeB
     if (!written(item.quote)) reject(item.quote, notWritten);
     else if ("problem" in resolved) reject(item.quote, resolved.problem);
     else if (item.kind === "preserve" && !document) soften(item.quote, "Nothing exists yet to keep unchanged");
+    // A transition is a musical function, not proof that a separate FX voice
+    // must exist. Keep its direction without inventing a part-presence gate.
+    // Exclusions/protections and already-stored captures remain unchanged.
+    else if (item.role === "transitions" && (item.kind === "required" || item.kind === "change")) soften(item.quote, "Transitions can use existing parts; a separate FX part is not required");
     else if (!brief.roles.some((other) => other.kind === item.kind && other.role === item.role && sameRef(other.section, resolved.ref))) brief.roles.push({ ...item, section: resolved.ref });
   }
   // Conflicting whole-piece instructions need a stated interpretation, not a veto.
