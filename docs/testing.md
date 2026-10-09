@@ -1,5 +1,58 @@
 # Verification record
 
+## Pre-merge pass — October 9
+
+Pinned local binaries, isolated `_test` PostgreSQL, fixture/scripted providers, tracing disabled, dev servers stopped. No provider calls.
+
+- An independent review of the uncommitted diff found no stored-data breakage. Fixed before merge:
+  - symbolic calls compile under the session write lock, against the predecessor document of a committed step key, so a retried harmony scene, `chordProgression` or `applyRecipe` replays instead of failing;
+  - citations may cite any part's note;
+  - bass patterns over 96 hits per cycle, and expansions over 128 operations, are correctable replies;
+  - comp patterns never place a hit at or after a chord's end.
+- Unit: **292/292**, 47 files. New: the operation-limit and half-bar-chord cases, and a melody finding citing the bass note it sits over.
+- Integration: **174/174** with `--no-file-parallelism`. New: a retried harmony scene with the same step key returns `replayed: true`. Three parallel full runs each lost one to three 3-second test leases, in a different test each time (including the untouched `model-selection.test.ts`); every failing test passed alone.
+- Application browser: **18/18**. Visual: **34/34**. Hosted browser: **2/2**.
+- `npx tsc -b`, `npx eslint . --max-warnings=0` and `vite build` (apps/web) pass; the existing >500 kB chunk warning remains.
+
+## Helper fixes after the live A/B — October 9 (later)
+
+Same isolation as below. No provider calls in these suites.
+
+- Unit: **291/291**, 47 files. New or changed:
+  - `symbolic.test.ts`: held chords with feel stay one `harmonizeSection` with 2-bar chords and seeded velocity variation. Review citations: the October 9 A2-for-F2 misreading is discarded with its reason, a verified finding is kept, and uncited findings are unchanged.
+  - `harmony.test.ts`: an Am–F–C–G root line moves at most a fifth, including the step back to its start, and sits near the register's centre.
+  - `library.test.ts`: GM drum search by words ("jazz brushes", "soft acoustic kit"), tags in results, and every kit listed for an unmatched drum query.
+- Integration (alone): **174/174**, 14 files. New: a revision's reviewer receives the diff against the revised version, and a new piece does not.
+- `npx tsc -b` and `npx eslint . --max-warnings=0` pass.
+
+## Symbolic composition helpers and musicality evidence — October 9
+
+Pinned local binaries, isolated `_test` PostgreSQL, fixture/scripted providers, tracing disabled; database-sharing suites ran alone. No provider calls.
+
+- Unit: **288/288**, 47 files. New:
+  - `harmony.test.ts`:
+    - chord-symbol parsing, including slash basses and the unreadable-symbol error;
+    - in-key moves and mirrors (including the Soft Corner transposition case);
+    - voice leading with small movement inside the register;
+    - in-key sevenths and ninths;
+    - comp and bass patterns in 4/4 and 3/4, including the walking approach;
+    - deterministic, bounded swing and humanize.
+  - `symbolic.test.ts`:
+    - recipe parts and `applyRecipe` effect chains;
+    - a `chordProgression` with broken comping, a syncopated bass and feel: everything in key, swung, deterministic, free of clashes and accepted by the offline SDK mapping;
+    - held chords as one `harmonizeSection`, and 3/4 waltz comping;
+    - correctable misuse;
+    - scene harmony;
+    - in-key `varyMotifInstance` and `developSectionNotes` feel (Beatbox8 refused);
+    - musicality flagging the Soft Corner clash but not the in-key version, plus the checklist and review evidence.
+- Integration (alone): **173/173**, 14 files.
+  - New: a scripted producer run through the real Deep Agent. It composes a scene with recipe parts and harmony; gets a correctable `SYMBOLIC_EDIT_INVALID` reply for a progression over a part that already plays (nothing committed, run continues); lifts a phrase in key; and applies a recipe. The stored version holds the recipe effect chains, in-key swung chord and bass notes and the lifted motif, and the checklist carries `musicality`.
+  - The input-ceiling cases first failed at 96k (105,528 bytes) and in the 110k review envelope (110,420). They pass after the envelope work in [ADR 005](adr/005-symbolic-helpers-and-musicality-evidence.md).
+  - Measured against HEAD in the same test: the batch-menu envelope is 74,691 bytes (75,850 at HEAD). The uncompacted final request at 128k is 104,057 (102,660 at HEAD).
+- Application browser: **18/18**. Visual: **34/34**.
+- `npx tsc -b` and `npx eslint . --max-warnings=0` pass. No web source changed, so `vite build` was not rerun.
+- Real UI: the Sounds sheet's "Explore our sound ideas" list was checked on the local dev stack (stopped afterwards; no job ran). It shows all 18 recipes with guidance and no overflow, at desktop width only.
+
 ## Review fixes and best-effort recovery — October 9
 
 Pinned local binaries, isolated `_test` PostgreSQL (Docker Desktop started locally), fixture/scripted providers, tracing disabled. No provider calls.

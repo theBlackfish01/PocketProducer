@@ -8,6 +8,7 @@ type Summary = ReturnType<typeof symbolicNativeReview>;
 export function compactNativeReviewEvidence(summary: Summary, minimal = false) {
   return {
     ...summary,
+    musicality: minimal ? { ...summary.musicality, issues: summary.musicality.issues.slice(0, 5) } : summary.musicality,
     timing: { ...summary.timing, previewCoverage: "onsetPreview is a bounded leading selection; finalOnsets is an overlapping tail, not additional notes. Coverage/omission counts accompany each selection. Missing preview events do not imply silence. rhythmWindow describes only its stated interval." },
     evidenceLayout: {
       mode: minimal ? "bounded-tuples" : "lossless-tuples",

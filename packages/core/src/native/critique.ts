@@ -3,6 +3,7 @@ import { canonicalHash } from "../domain/hash.js";
 import { analyzeNativeSection, barTicks, materializedNotes, type NativeDocument } from "./model.js";
 import type { NativePlan } from "./plan.js";
 import { automationValueAt } from "./section.js";
+import { analyzeNativeMusicality, musicalityReviewEvidence } from "./musicality.js";
 
 // A ramp may cross an entire section without a control point inside it. Give
 // the editor local boundary values and the enclosing keyframes, not unrelated
@@ -18,11 +19,18 @@ function sectionAutomation(curve: NativeDocument["parts"][number]["automation"][
     exactBoundaryValues: !points.some((point) => point.interpolation === "sloped") };
 }
 
+/** A note a finding is about, as the evidence shows it: section-relative start tick and MIDI pitch. */
+export const nativeReviewCitationSchema = z.object({ tick: z.number().int().min(0).max(2_000_000), pitch: z.number().int().min(0).max(127) });
+export const nativeReviewFindingSchema = z.object({ priority: z.enum(["high", "medium", "low"]), sectionId: z.string().max(64).nullable(), partId: z.string().max(64).nullable(), observation: z.string().min(3).max(300), suggestedChange: z.string().min(3).max(300),
+  // Older reviews and the symbolic fallback cite nothing.
+  evidence: z.array(nativeReviewCitationSchema).max(4).optional() });
 export const nativeReviewSchema = z.object({
   documentHash: z.string().regex(/^[a-f0-9]{64}$/),
   musicHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   verdict: z.string().min(3).max(360),
-  findings: z.array(z.object({ priority: z.enum(["high", "medium", "low"]), sectionId: z.string().max(64).nullable(), partId: z.string().max(64).nullable(), observation: z.string().min(3).max(300), suggestedChange: z.string().min(3).max(300) })).max(4),
+  findings: z.array(nativeReviewFindingSchema).max(4),
+  // Findings whose cited notes the score does not contain: a misreading, kept as a record, never acted on.
+  discardedFindings: z.array(z.object({ observation: z.string().max(300), reason: z.string().max(300) })).max(4).optional(),
   noChangeReason: z.string().max(300).nullable(),
   modelUsed: z.boolean(),
   contextHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -138,8 +146,31 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
     // bounded canonical settings so a reviewer does not mistake an omitted
     // bus/group for missing musical work and ask for redundant edits.
     sharedProcessing: { reverbBus: document.reverbBus ?? null, delayBus: document.delayBus ?? null, groups: document.groups ?? [], master: document.master ?? null },
-    emptySections, sameSectionSignatures, arcEvidence: nativeArcEvidence(document), plannedIdentity: plan?.creativeState?.identity ?? plan?.intent ?? "", unfinishedTasks: plan?.creativeState?.unfinishedTasks ?? plan?.developmentTasks ?? [], evidenceIssues: nativePlanEvidenceIssues(plan, document),
+    emptySections, sameSectionSignatures, arcEvidence: nativeArcEvidence(document),
+    // Deterministic harmony/texture facts (key, clashes over the bass, loops,
+    // expression, register crowding); evidence for the editor, not requirements.
+    musicality: musicalityReviewEvidence(analyzeNativeMusicality(document)), plannedIdentity: plan?.creativeState?.identity ?? plan?.intent ?? "", unfinishedTasks: plan?.creativeState?.unfinishedTasks ?? plan?.developmentTasks ?? [], evidenceIssues: nativePlanEvidenceIssues(plan, document),
     limits: "Symbolic structure and metadata only; no audio was heard and repetition can be artistically intentional." };
+}
+
+/** Why a finding's cited notes are not in the score, or null when they are (or
+ * cannot be checked: no citation, no section, or a part without MIDI notes). */
+function citationMismatch(finding: NativeReview["findings"][number], document: NativeDocument): string | null {
+  const section = document.sections.find((item) => item.id === finding.sectionId);
+  if (!finding.evidence?.length || !section) return null;
+  // Any part: a clash finding about the melody naturally cites the bass note under it.
+  const notes = document.parts.filter((part) => part.device.type !== "audio").flatMap((part) => materializedNotes(document, part.id));
+  if (!notes.length) return null;
+  const start = section.startBar * barTicks(document);
+  for (const cite of finding.evidence) {
+    const at = start + cite.tick;
+    // A cited note starts near that tick (humanize moves onsets slightly) or is sounding there.
+    const there = notes.filter((note) => Math.abs(note.startTick - at) <= 30 || (note.startTick <= at && note.startTick + note.durationTicks > at));
+    if (!there.some((note) => note.pitch === cite.pitch)) {
+      return `Cites MIDI ${cite.pitch} at section tick ${cite.tick}; the score has ${there.length ? `MIDI ${[...new Set(there.map((note) => note.pitch))].sort((a, b) => a - b).join("/")}` : "no note"} there`;
+    }
+  }
+  return null;
 }
 
 export function validateNativeReview(raw: unknown, document: NativeDocument, modelUsed: boolean): NativeReview {
@@ -148,5 +179,15 @@ export function validateNativeReview(raw: unknown, document: NativeDocument, mod
     if (finding.sectionId && !document.sections.some((section) => section.id === finding.sectionId)) throw new Error(`Reviewer named nonexistent section ${finding.sectionId}`);
     if (finding.partId && !document.parts.some((part) => part.id === finding.partId)) throw new Error(`Reviewer named nonexistent part ${finding.partId}`);
   }
-  return parsed;
+  // A finding that cites notes the score does not contain is a misreading. Keep
+  // the review and its other findings (best effort) and record why it was dropped.
+  const discarded: Array<{ observation: string; reason: string }> = [];
+  const findings = parsed.findings.filter((finding) => {
+    const reason = citationMismatch(finding, document);
+    if (reason) discarded.push({ observation: finding.observation, reason });
+    return !reason;
+  });
+  if (!discarded.length) return parsed;
+  return { ...parsed, findings, discardedFindings: discarded,
+    noChangeReason: findings.length ? parsed.noChangeReason : parsed.noChangeReason ?? "Its findings cited notes the score does not contain, so they were discarded; no verified finding remains." };
 }

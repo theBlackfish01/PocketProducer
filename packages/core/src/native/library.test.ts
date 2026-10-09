@@ -133,4 +133,18 @@ describe("Audiotool resource boundary", () => {
     expect((await library.getGmSound("glass-keys", "instrument")).metadata).toMatchObject({ name: "presets/resolved-gm", deviceType: "gakki", contentHash: nativePresetFingerprint(returned) });
     expect(selectedSlug).toBe("glass-keys");
   });
+  it("finds GM drum kits by any word of a style query, and lists every kit when no word matches", async () => {
+    const kit = (slug: string, displayName: string, tags: string[]) => ({ id: `presets/${slug}`, slug, displayName, category: "Drums", program: 0, tags });
+    const gmDrums = [kit("standard-kit", "Standard Drum Kit", ["drums", "clean", "soft"]), kit("jazz-kit", "Jazz Drum Kit", ["drums", "acoustic", "soft", "jazz"]), kit("brush-kit", "Brush Drum Kit", ["drums", "acoustic", "soft"]), kit("power-kit", "Power Drum Kit", ["drums", "hard"])];
+    const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [], nextPageToken: "" }), get: () => Promise.resolve(new Error("missing")) }, presets: { gmInstruments: [], gmDrums, search: () => Promise.resolve([]) } } as unknown as NativeLibraryClient);
+    // The October 9 live queries found nothing because the whole phrase had to appear verbatim.
+    expect((await library.searchGmSounds("jazz brushes", "drums")).sounds.map((sound) => sound.slug).sort()).toEqual(["brush-kit", "jazz-kit"]);
+    const acoustic = await library.searchGmSounds("soft acoustic kit", "drums");
+    expect(acoustic.sounds.slice(0, 2).map((sound) => sound.slug).sort()).toEqual(["brush-kit", "jazz-kit"]);
+    expect(acoustic.sounds[0]).toMatchObject({ tags: expect.arrayContaining(["acoustic"]) });
+    const unmatched = await library.searchGmSounds("lo-fi hip-hop", "drums");
+    expect(unmatched.sounds).toHaveLength(4);
+    expect(unmatched.note).toMatch(/all 4 GM drum kits/);
+    expect((await library.searchGmSounds("zzz", "instrument")).sounds).toEqual([]);
+  });
 });

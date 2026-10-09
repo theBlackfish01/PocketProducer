@@ -12,7 +12,7 @@ import { registerActivityRoutes } from "./activity-stream.js";
 import { assistMusicalPrompt, byteRange, issue, clearConnectedProfile, connectedAudiotoolProfile, fundedProducerModels, selectableProducerModelSchema as producerModelSchema, type OAuthFetch } from "@pocket/core";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createNativeLibrary, createProject, decodeWav, encodeWav, deleteAudiotoolSession, getConfig, getPool, getProjectSnapshot,
-  abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listNativeSoundFeedback, listProjects, nativeDraftView, nativePresetRecipes, nativeSnapshot, providerAvailability, readNativeRecipe, requireProject, interpretNativeDirection, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, saveNativeSoundFeedback, selectNativeRevision, storeImmutableAudio
+  NATIVE_RECIPE_VERSION, abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listNativeSoundFeedback, listProjects, nativeDraftView, nativePresetRecipes, nativeSnapshot, providerAvailability, readNativeRecipe, requireProject, interpretNativeDirection, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, saveNativeSoundFeedback, selectNativeRevision, storeImmutableAudio
 } from "@pocket/core";
 
 export async function createApi(oauthTransport?: OAuthFetch) {
@@ -113,7 +113,7 @@ app.get("/api/v1/native/capability", async (request) => {
   return inspectNativeCapability(path);
 });
 
-app.get("/api/v1/native/sound-recipes", () => ({ version: "local-palette-v2", recipes: nativePresetRecipes.map((recipe) => readNativeRecipe(recipe.id)) }));
+app.get("/api/v1/native/sound-recipes", () => ({ version: NATIVE_RECIPE_VERSION, recipes: nativePresetRecipes.map((recipe) => readNativeRecipe(recipe.id)) }));
 
 app.get("/api/v1/native/library/samples", async (request) => {
   const { query, pageToken, kind, minBpm, maxBpm } = z.object({ query: z.string().trim().min(1).max(80), pageToken: z.string().max(500).optional(), kind: z.enum(["one-shot", "loop"]).optional(), minBpm: z.coerce.number().min(0).max(400).optional(), maxBpm: z.coerce.number().min(0).max(400).optional() }).parse(request.query);

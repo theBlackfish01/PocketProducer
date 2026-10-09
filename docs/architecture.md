@@ -1,5 +1,27 @@
 # Architecture — native construction is the current path
 
+## Symbolic composition helpers and musicality evidence (2026-10-09)
+
+The model chooses musical decisions and deterministic code does the arithmetic ([ADR 005](adr/005-symbolic-helpers-and-musicality-evidence.md)). Every helper compiles into existing validated operations before the step is stored, so history, diffs, protection and synchronization still see explicit notes and settings.
+
+- **Theory** (`native/harmony.ts`): chord symbols (sevenths, ninths, suspensions, altered and slash chords), nine modes, in-key moves (`diatonicShift`, `diatonicInvert`), voice leading over a register, nine comp and six bass patterns placed on the meter's beats (tested in 4/4 and 3/4), and seeded feel (swing on the 8th or 16th grid, humanize, accents).
+- **Compilation** (`native/construction-tools.ts`): `chordProgression` (a scene `harmony` entry or a batch operation) becomes `harmonizeSection` (held, unswung chords) or `sequenceSectionPattern` (rhythmic comping and bass, at most 8 bars and 96 notes per cycle; long notes are re-struck each bar). A recipe (scene part `recipe` or `applyRecipe`) becomes `setDevice` plus its effect chain. `compileToolOperations` expands these against the projected document, so later operations in the same batch see earlier ones. Misuse is a correctable `SYMBOLIC_EDIT_INVALID`.
+- **Domain operations** (`native/model.ts`): `varyMotifInstance` and `developSectionNotes` accept `key` with `diatonicSteps` or `invertAround` (not combined with a semitone shift), and `developSectionNotes` accepts `feel` for MIDI parts. Beatbox8 still refuses feel.
+- **Review grounding** (`native/critique.ts`, `native/review-model.ts`):
+  - Each review finding cites up to four notes. `validateNativeReview` drops a finding whose cited notes are not in the score and keeps the rest (`discardedFindings`); findings without citations are unchanged.
+  - Revisions pass `previousVersion` (the application's diff: unchanged, changed, added and removed parts).
+- **GM catalog search** (`native/library.ts`): `searchGmSounds` ranks entries by matching words (plural endings dropped) and returns their tags. A drum search that matches nothing lists all eight GM kits with a note.
+- **Evidence** (`native/musicality.ts`):
+  - It estimates the key from Krumhansl profiles and lists up to ten issues, worst first: harsh intervals over the sounding bass, out-of-key runs, unchanged loops, fixed velocities, mechanical drums, crowded registers, large voice leaps and no low end.
+  - The producer checklist carries a compact form once music exists (key, layers per section, five notes).
+  - The focused review gets the key, issues and limits, compacted to five issues in its minimal tier.
+  - None of it is a completion requirement or a listening claim.
+- **Recipes** (`native/resources.ts`, `local-palette-v3`): 18 original, unheard parameter recipes with style tags and effect chains. The prompt lists one line per recipe (id, role, styles, character).
+- **Envelope budget:**
+  - The batch menu omits `develop_native_theme` and `shape_native_sections`, whose operations `apply_native_batch` already accepts; they still run if called.
+  - Both are ordered with the menu tools so the always-available prefix is unchanged.
+  - With compact keys (`"D minor"`) and one shared feel per progression, the batch-menu tool envelope is 74.7 KB (75.9 KB before) and the scene menu 48.1 KB (42.6 KB before).
+
 ## Captured briefs, typed errors and cache-stable producer context (2026-10-08)
 
 **Direction checks.** A direction becomes hard checks only through a captured brief ([ADR 004](adr/004-captured-brief-interpretation.md)).
@@ -28,7 +50,7 @@
 - Tool menus remain, but always-available tools are ordered before menu tools so a menu switch keeps the shared tool prefix cached. Sending every menu's tools would add 35–60 KB per request against the byte-based input bound.
 
 **Calibrated input bound.**
-- The byte-based bound stays the safety rule: no request exceeds the cap, and the reservation remains an upper bound. Tool schemas alone are about 42–76 KB, so before calibration history was trimmed after two or three exchanges and the cache broke on almost every call.
+- The byte-based bound stays the safety rule: no request exceeds the cap, and the reservation remains an upper bound. Tool schemas alone are about 42–76 KB (48–75 KB since the October 9 helpers), so before calibration history was trimmed after two or three exchanges and the cache broke on almost every call.
 - A request that extends one the provider already measured is now bounded by that request's reported input tokens plus the UTF-8 bytes of the messages added (and of the tool envelope, if it changed). Nothing unmeasured is estimated: replayed reasoning in new messages counts by its bytes, and once measured it counts exactly as billed.
 - Effect identity still hashes the deterministic byte bound, so a replay after restart names the same effect. The calibrated bound is recorded as `inputReservationBytes.calibrated`.
 

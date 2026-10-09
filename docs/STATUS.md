@@ -1,5 +1,176 @@
 # Live implementation status
 
+## Pre-merge pass — 2026-10-09
+
+The symbolic helpers, review grounding and GM search were committed on `native-agent-pass-and-recovery` and merged into `main` (not pushed).
+
+**Regex audit:** no server or web path interprets direction text with regex. Brief checks compare words with `Intl.Segmenter` (`domain/words.ts`). The remaining patterns are:
+- fixed-grammar validation (IDs, hashes, sample and preset names, schema paths, step keys, `"D minor"` keys, chord symbols);
+- route matching and display formatting;
+- splitting search queries into words.
+
+The GM kit search now uses the shared word segmenter.
+
+**Pre-merge review fixes:** replay-safe compilation of symbolic calls under the write lock, wider citation matching, correctable limit errors, and no hits past a chord's end. See [testing](testing.md).
+
+**Your local test session:**
+- "Lantern in the Gaps" built cleanly ($0.034).
+- Its Copy to Audiotool failed to resolve `rpc.audiotool.com` (DNS `ENOTFOUND`) and retried until the dev stack was stopped. No remote project was created, and DNS resolves again.
+- The sync job is left `running` with an expired lease; the next worker start reclaims it.
+- The SDK's retry on an unresolvable host has no overall deadline, which deserves a bounded failure.
+
+## Helper fixes and two live retests — 2026-10-09 (later)
+
+These fixes respond to the A/B findings below. User-authorized local runs, uncommitted, GPT-6 Luna, standard profile, library connected, no Audiotool copy. Traces are in `.local/reviews/workflow-2026-10-09c/` and `-09d/`.
+
+**Fixed:**
+- **Held chords stay held.** Feel on a `sustain` progression now varies only chord velocity. Live: 2-bar pad and Rhodes chords held 6–8 beats, at velocities 0.40–0.48.
+- **The bass cycle no longer leaps.** Live waltz roots: A2, F2, C2, G2, then back to A2. The largest step is a fifth; it was a ninth.
+- **Review findings cite notes, and citations are checked.** Every live finding cited real notes. The A2-for-F2 misreading did not recur: the waltz review quoted 45, 45, 41, 41 correctly. Nothing needed discarding.
+- **A revision's reviewer gets the diff against the revised version.** The first retest's review read "keep the drums unchanged" as "Main must match Intro" and raised a false high-priority finding. With `previousVersion`, the second retest's review raised no drum finding, and the revision finished on its first review (118 s, $0.016, against 270 s and $0.020).
+- **GM kit search matches words.** "lo-fi hip-hop kit" and "jazz brushes" returned nothing before. "Brush kit" now returns the Brush Drum Kit first, with tags.
+- `dry-step-kit` is no longer tagged lo-fi.
+
+**Live runs:**
+
+| Run | Build | Calls | Time | Cost |
+|---|---|---|---|---|
+| 1 | "Window Seat", lo-fi groove | 17 (2 reviews) | 171 s | $0.0211 |
+| 1 | Its revision | 11 (1 review) | 269 s | $0.0200 |
+| 1 | "Stillwater Waltz" | 12 (2 reviews) | 132 s | $0.0199 |
+| 2 | "Blue Window", lo-fi groove | 20 (2 reviews) | 290 s | $0.0386 |
+| 2 | Its revision | 10 (1 review) | 117 s | $0.0161 |
+
+Run totals including direction checks: $0.0619 and $0.0553. All five builds succeeded on the first attempt, with no held costs. Correctable rejections (a chord part over the melody; 128 stab notes over the 96 limit) were each fixed in the next call.
+
+**Quality (symbolic; nothing was heard):**
+- Every saved version has 0 out-of-key notes and 0 clashes over the bass.
+- Both lo-fi builds added a separate held Rhodes chord part through scene `harmony`.
+- Both revisions kept the drums and chords hash-identical, made the main-section bass busier and lifted the melody in key, to C6 and E6.
+- The waltz has voice-led held chords, a bell that enters in Bloom and climbs to C6, and an evidenced arc. After a fair review finding, the bass gained a beat-three fifth, but only in the Opening.
+
+**Still open:**
+- **Gakki is still not applied.** In retest 2 the agent searched, then inspected and pinned the Brush Drum Kit, but it had already written Beatbox8 drums. A finish check interrupted it and it never switched. The guidance should say to inspect a kit before writing the drums.
+- **Rootless voicings.** A 4-voice Dm9 without a bass in the same progression dropped its root (F–C–A–E, which reads as Fmaj7); the review flagged it and the producer added a D. The voicing should drop the fifth before the root.
+- The October 9 "main section" name mismatch recurred once (one extra batch).
+- Removing the last part returns a raw Zod error rather than a correctable message.
+- A creative-state edit between finishes invalidated a review and cost an extra review call.
+
+## Live A/B builds with the symbolic helpers — 2026-10-09
+
+User-authorized local runs of the October 9 briefs on the uncommitted helper work ([ADR 005](adr/005-symbolic-helpers-and-musicality-evidence.md)), GPT-6 Luna, standard profile, Audiotool library connected, no Audiotool copy. Submitted through the app in the desktop browser pane; the dev stack was stopped afterwards. Traces were imported read-only to `.local/reviews/workflow-2026-10-09b/`.
+
+| Build | Calls | Time | First music | Cost | Cached | Oct 9 run (calls, cost) |
+|---|---|---|---|---|---|---|
+| "Blue Hour Loop", new 16-bar lo-fi groove | 7 (1 review) | 173 s | 95 s | $0.0157 | 72% | 15, $0.0226 |
+| Its revision: keep drums, busier bass, higher Rhodes | 9 (1 review) | 110 s | 79 s | $0.0121 | 82% | 12, $0.0144 |
+| "Glasshouse Waltz", new 24-bar 3/4 on Am–F–C–G | 14 (1 review) | 184 s | 38 s | $0.0285 | 74% | 17, $0.0310 |
+
+Direction checks cost $0.0009; the overall spend was **$0.0573**. All three succeeded on the first attempt, with no tool errors, correctable rejections, retries or held costs.
+
+**Helpers in use:**
+- Build 1 used recipe parts with effect chains and feel on the bass and Rhodes.
+- The revision raised the Rhodes with `key: "D minor"`, `diatonicSteps: 2`.
+- The waltz used `chordProgression`, three `applyRecipe` calls, in-key bell variations and a `drifting-haze` texture.
+- No build used scene `harmony`, and none searched for a Gakki kit.
+
+**Musical quality (symbolic; nothing was heard; `.local/inspect-ab.ts`):**
+- **Build 1:** 0 out-of-key notes and 0 clashes over the bass (Soft Corner v1 had 9 and 5).
+  - Bass velocities vary from 0.54 to 0.84, and the Rhodes has the lo-fi keys chain.
+  - It is still basic: Beatbox8 drums and the bass loop one 2-bar cell, and the Rhodes is a single line with no chords (none were requested).
+  - The review accepted it, calling the drums a "deliberately mechanical pocket".
+- **Revision:**
+  - The drums are hash-identical.
+  - The main-section bass goes from 3 to 5 onsets per bar.
+  - The Rhodes moves up in key to a C6 top note, with 0 out-of-key notes and 0 clashes (the October 9 revision left one clash).
+- **Waltz:** no musicality issues.
+  - The chords are voice-led (for example C/E), and every role has its own recipe and effect chain.
+  - The gentle build is evidenced: pad velocity 0.36, then 0.38, then 0.42, with filter and reverb-mix automation; the bell climbs in key from E5 to F5 to G5; and the haze enters in Bloom.
+  - The first musicality check flagged a B4-over-F2 tritone in bar 11, and the producer's next batch removed it.
+  - It still ends on G, which its plan chose as an open ending.
+
+**Findings (not yet fixed):**
+- **The review misread its evidence.** The waltz review said the bass plays A2 under F in bars 3–4, but its own tuples show F2 (41). The review call used no reasoning tokens. The producer checked the bass once and finished without a wrong edit. The false finding stays in the review history as an accepted suggestion; it is not shown to the person.
+- **Gakki is still unused.** The library was connected and the prompt and musicality notes recommended a Gakki kit for a groove, but build 1 chose the Beatbox8 `dry-step-kit`, which is tagged "lo-fi".
+- **Sustained chords with feel are re-struck every bar.** A velocity-only feel moved the waltz pad from held `harmonizeSection` chords to a per-bar pattern (2-bar chords became two strikes).
+- **The bass "roots" pattern leaps a ninth at each cycle restart** (G1 to A2), because octave choice ignores the wrap.
+- **Menu switches.** The waltz built in the batch menu, then switched to scene and back. That cost two cache misses and a context reset when the review response forced the batch menu. This is the October 9 calibrated-bound finding.
+- **Bookkeeping.** Builds 1 and 2 wrote creative state twice in a row; in build 1 that took 55 s (5.1k reasoning tokens).
+- **Preparation reads.** The revision again made 7 reads and a full skill read before one edit.
+
+**Fixed during the run:** the clash suggestion still said "diatonicSteps with a scale"; it now says "key plus diatonicSteps".
+
+**Next:**
+- Drop the "lo-fi" tag from `dry-step-kit`.
+- Keep held chords on `harmonizeSection` when feel cannot move a downbeat.
+- Choose the bass cycle's octave to avoid the wrap leap.
+- Cross-check review findings that quote a pitch or tick against the score before recording them.
+- Count only newly added tools in the calibrated bound.
+
+## Symbolic composition helpers and musicality evidence — 2026-10-09
+
+The quick wins from the quality review, implemented locally, uncommitted, with no provider calls. Design: [ADR 005](adr/005-symbolic-helpers-and-musicality-evidence.md). Verification: [testing](testing.md).
+
+**Delivered (the model chooses, code does the arithmetic):**
+- **Harmony from chord symbols.** `chordProgression` takes a key (`"D minor"`), chord symbols with lengths, a comp part and/or a bass part, and one feel. It is a scene `harmony` entry or a batch operation. Chords are voiced with smooth voice leading, using nine comp and six bass patterns. The result compiles into ordinary `harmonizeSection`/`sequenceSectionPattern` notes.
+- **In-key transforms.** `varyMotifInstance`/`developSectionNotes` take `key` + `diatonicSteps` or `invertAround`. This is the fix for the Soft Corner class of clash (a hook moved three semitones out of key).
+- **Feel.** Swing (8th or 16th grid), seeded humanize and accents on scene patterns, progressions and `developSectionNotes`. MIDI parts only; Beatbox8 keeps its strict contract.
+- **Gakki by default for grooves** when the Audiotool library is connected. Without the library, the guidance says to vary Beatbox8 patterns between sections and add fills.
+- **Recipes with effect chains.** `local-palette-v3` has 18 original recipes with style tags. A scene part can name a `recipe`, and `applyRecipe` sets a device plus its chain.
+- **Deterministic musicality evidence.**
+  - It reports the key, clashes over the bass, out-of-key runs, unchanged loops, fixed velocities, mechanical drums, crowded registers, voice leaps and missing low end.
+  - It appears in the producer checklist once music exists, and in the focused review.
+  - Run against the October 9 saved versions, it flags Soft Corner v1's clash and passes Moonlit Waltz clean.
+
+**Budget kept:**
+- The new schemas first pushed the batch-menu request past the 96k default (105.5k).
+- The batch menu now omits the theme and section-shaping tools, whose operations `apply_native_batch` already accepts. Keys are compact strings, a progression shares one feel, the recipe list is one line each, and guidance is no longer repeated across prompt and summaries.
+- The batch envelope is now 74.7 KB, against 75.9 KB at HEAD. The scene menu grew from 42.6 to 48.1 KB, which is within its headroom.
+
+**Limits:**
+- Nothing was heard. The analysis is heuristic, and intended tension can be flagged.
+- Progressions write only into silent sections. Rhythmic cycles are at most 8 bars and 96 notes; held chords at most 16 bars.
+- Grooves with swing need a Gakki kit, which needs the library connection.
+- Whether the music actually improves is **unverified**: no live build has used the helpers yet.
+
+**Next:**
+- Run a small live A/B build: the Soft Corner and Moonlit Waltz briefs, about $0.03 each at the October 9 rates. This needs the user's approval for live spend.
+- Compare the musicality issues and the textures against the October 9 versions.
+- Then consider the larger ideas: a reference-scene library to compare against, and section-contrast checks.
+
+## Live builds and trace review — 2026-10-09
+
+User-authorized local runs on the committed branch (`00f3825`), GPT-6 Luna, desktop pane, no Audiotool copy. All three succeeded with no tool errors, failed calls, retries or held costs. The LangSmith traces were imported read-only to `.local/reviews/workflow-2026-10-09/`.
+
+| Build | Calls | Time | First music | Cost | Cached |
+|---|---|---|---|---|---|
+| "Soft Corner", new 16 bars, 84 BPM, intro + main | 15 (2 reviews) | 152 s | 51 s | $0.0226 | 76% |
+| Soft Corner revision, keep drums, busier bass, higher Rhodes | 12 (2 reviews) | 116 s | 59 s | $0.0144 | 83% |
+| "Moonlit Waltz", new 24 bars, 3/4, 72 BPM, Am–F–C–G, no drums | 17 (1 review) | 188 s | 57 s | $0.0310 | 68% |
+
+Direction checks cost $0.0009 in total; the overall spend was **$0.069**. Every check was captured as intended, including 3/4, the progression, "no drums" and "build gently" as a rise. The revision's "keep the drums unchanged" became a lock on Dry Step Drums.
+
+**Confirmed on the wire:** every producer call's input extends the previous call's input, and the cached tokens equal the previous request's size. Cache reuse rose from 32–41% yesterday to 68–83%.
+
+**Findings (not yet fixed):**
+- **Tool-menu switches lose the whole cache.** All three mid-run misses (3 of 39 producer calls, each a 35–40k-token full miss) came when the tool list changed. Message prefixes were identical.
+- **A menu switch can force a context reset.** Opening the batch menu grows the tool definitions from 42.6 KB to 75.9 KB. The calibrated bound then adds the whole new tool list, which pushed build 1 over its 128k bound and reset its context to the latest exchange, and took build 3 to 116.6k. Counting only newly added tools would keep the bound valid without the reset.
+- **Section names must match exactly.** Build 1 named its section "Main", the check wanted "main section", and the producer spent a scene call (about 37 s) renaming it. Ignoring generic words like "section" in name matching would avoid that.
+- **The revision inspected phrases one at a time,** seven times around a single edit, because whole-piece revisions get no preloaded phrase material.
+- **The revision had a duplicate lock,** "Keep unchanged: drums" plus "Keep unchanged: Dry Step Drums". Harmless.
+
+**Musical quality (symbolic inspection of the saved versions; nothing was heard; `.local/inspect-run-scores.ts`, `.local/inspect-consonance.ts`):**
+- **Every explicit requirement is met in the score.**
+  - Bars, tempo, meter and sections all match.
+  - Moonlit Waltz plays Am–F–C–G exactly, six times, and has no drums.
+  - The revision left the drums byte-identical, gave the bass 4 → 5 onsets per bar in the main section, and lifted the Rhodes from a B♭5 to a C6 top note.
+- **Moonlit Waltz is harmonically clean.** All 21 bell notes are in key, with no harsh intervals over the bass. The build is real: denser pad and bell in Bloom, plus filter and gain automation. It ends on the G (V) chord rather than resolving. The review's claim that the last chord repeated Am was wrong (bar 24 is G–B–D), and the producer correctly made no edit.
+- **Soft Corner v1 shipped a harmonic clash.** Its main-section melody was the hook moved up three semitones (C–E♭–A♭ over a bass still playing D–A–D–C), giving 9 out-of-key notes and 5 minor-9th or tritone clashes. The review called it a "uniform transposition" but missed the clash. The revision rewrote bars 11–16 into the key, leaving one clash in bar 9.
+- **Textures are basic.**
+  - Soft Corner has 2-bar drum and bass loops repeated 8 times, fixed-velocity quantized Beatbox8 drums (no swing or ghost notes), a single-line Rhodes with no chords, and no effects or automation.
+  - Moonlit Waltz uses root-position block chords and one bass note per bar, so the 3/4 sway is barely articulated.
+  - Both pieces reuse the same local recipes: the Rhodes and the "warm pad" share one patch.
+
 ## Review fixes and best-effort recovery — 2026-10-09
 
 Fixes for all 14 findings of the code review of the uncommitted pass below, with the user's direction that error recovery should be best effort rather than block. Not committed, pushed or deployed. No provider calls, no live spend and no Audiotool copy in this pass.

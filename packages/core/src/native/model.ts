@@ -2,6 +2,7 @@ import { z } from "zod";
 import { canonicalHash } from "../domain/hash.js";
 import { spliceSectionAutomation } from "./section.js";
 import { NativeUnknownIdError } from "./errors.js";
+import { diatonicInvert, diatonicShift, feelChangesMaterial, feelFor, nativeFeelSchema, nativeKeySchema, scaleOf } from "./harmony.js";
 
 export const NATIVE_PPQ = 960;
 const id = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
@@ -205,8 +206,10 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("addPart"), part }),
   z.object({ kind: z.literal("defineMotif"), motif }),
   z.object({ kind: z.literal("replaceMotif"), motif }),
-  z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional(), noteEdits: z.array(z.object({ noteId: id, omit: z.boolean().optional(), pitch: z.number().int().min(0).max(127).optional(), startTick: z.number().int().min(0).optional(), durationTicks: z.number().int().positive().optional(), velocity: z.number().min(0.01).max(1).optional() })).max(64).optional() }),
-  z.object({ kind: z.literal("developSectionNotes"), partId: id, sectionId: id, pitchShiftSemitones: z.number().int().min(-12).max(12).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional() }),
+  z.object({ kind: z.literal("varyMotifInstance"), partId: id, placementId: id, newMotifId: id, name: z.string().min(1).max(80), pitchShiftSemitones: z.number().int().min(-24).max(24).optional(), timeShiftTicks: z.number().int().min(-960).max(960).optional(), durationFactor: z.number().min(0.5).max(1.5).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional(), noteEdits: z.array(z.object({ noteId: id, omit: z.boolean().optional(), pitch: z.number().int().min(0).max(127).optional(), startTick: z.number().int().min(0).optional(), durationTicks: z.number().int().positive().optional(), velocity: z.number().min(0.01).max(1).optional() })).max(64).optional(),
+    key: nativeKeySchema.optional(), diatonicSteps: z.number().int().min(-14).max(14).optional().describe("Steps within key; 2 = up a third"), invertAround: z.number().int().min(0).max(127).optional().describe("Mirror around this MIDI pitch, in key") }),
+  z.object({ kind: z.literal("developSectionNotes"), partId: id, sectionId: id, pitchShiftSemitones: z.number().int().min(-12).max(12).optional(), velocityFactor: z.number().min(0.5).max(1.5).optional(), omitEvery: z.number().int().min(2).max(8).optional(),
+    key: nativeKeySchema.optional(), diatonicSteps: z.number().int().min(-14).max(14).optional().describe("Steps within key"), feel: nativeFeelSchema.optional().describe("MIDI parts only, not Beatbox8") }),
   z.object({ kind: z.literal("handoffMotif"), sourceMotifId: id, targetPartId: id, newMotifId: id, name: z.string().min(1).max(80), placementId: id, startTick: z.number().int().min(0), repeats: z.number().int().min(1).max(64), transpose: z.number().int().min(-36).max(36).default(0) }),
   z.object({ kind: z.literal("silenceSectionClips"), partId: id, sectionId: id, regionId: id.optional() }),
   z.object({ kind: z.literal("setSectionClipGain"), partId: id, sectionId: id, regionId: id.optional(), gain: z.number().min(0).max(1) }),
@@ -261,6 +264,17 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
 export type NativeOperation = z.infer<typeof nativeOperationSchema>;
 
 export function barTicks(document: Pick<NativeDocument, "meter">): number { return document.meter.numerator * NATIVE_PPQ * 4 / document.meter.denominator; }
+
+/** The in-key pitch transform an operation asks for, or null. A chromatic shift
+ * and an in-key move are alternatives; mixing them would make neither exact. */
+function keyedPitch(op: { key?: string | undefined; diatonicSteps?: number | undefined; invertAround?: number | undefined }, chromaticShift: number): ((pitch: number) => number) | null {
+  const steps = op.diatonicSteps ?? 0, axis = op.invertAround;
+  if (!steps && axis === undefined) return null;
+  if (!op.key) throw new Error("diatonicSteps and invertAround need a key, for example \"D minor\"");
+  if (chromaticShift) throw new Error("Use either pitchShiftSemitones or an in-key move (diatonicSteps/invertAround), not both");
+  const scale = scaleOf(op.key);
+  return (pitch) => diatonicShift(axis === undefined ? pitch : diatonicInvert(pitch, scale, axis), scale, steps);
+}
 export function materializedNotes(document: NativeDocument, partId: string): NativeNote[] {
   const item = document.parts.find((value) => value.id === partId);
   if (!item) throw new NativeUnknownIdError("part", partId);
@@ -369,10 +383,11 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         const pitchShift = op.pitchShiftSemitones ?? 0, timeShift = op.timeShiftTicks ?? 0, durationFactor = op.durationFactor ?? 1, velocityFactor = op.velocityFactor ?? 1;
         const noteEdits = new Map((op.noteEdits ?? []).map((edit) => [edit.noteId, edit]));
         if (noteEdits.size !== (op.noteEdits?.length ?? 0) || [...noteEdits.keys()].some((noteId) => !source.notes.some((value) => value.id === noteId))) throw new Error("Motif note edits must identify distinct notes in the original phrase");
-        if (!pitchShift && !timeShift && durationFactor === 1 && velocityFactor === 1 && !op.omitEvery && !noteEdits.size) throw new Error("A motif variation must change musical material");
+        const inKey = keyedPitch(op, pitchShift);
+        if (!pitchShift && !inKey && !timeShift && durationFactor === 1 && velocityFactor === 1 && !op.omitEvery && !noteEdits.size) throw new Error("A motif variation must change musical material");
         const notes = source.notes.filter((value, index) => (!op.omitEvery || (index + 1) % op.omitEvery !== 0) && !noteEdits.get(value.id)?.omit).map((value) => {
           const edit = noteEdits.get(value.id);
-          return { ...value, pitch: edit?.pitch ?? value.pitch + pitchShift, startTick: edit?.startTick ?? value.startTick + timeShift, durationTicks: edit?.durationTicks ?? Math.max(1, Math.round(value.durationTicks * durationFactor)), velocity: edit?.velocity ?? Number((value.velocity * velocityFactor).toFixed(4)) };
+          return { ...value, pitch: edit?.pitch ?? (inKey ? inKey(value.pitch) : value.pitch + pitchShift), startTick: edit?.startTick ?? value.startTick + timeShift, durationTicks: edit?.durationTicks ?? Math.max(1, Math.round(value.durationTicks * durationFactor)), velocity: edit?.velocity ?? Number((value.velocity * velocityFactor).toFixed(4)) };
         });
         if (JSON.stringify(notes) === JSON.stringify(source.notes)) throw new Error("A motif variation must change musical material");
         if (!notes.length || notes.some((value) => value.startTick < 0 || value.startTick + value.durationTicks > source.lengthTicks || value.pitch < 0 || value.pitch > 127 || value.velocity < 0.01 || value.velocity > 1)) throw new Error("Motif variation exceeds the original phrase bounds, MIDI range or velocity range");
@@ -393,8 +408,12 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         const item = findPart(op.partId);
         const section = next.sections.find((value) => value.id === op.sectionId);
         if (!section) throw new NativeUnknownIdError("section", op.sectionId);
-        if (!(op.pitchShiftSemitones ?? 0) && (op.velocityFactor ?? 1) === 1 && !op.omitEvery) throw new Error("Section development must change musical material");
+        const inKey = keyedPitch(op, op.pitchShiftSemitones ?? 0);
+        const feel = op.feel ? nativeFeelSchema.parse(op.feel) : null;
+        if (feel && feelChangesMaterial(feel) && ["beatbox8", "audio"].includes(item.device.type)) throw new Error("Beatbox8 is a fixed on/off step grid and cannot swing or vary velocity; for a groove with feel use an inspected Gakki drum kit or a synth part");
+        if (!(op.pitchShiftSemitones ?? 0) && !inKey && (op.velocityFactor ?? 1) === 1 && !op.omitEvery && !(feel && feelChangesMaterial(feel))) throw new Error("Section development must change musical material");
         const start = section.startBar * barTicks(next), end = section.endBar * barTicks(next);
+        const grid = { barTicks: barTicks(next), beatTicks: NATIVE_PPQ * 4 / next.meter.denominator, beatsPerBar: next.meter.numerator };
         const crossing = item.placements.filter((placement) => {
           const phrase = next.motifs.find((value) => value.id === placement.motifId)!;
           return placement.startTick < end && placement.startTick + placement.repeats * phrase.lengthTicks > start;
@@ -413,10 +432,17 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
           if (event.startTick < start) developed.push({ ...event, id: sliceId(event, "before"), durationTicks: start - event.startTick });
           const innerStart = Math.max(event.startTick, start), innerEnd = Math.min(eventEnd, end);
           insideIndex++;
-          if (!op.omitEvery || insideIndex % op.omitEvery !== 0) developed.push({ ...event, id: sliceId(event, "inside"), startTick: innerStart, durationTicks: innerEnd - innerStart, pitch: event.pitch + (op.pitchShiftSemitones ?? 0), velocity: Number((event.velocity * (op.velocityFactor ?? 1)).toFixed(4)) });
+          if (!op.omitEvery || insideIndex % op.omitEvery !== 0) {
+            const velocity = Number((event.velocity * (op.velocityFactor ?? 1)).toFixed(4));
+            // Feel moves a note only when it starts inside the section, and never across its edges.
+            const felt = feel && event.startTick >= start ? feelFor(event.startTick - start, velocity, feel, grid, [op.partId, op.sectionId, event.id]) : null;
+            const startTick = felt ? Math.min(end - 1, Math.max(start, innerStart + felt.offset)) : innerStart;
+            developed.push({ ...event, id: sliceId(event, "inside"), startTick, durationTicks: Math.max(1, Math.min(innerEnd, end) - startTick), pitch: inKey ? inKey(event.pitch) : event.pitch + (op.pitchShiftSemitones ?? 0), velocity: felt ? felt.velocity : velocity });
+          }
           if (eventEnd > end) developed.push({ ...event, id: sliceId(event, "after"), startTick: end, durationTicks: eventEnd - end });
         }
-        if (!insideIndex || (op.omitEvery && !(op.pitchShiftSemitones ?? 0) && (op.velocityFactor ?? 1) === 1 && insideIndex < op.omitEvery)) throw new Error(`No notes can be developed within ${op.sectionId}`);
+        if (!insideIndex || (op.omitEvery && !(op.pitchShiftSemitones ?? 0) && !inKey && !feel && (op.velocityFactor ?? 1) === 1 && insideIndex < op.omitEvery)) throw new Error(`No notes can be developed within ${op.sectionId}`);
+        if (developed.some((event) => event.pitch < 0 || event.pitch > 127)) throw new Error("Section development moved a note outside the MIDI range");
         item.notes = developed;
         item.placements = item.placements.filter((value) => !crossing.some((placement) => placement.id === value.id));
         break;

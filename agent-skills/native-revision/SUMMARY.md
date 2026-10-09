@@ -3,3 +3,4 @@ Revision essentials (full skill: /skills/native-revision/SKILL.md; read it only 
 - Edit through `apply_native_batch` with stable step keys, then inspect the actual diff. Section tools such as `developSectionNotes`, `setSectionClipGain` and `editSectionAutomation` keep material outside the section unchanged.
 - Protected parts include their device, preset fingerprint, effects, automation, notes, clips and dependent motifs, plus shared routing. Only the user's protection control can lock or unlock them. Explain a conflict instead of working around it.
 - Structural validity is not proof of sound. Summarize the exact changes.
+- "Higher", "lower" or "answer it" usually means an in-key move (`key` plus `diatonicSteps` or `invertAround`), not a semitone shift. "More groove": `developSectionNotes` `feel`. New chords or bass in a silent section: `chordProgression`.

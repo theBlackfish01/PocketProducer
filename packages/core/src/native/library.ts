@@ -2,6 +2,7 @@ import type { AudiotoolClient } from "@audiotool/nexus";
 import { createHash } from "node:crypto";
 import type { NativeDocument } from "./model.js";
 import { canonicalHash } from "../domain/hash.js";
+import { words } from "../domain/words.js";
 import { profileOwnedSourceWav, type NativeSourceProfile } from "./resources.js";
 
 export type NativeLibraryClient = Pick<AudiotoolClient, "samples" | "presets">;
@@ -46,7 +47,7 @@ export interface NativeLibrary {
   inspectSampleAudio(name: string): Promise<InspectedSampleAudio>;
   searchPresets(deviceType: NativePresetType, query: string): Promise<{ presets: LibraryPreset[]; provenance: "Audiotool preset metadata" }>;
   getPreset(name: string): Promise<{ metadata: LibraryPreset; preset: NativePreset }>;
-  searchGmSounds(query: string, family: "instrument" | "drums"): Promise<{ sounds: Array<{ id: string; slug: string; displayName: string; category: string; program: number; description?: string }>; provenance: "Pinned Nexus GM catalog; selection still requires a live preset fetch" }>;
+  searchGmSounds(query: string, family: "instrument" | "drums"): Promise<{ sounds: Array<{ id: string; slug: string; displayName: string; category: string; program: number; tags?: readonly string[]; description?: string }>; provenance: "Pinned Nexus GM catalog; selection still requires a live preset fetch"; note?: string }>;
   getGmSound(slug: string, family: "instrument" | "drums"): Promise<{ metadata: LibraryPreset; preset: NativePreset }>;
 }
 
@@ -140,9 +141,23 @@ export function createNativeLibrary(client: NativeLibraryClient | null): NativeL
       if (query.length > 80) throw new NativeLibraryError("invalid", "Use a short sound search query");
       const presets = requireClient().presets;
       const items = family === "drums" ? presets.gmDrums : presets.gmInstruments;
-      const needle = query.trim().toLowerCase();
-      const sounds = items.filter((item) => !needle || `${item.displayName} ${item.category} ${item.tags.join(" ")} ${item.description ?? ""}`.toLowerCase().includes(needle)).slice(0, 16).map((item) => ({ id: item.id, slug: item.slug, displayName: item.displayName, category: item.category, program: item.program, ...(item.description ? { description: item.description } : {}) }));
-      return Promise.resolve({ sounds, provenance: "Pinned Nexus GM catalog; selection still requires a live preset fetch" as const });
+      // Rank by matching words (plural endings dropped), so "jazz brushes" or
+      // "soft lo-fi kit" finds kits whose name, tags or description share a word.
+      const stem = (word: string) => {
+        if (word.length <= 4 || !word.endsWith("s") || word.endsWith("ss")) return word;
+        const single = word.slice(0, -2);
+        return word.endsWith("es") && ["sh", "ch", "x", "s"].some((end) => single.endsWith(end)) ? single : word.slice(0, -1);
+      };
+      const terms = [...new Set(words(query).filter((word) => word.length > 2).map(stem))];
+      const ranked = items.map((item, index) => {
+        const text = `${item.displayName} ${item.category} ${item.tags.join(" ")} ${item.description ?? ""}`.toLowerCase();
+        return { item, index, hits: terms.filter((term) => text.includes(term)).length };
+      }).filter((entry) => !terms.length || entry.hits > 0).sort((a, b) => b.hits - a.hits || a.index - b.index);
+      // There are only eight GM drum kits: when no word matches, list them all.
+      const listAll = !ranked.length && family === "drums";
+      const sounds = (listAll ? items : ranked.map((entry) => entry.item)).slice(0, 16).map((item) => ({ id: item.id, slug: item.slug, displayName: item.displayName, category: item.category, program: item.program, ...(item.tags.length ? { tags: item.tags } : {}), ...(item.description ? { description: item.description } : {}) }));
+      return Promise.resolve({ sounds, provenance: "Pinned Nexus GM catalog; selection still requires a live preset fetch" as const,
+        ...(listAll ? { note: `No kit name or tag matched "${query}"; these are all ${items.length} GM drum kits. Choose by tags (for example soft, acoustic, jazz, electronic) and inspect it before use.` } : {}) });
     },
     async getGmSound(slug: string, family: "instrument" | "drums") {
       const presets = requireClient().presets;

@@ -26,3 +26,23 @@ For a precise answer or changed ending in only one placement, inspect its origin
 Owned sources are optional. A placed interval is only “placed/referenced,” never “audibly used” until its selected bytes and a future render are checked. Do not invent sample IDs, presets or rights metadata. Make assumptions explicit in the structural explanation. No native audio is available in this milestone; do not claim to have listened or judged mix quality.
 
 Read `references/creative-development.md` when deciding density, palette, a defining event or development. Use `search_native_examples` and `read_native_example` selectively; their original canonical forms are unheard references, not templates. Save selected reference IDs and exact chosen resource identities through `record_native_creative_state` before large mutations so they survive context compaction and restart.
+
+## Harmony, phrases and groove helpers
+
+Let the tools do the arithmetic. `chordProgression` (a `harmony` entry in `compose_native_scene`, or an operation in `apply_native_batch`) writes chords and an optional bass line from chord symbols into sections where those parts are still silent:
+
+```json
+{ "kind": "chordProgression", "sectionIds": ["verse", "chorus"], "key": "D minor",
+  "chords": [{ "symbol": "Dm9", "bars": 2 }, { "symbol": "Bbmaj7", "bars": 2 }],
+  "comp": { "partId": "keys", "pattern": "broken", "register": "mid", "voices": 4, "extensions": "ninths" },
+  "bass": { "partId": "bass", "pattern": "syncopated" },
+  "feel": { "swing": 0.58, "humanizeTicks": 8 } }
+```
+
+Comp patterns: sustain, stabs, backbeat, pulse-quarters, pulse-eighths, arpeggio-up, arpeggio-updown, broken, waltz. Bass patterns: roots, root-fifth, syncopated, pulse-eighths, octaves, walking. With a key, added 7ths/9ths and walking approaches stay in the key. Rhythmic patterns repeat a cycle of up to 8 bars; sustained chords up to 16.
+
+Keys are short strings: `"D minor"`, `"Bb dorian"`, `"F# harmonicMinor"` (modes: major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonicMinor, melodicMinor).
+
+Develop a phrase without leaving the key: `varyMotifInstance` or `developSectionNotes` with `"key": "D minor"` and `"diatonicSteps": 2` (up a third in key) or `"invertAround": 62` (mirror around D4). A semitone `pitchShiftSemitones` is a key change; use it only when you mean one.
+
+Feel: `feel` on a scene pattern, a chordProgression (shared by its comp and bass) or `developSectionNotes` adds swing (0.5 straight, about 0.55–0.62 for lo-fi, hip-hop or house, 0.66 triplet), a fixed per-note humanize and accents. Beatbox8 cannot take feel; use an inspected Gakki kit for a groove. The per-turn checklist's `musicality` notes list the key, layers per section and score issues; fix clear clashes over the bass and accidental out-of-key notes, and weigh the rest against the brief.

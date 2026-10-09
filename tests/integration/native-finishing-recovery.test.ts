@@ -8,7 +8,7 @@ import { nativeFormSchema } from "@pocket/core";
 import { boundOpenAiRequest } from "@pocket/core/test-support";
 import { listProjects, requireProject, abandonNativePartialJob, interpretNativeDirection, cancelJob } from "@pocket/core";
 import { completeProviderEffect, failProviderEffect, reconcileNativeStepConflict } from "@pocket/core";
-import { nativeDocumentSchema, nativeMusicHash } from "@pocket/core";
+import { materializedNotes, nativeDocumentSchema, nativeMusicHash, nativePresetRecipes } from "@pocket/core";
 import { nativeReviewResponseFormat } from "@pocket/core/test-support";
 
 let owner = "";
@@ -374,6 +374,25 @@ it.each([128000, 110000])("fits a large arranged score into the %i critic envelo
   if (limit === 110000) expect(body.confirmedScore.evidenceLayout.mode).toBe("bounded-tuples");
 });
 
+it("tells a revision's reviewer which parts are identical to the version it revises", async () => {
+  const { job, session } = await prepared();
+  const before = session.document;
+  const document = nativeDocumentSchema.parse({ ...before, parts: [...before.parts.map((part) => part.id === "lead" ? { ...part, gain: 0.4 } : part),
+    { ...before.parts[0]!, id: "kept", name: "Kept drums", notes: [] }] });
+  const previousVersion = nativeDocumentSchema.parse({ ...before, parts: [...before.parts, { ...before.parts[0]!, id: "kept", name: "Kept drums", notes: [] }] });
+  const reviewer = fakeModel().respond(good());
+  await focusedNativeReview({ job, direction: "Keep the drums unchanged. Make the lead quieter.", document, previousVersion, plan, attempt: 1, scriptedReviewer: reviewer });
+  const [system, human] = reviewer.calls[0]!.messages;
+  const body = JSON.parse(human!.text) as { previousVersion: { unchangedParts: string[]; changedParts: { partId: string; fields: string[] }[] } };
+  expect(body.previousVersion.unchangedParts).toEqual(["kept"]);
+  expect(body.previousVersion.changedParts).toEqual([{ partId: "lead", fields: ["gain"] }]);
+  expect(system!.text).toContain("not to repetition across sections");
+  // A new piece has no previous version to compare against.
+  const fresh = fakeModel().respond(good());
+  await focusedNativeReview({ job, direction, document, plan, attempt: 2, scriptedReviewer: fresh });
+  expect(JSON.parse(fresh.calls[0]!.messages[1]!.text)).not.toHaveProperty("previousVersion");
+});
+
 it("rejects irreducible critic input before reserving or dispatching, without shortening the brief", async () => {
   const { job, session } = await prepared();
   const before = (await getPool().query("SELECT id FROM effect WHERE job_id=$1", [job.id])).rows;
@@ -529,6 +548,47 @@ it("constructs, develops, shapes and inspects through compound tools with replay
   const current = (await nativeSnapshot(owner, job.projectId)).current!.document;
   expect(current.motifs.find((m) => m.id === "answer")?.notes[0]?.pitch).toBe(71);
   expect(current.motifs.find((m) => m.id === "theme")?.notes[0]?.startTick).toBe(691);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(3);
+}, 30_000);
+
+it("compiles recipes, chord symbols, in-key moves and feel into explicit stored music, and returns misuse as a correctable reply", async () => {
+  const job = await create();
+  const scene = { stepKey: "groove", replaceSeed: true, title: "Helper groove", structure: { bars: 4, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 2 }, { id: "main", name: "Main", startBar: 2, endBar: 4 }] },
+    parts: [{ id: "keys", name: "Keys", role: "harmony", recipe: "lofi-keys", gain: 0.6, pan: 0 }, { id: "bass", name: "Bass", role: "bass", recipe: "dusty-bass", gain: 0.7, pan: 0 },
+      { id: "lead", name: "Lead", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0 }],
+    patterns: [{ id: "hook", partId: "lead", name: "Hook", lengthTicks: 3840, events: [[0, 960, 69, 0.7], [1440, 480, 72, 0.6], [1920, 960, 65, 0.7]] }],
+    placements: [{ partId: "lead", placement: { id: "first", motifId: "hook", startTick: 0, repeats: 1, transpose: 0 } }, { partId: "lead", placement: { id: "second", motifId: "hook", startTick: 7680, repeats: 1, transpose: 0 } }],
+    harmony: [{ sectionIds: ["intro", "main"], key: "D minor", chords: [{ symbol: "Dm9", bars: 1 }, { symbol: "Bbmaj7", bars: 1 }], comp: { partId: "keys", pattern: "broken", extensions: "ninths" }, bass: { partId: "bass", pattern: "syncopated" }, feel: { swing: 0.58, humanizeTicks: 6 } }] };
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_scene", args: scene }])
+    // A retried scene with the same step key compiles against its predecessor and replays.
+    .respondWithTools([{ name: "compose_native_scene", args: scene }])
+    // The keys already play in the intro: a correctable reply, nothing committed.
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "again", operations: [{ kind: "chordProgression", sectionIds: ["intro"], chords: [{ symbol: "Am", bars: 2 }], comp: { partId: "keys" } }] } }])
+    .respondWithTools([{ name: "develop_native_theme", args: { stepKey: "lift", operations: [{ kind: "varyMotifInstance", partId: "lead", placementId: "second", newMotifId: "hook-up", name: "Hook up", key: "D minor", diatonicSteps: 2 }] } }])
+    .respondWithTools([{ name: "configure_native_sound", args: { stepKey: "lead-sound", operations: [{ kind: "applyRecipe", partId: "lead", recipeId: "soft-lead" }] } }])
+    .respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: producer, library: createNativeLibrary(null) });
+  const snapshot = await jobSnapshot(owner, job.id);
+  expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
+  expect(JSON.stringify(producer.calls[2]?.messages)).toMatch(/replayed\\?":\s*true/);
+  expect(JSON.stringify(producer.calls[3]?.messages)).toContain("SYMBOLIC_EDIT_INVALID");
+  expect(JSON.stringify(producer.calls[3]?.messages)).toContain("already plays in Intro");
+  // Once music exists the checklist carries deterministic score facts.
+  expect(checklistIn(producer.calls[1]!.messages).text).toContain('"musicality"');
+  const current = (await nativeSnapshot(owner, job.projectId)).current!.document;
+  const recipe = (id: string) => nativePresetRecipes.find((item) => item.id === id)!;
+  const part = (id: string) => current.parts.find((item) => item.id === id)!;
+  expect(part("keys").device.type).toBe(recipe("lofi-keys").device.type);
+  expect(part("keys").effects.map((effect) => effect.id)).toEqual(recipe("lofi-keys").effects.map((_, i) => `lofi-keys-${i + 1}`));
+  expect(part("lead").effects.map((effect) => effect.id)).toEqual(recipe("soft-lead").effects.map((_, i) => `soft-lead-${i + 1}`));
+  // Stored as explicit notes: in D minor, swung off the straight eighth grid.
+  const dMinor = [2, 4, 5, 7, 9, 10, 0];
+  const keys = materializedNotes(current, "keys"), bass = materializedNotes(current, "bass");
+  expect(keys.length).toBeGreaterThan(12);
+  expect(bass.length).toBeGreaterThan(4);
+  expect([...keys, ...bass].every((note) => dMinor.includes(note.pitch % 12))).toBe(true);
+  expect(keys.some((note) => note.startTick % 480 !== 0)).toBe(true);
+  expect(current.motifs.find((motif) => motif.id === "hook-up")!.notes.map((note) => note.pitch)).toEqual([72, 76, 69]);
   expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(3);
 }, 30_000);
 

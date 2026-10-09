@@ -19,7 +19,7 @@ export class NativeCorrectableError extends Error {
   constructor(readonly code: NativeCorrectableCode, message: string, readonly next: string) { super(message); this.name = "NativeCorrectableError"; }
   toolText() { return `Error [${this.code}]: ${this.message} Next: ${this.next}`; }
 }
-export type NativeCorrectableCode = "SEED_PART_RESERVED" | "REMOTE_PRESET_NOT_INSPECTED" | "REMOTE_SAMPLE_NOT_INSPECTED" | "REMOTE_LIBRARY_UNAVAILABLE";
+export type NativeCorrectableCode = "SEED_PART_RESERVED" | "REMOTE_PRESET_NOT_INSPECTED" | "REMOTE_SAMPLE_NOT_INSPECTED" | "REMOTE_LIBRARY_UNAVAILABLE" | "SYMBOLIC_EDIT_INVALID";
 
 /** The empty starting sketch every new construction begins from. */
 export const SEED_PART_ID = "starting-voice";
