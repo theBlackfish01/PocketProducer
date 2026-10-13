@@ -6,6 +6,26 @@ import { NativeConvergenceMonitor, foldTurnContext, nativeFinishingGuidance, nat
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {
+  it("drops only identified optional starter guidance under pressure, keeping the exact brief and pending calls", () => {
+    const brief = new HumanMessage("Keep the bass unchanged. 最後の旋律を残す。");
+    const starter = new HumanMessage({ id: "trusted-starter", content: "Optional skill summaries: " + "g".repeat(7000) });
+    const sameTextFromUser = new HumanMessage("Optional skill summaries: keep this user instruction");
+    const pending = new AIMessage({ content: "", tool_calls: [{ id: "pending", name: "inspect_native_part", args: { partId: "bass" } }] });
+    const history = [brief, starter, sameTextFromUser, pending];
+    const dispatch = { optionalContext: { id: starter.id!, content: starter.text } };
+    const roomy = withNativeFinishingContext(history, { outstandingRequirements: ["Keep bass"] }, [], 900, 20000, dispatch);
+    expect(roomy).toContain(starter);
+    const compacted = withNativeFinishingContext(history, { outstandingRequirements: ["Keep bass"] }, [], 900, 4000, dispatch);
+    expect(compacted).not.toContain(starter);
+    expect(compacted).toEqual(expect.arrayContaining([brief, sameTextFromUser, pending]));
+    expect(compacted.at(-1)!.text).toContain('"omittedStarterGuidance":true');
+    expect(compacted.at(-1)!.text).toContain('"outstandingRequirements":["Keep bass"]');
+    expect(boundOpenAiRequest([compacted], 900, 4000).inputTokenBound).toBeLessThanOrEqual(4000);
+    expect(history).toContain(starter);
+    // Neither a matching ID with different content nor a genuine oversized brief is removable.
+    expect(() => withNativeFinishingContext(history, {}, [], 900, 4000, { optionalContext: { ...dispatch.optionalContext, content: "different" } })).toThrow("OPENAI_INPUT_LIMIT_EXCEEDED");
+    expect(() => withNativeFinishingContext([new HumanMessage("b".repeat(7000)), starter, pending], {}, [], 900, 4000, dispatch)).toThrow("OPENAI_INPUT_LIMIT_EXCEEDED");
+  });
   it("omits the final optional observation before rejecting otherwise fitting mandatory context", () => {
     // This boundary case requires 128k; do not depend on the developer's .env
     // overriding the installation default (96k on a clean CI runner).

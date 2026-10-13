@@ -360,6 +360,9 @@ describe("audio-independent native job lifecycle", () => {
     const resumedModel = fakeModel().respondWithTools([{ name: "apply_native_batch", args: { stepKey: "fulfill-planned-pickup", operations: [{ kind: "addNotes", partId: "lead", notes: [{ id: "pickup", startTick: 14880, durationTicks: 240, pitch: 68, velocity: 0.35 }] }] } }]).respond(new AIMessage("The planned final pickup is constructed; no audio was heard."));
     await processJob(await claim(accepted.id, "plan-after-restart"), { scriptedModel: resumedModel, library: createNativeLibrary(null) });
     expect(JSON.stringify(resumedModel.calls[0]!.messages)).toContain(plan.developmentTasks[0]);
+    // A fresh continuation keeps ordinary craft guidance available, too; moving
+    // it out of the system message must not lose it on every resumed request.
+    expect(JSON.stringify(resumedModel.calls[0]!.messages)).toContain("Craft: write harmony as chord symbols");
     expect((await jobSnapshot(ownerId, accepted.id)).state).toBe("succeeded");
     expect((await nativeSnapshot(ownerId, scratchId)).current?.document.parts[0]?.notes.map((note) => note.id)).toContain("pickup");
     const feed = await readProjectActivity(ownerId, scratchId);

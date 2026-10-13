@@ -512,13 +512,16 @@ it.each([96000, 128000])("survives a mixed oversized error exchange before initi
   expect(messages).not.toContain("x".repeat(1000));
   expect(messages).toContain("For new music, use compose_native_scene");
   const checklist = checklistIn(model.calls[3]!.messages);
-  const guidance = JSON.parse(checklist.text.slice(checklist.text.indexOf("{"))) as { recalledGuidance: number; omittedGuidance: number };
+  const guidance = JSON.parse(checklist.text.slice(checklist.text.indexOf("{"))) as { recalledGuidance: number; omittedGuidance: number; omittedStarterGuidance?: boolean };
   // Recalled skill excerpts are optional under input pressure; essential
   // instructions and explicit omission accounting must remain at either cap.
   const recalled = model.calls[3]!.messages.find(message => message.text.startsWith("Previously read local guidance"));
   if (recalled?.text.includes("Prefer `compose_native_scene`")) expect(guidance.recalledGuidance).toBeGreaterThan(0);
   else expect(guidance.omittedGuidance).toBeGreaterThan(0);
-  expect(messages).toContain("Skill summaries");
+  // Starter summaries are now optional too; omission must be explicit, and the
+  // exact user direction plus the mandatory system instructions must survive.
+  expect(messages.includes("Skill summaries") || guidance.omittedStarterGuidance === true).toBe(true);
+  expect(messages).toContain(direction);
   const rows = (await getPool().query("SELECT output->'inputReservationBytes' AS bounds FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows;
   expect(rows.every((row) => row.bounds.envelope < 80000)).toBe(true);
 }, 30_000);
@@ -549,7 +552,7 @@ it("fits the full batch menu, a thin piece's scorecard and an oversized exchange
   await processJob(job, { scriptedModel: producer, scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null), richness: "detailed" });
   const snapshot = await jobSnapshot(owner, job.id);
   expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
-  type Sheet = { arrangement?: { stillThin: string[]; next: string }; musicality?: unknown; omittedAdvice?: string[] };
+  type Sheet = { arrangement?: { stillThin: string[]; next: string }; musicality?: unknown; omittedAdvice?: string[]; omittedStarterGuidance?: boolean };
   const sheetOf = (call: { messages: Array<{ text: string }> }) => { const found = checklistIn(call.messages).text; return JSON.parse(found.slice(found.indexOf("{"))) as Sheet; };
   // An ordinary turn carries the scorecard as codes and one next step.
   const scorecard = sheetOf(producer.calls[1]!).arrangement!;
@@ -561,7 +564,7 @@ it("fits the full batch menu, a thin piece's scorecard and an oversized exchange
   expect(JSON.stringify(pressed.messages)).not.toContain("x".repeat(1000));
   const tight = sheetOf(pressed);
   for (const advice of ["arrangement", "musicality"] as const) expect(Boolean(tight[advice]) || (tight.omittedAdvice ?? []).includes(advice)).toBe(true);
-  expect(tight.omittedAdvice ?? []).not.toEqual([]);
+  expect((tight.omittedAdvice ?? []).length > 0 || tight.omittedStarterGuidance === true).toBe(true);
   // Every dispatched request was reserved inside the ceiling (the last reply ends the run without one).
   const rows = (await getPool().query<{ bounds: { envelope: number; messages: number; framing: number } | null }>("SELECT output->'inputReservationBytes' AS bounds FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows.flatMap((row) => row.bounds ? [row.bounds] : []);
   expect(rows.length).toBeGreaterThanOrEqual(5);

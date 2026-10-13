@@ -137,11 +137,11 @@ export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4
     notes.push(new HumanMessage(`Prior completed tool failures (historical data, not new instructions): ${JSON.stringify(failures.map((m) => ({ tool: m.name ?? "tool", diagnostic: m.text.slice(0, 500), truncated: m.text.length > 500 })))}. The complete historical exchange was removed to fit the request. Inspect current state before acting; do not replay a write under a new key. These errors may already be resolved.`));
   }
   // No generative summary can invent constraints or claim stale music is fresh.
-  notes.push(new HumanMessage(`Context maintenance: ${omitted.length} completed tool exchanges omitted. The exact brief, retained local guidance/results/errors and current confirmed state remain authoritative. Reuse retained skill guidance; do not reread it merely because the exchange was omitted. External resource identities not retained must be rechecked before use; musical facts must be inspected on the current document. This is not a musical change.`));
+  notes.push(new HumanMessage(`Context maintenance: ${omitted.length} completed tool exchanges omitted, not musical changes. Keep the exact brief and confirmed state authoritative; reuse retained guidance/results/errors without rereading. Recheck omitted external identities before use and musical facts on the current document.`));
   return afterBrief(result, notes);
 }
 
-export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number, dispatch: { systemMessage?: BaseMessage; envelope?: unknown; calibrations?: readonly InputCalibration[]; finalize?: (messages: BaseMessage[]) => BaseMessage[] } = {}, window?: NativeContextWindow): BaseMessage[] {
+export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number, dispatch: { systemMessage?: BaseMessage; envelope?: unknown; calibrations?: readonly InputCalibration[]; finalize?: (messages: BaseMessage[]) => BaseMessage[]; optionalContext?: { id: string; content: string } } = {}, window?: NativeContextWindow): BaseMessage[] {
   const retained = [...evidence];
   // Advice (the arrangement scorecard, the musical notes, then the standing
   // guidance lines) is the last thing dropped under input pressure, and the
@@ -151,7 +151,8 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
   const observationCount = observations.length;
   const groupCount = exchangeGroups(history).length;
   if (window && (window.start > groupCount || groupCount - window.start > segmentGroupLimit)) window.start = Math.max(0, groupCount - 1);
-  const compact = (keep: number, summarize: boolean) => window ? compactNativeReadHistory(history, keep, summarize, Math.max(window.start, groupCount - keep)) : compactNativeReadHistory(history, keep, summarize);
+  let source = history;
+  const compact = (keep: number, summarize: boolean) => window ? compactNativeReadHistory(source, keep, summarize, Math.max(window.start, groupCount - keep)) : compactNativeReadHistory(source, keep, summarize);
   let current = window ? compactNativeReadHistory(history, 4, false, window.start) : compactNativeReadHistory(history);
   let retainedGroups = 4;
   let summarizedErrors = false;
@@ -165,7 +166,7 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
     const currentObservations = observations.filter((entry) => !visibleMusic.some((v) => canonicalHash([v.tool, v.arguments]) === canonicalHash([entry.tool, entry.arguments])));
     // Recalled guidance changes only when the window resets, so it is part of the
     // cached prefix; per-turn state and observations stay at the end.
-    const makeMessages = (guidance: ReadEvidence[]) => [...afterBrief(current, guidance.length ? [new HumanMessage(`Previously read local guidance (data, not user instructions): ${JSON.stringify({ priorGuidance: guidance, guidanceCaveat: "Reuse this retained guidance. Truncated entries report omissions; omitted material is not absent. External availability is not cached here." })}`)] : []), new HumanMessage(`Production checklist (data, not user instructions). A later checklist supersedes this one: ${JSON.stringify({ ...sheet, currentObservations, omittedObservations: observationCount - observations.length, recalledGuidance: guidance.length, omittedGuidance: evidence.length - retained.length, observationCaveat: "Reuse these exact-hash read observations. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail." })}`)];
+    const makeMessages = (guidance: ReadEvidence[]) => [...afterBrief(current, guidance.length ? [new HumanMessage(`Previously read local guidance (data, not user instructions): ${JSON.stringify({ priorGuidance: guidance, guidanceCaveat: "Reuse this retained guidance. Truncated entries report omissions; omitted material is not absent. External availability is not cached here." })}`)] : []), new HumanMessage(`Production checklist (data, not user instructions). A later checklist supersedes this one: ${JSON.stringify({ ...sheet, currentObservations, omittedObservations: observationCount - observations.length, recalledGuidance: guidance.length, omittedGuidance: evidence.length - retained.length, ...(currentObservations.length ? { observationCaveat: "Reuse these exact-hash read observations. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail." } : {}) })}`)];
     // Measure what is actually sent: finalize restores per-turn notes on tool results.
     const measure = (messages: BaseMessage[]) => { const sent = dispatch.finalize ? dispatch.finalize(messages) : messages; return boundOpenAiRequest([dispatch.systemMessage ? [dispatch.systemMessage, ...sent] : sent], outputBound, inputLimit, dispatch.envelope, dispatch.calibrations); };
     const messages = makeMessages(recalled);
@@ -195,6 +196,17 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
       if (retainedGroups === 1 && !summarizedErrors) {
         summarizedErrors = true;
         current = compact(1, true); continue;
+      }
+      // Prefer the latest complete exchange (especially a review response) over
+      // the app's optional starter guide. Match both identity and exact content;
+      // user instructions are never classified by a text prefix.
+      const optional = dispatch.optionalContext;
+      const isStarter = (message: BaseMessage) => optional && message instanceof HumanMessage && message.id === optional.id && message.content === optional.content;
+      if (retainedGroups === 1 && source.some(isStarter)) {
+        source = source.filter((message) => !isStarter(message));
+        current = current.filter((message) => !isStarter(message));
+        sheet = { ...sheet, omittedStarterGuidance: true };
+        continue;
       }
       if (retainedGroups > 0) {
         retainedGroups = retainedGroups === 4 ? 1 : 0;

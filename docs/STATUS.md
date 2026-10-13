@@ -1,5 +1,13 @@
 # Live implementation status
 
+## Release validation and minimal context repair — 2026-10-13
+
+Validated the music-richness and start-page contour commits against deployed `90d8566`. Six default-96,000-input integration failures also reproduced on that deployed base; they were not introduced by the new music/UI work. The unmodified candidate passed all 180 integration tests at the existing local 128,000 setting. These are conservative request-size bounds, not measured model tokens.
+
+The confirmed underlying issue was optional starter/standing guidance staying pinned under pressure, sometimes crowding out the latest review exchange or rejecting an otherwise useful request. The minimal repair separates app-generated starter guidance from the exact user brief; matches its ID and content before omitting it; explicitly records omissions; and treats repeated menu/inspection prose as optional without dropping the actual menu, inspection coverage, plan, review, requirements or pending calls. Craft guidance is still supplied on fresh continuations. Limits, accounting, canonical music, acceptance, ownership and synchronization are unchanged.
+
+New regression: removable guidance cannot remove similarly worded user instructions, pending calls or a genuinely oversized exact brief. Existing full-menu, long-brief, review-response and restart scenarios remain exercised; cosmetic guidance-presence assertions now require either retained guidance or explicit omission, while success and input-bound assertions remain intact. See [verification record](testing.md) for completed checks. Deployment and approved hosted Luna runs follow validation; private evidence goes under ignored `.local/reviews/release-1013/`. No Audiotool copy or listening evaluation is authorized for this release check.
+
 ## Contours carry into the start page — 2026-10-13
 
 By user request. The welcome page's decorative contour linework now also sits behind a new session's start page, so the two read as one place. It stops once work begins: the workspace is tall, the background is stretched to the page height, and the score is its own picture.

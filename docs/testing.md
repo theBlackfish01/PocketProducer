@@ -1,5 +1,13 @@
 # Verification record
 
+## Release validation and context repair — October 13
+
+- Before the repair: the exact candidate `d02949f` passed 336 unit tests, 34 visual journeys, 18 application journeys, 2 hosted-auth fixture journeys, lint, typecheck and production build. Integration passed 180/180 at the existing local 128,000 input setting, but 174/180 at the clean-install 96,000 default. The same six failures reproduced in the two relevant integration files on deployed `90d8566` (87/93). This separates a pre-existing default-envelope problem from a regression in the new work.
+- The new optional-context regression was red before implementation (`OPENAI_INPUT_LIMIT_EXCEEDED:8673:4000`), then green. All six targeted real-producer pressure scenarios pass at the unchanged 96,000 ceiling; the oversized mixed-exchange test also covers 128,000. Tests still assert completed versions, current review continuity, exact long briefs, pending exchange integrity and bounded reservations.
+- Final repair checks: 337 unit tests, TypeScript, changed-file lint, 34 visual journeys, 18 application browser journeys and 2 hosted-auth fixture journeys pass. Production web build passes with the existing large-chunk advisory.
+- Integration at 96,000: one broad run was invalidated by the local PostgreSQL container shutting down (connection refused, not an application assertion). On the retry, 179/180 passed; the new continuation-guidance assertion was added while the runner had the earlier producer module loaded. The exact final continuation test then passed. A frozen-source full run passed 173/180: one job was not claimable before producer execution, and six later tests depended on the version it would have saved. Re-running that entire native integration file on the same source passed 49/49. Every integration scenario therefore passed on the final source, but not in one clean full invocation; the unrelated intermittent local claim/lease behavior remains a fixture limitation, not evidence of a new producer failure.
+- Fixture suites clear provider keys and disable tracing. Live generation, if completed after deployment, is separate evidence; no rendering, listening or Audiotool copy is claimed by these tests.
+
 ## Contours on the start page — October 13
 
 A styling-only change (three selectors in `welcome-room.css`), so only the checks that can see it were run. Fixture providers, tracing disabled, dev servers stopped for the suites.
