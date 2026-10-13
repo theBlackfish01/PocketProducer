@@ -1,8 +1,17 @@
 # Live implementation status
 
+## Contours carry into the start page — 2026-10-13
+
+By user request. The welcome page's decorative contour linework now also sits behind a new session's start page, so the two read as one place. It stops once work begins: the workspace is tall, the background is stretched to the page height, and the score is its own picture.
+
+- Styling only: three selectors in `components/welcome-room.css` gain `.main-area:has(.native-room.is-start)`. No markup, behaviour, animation or layout change. The phone crop and the forced-colours and print fallbacks apply as on the welcome page.
+- Checked in the local app at desktop and 375 px: present on the welcome and start pages, absent in a saved workspace, no horizontal overflow.
+- The visual journey for the start page now asserts the background is present there, has no animation, is removed in forced colours, and is gone in the early-creation state. The existing welcome journey still asserts it is absent in the workspace.
+- Not checked on the hosted site.
+
 ## Music richness loop — 2026-10-12/13
 
-Branch `music-richness-loop`, uncommitted. Four rounds of change → local live builds → trace import → scorecard comparison, using $0.60 of a user-approved $1 of live spend (held reservations included). Design: [ADR 006](adr/006-arrangement-scorecard-and-development-nudge.md). Nothing was heard, rendered or copied to Audiotool; every number below is a symbolic measurement of the saved score.
+Committed as `efa6e11` on `music-richness-loop` and fast-forwarded into `main`; not pushed or deployed. Four rounds of change → local live builds → trace import → scorecard comparison, using $0.60 of a user-approved $1 of live spend (held reservations included). Design: [ADR 006](adr/006-arrangement-scorecard-and-development-nudge.md). Nothing was heard, rendered or copied to Audiotool; every number below is a symbolic measurement of the saved score.
 
 **Delivered**
 
@@ -68,7 +77,7 @@ Two consequences it identified are accepted and recorded in ADR 006: a symbolic 
 
 **Next action**
 
-Commit and merge when ready. Deploy with no builds in flight, following `docs/RAILWAY-DEPLOYMENT.md`, then make one build and listen to it in Audiotool: nothing in this work has been heard. Separately, the 3-second test lease is worth lengthening or making tolerant of a slow database, since it now fails about once per run here.
+Push when ready. Deploy with no builds in flight, following `docs/RAILWAY-DEPLOYMENT.md`, then make one build and listen to it in Audiotool: nothing in this work has been heard. Separately, the 3-second test lease is worth lengthening or making tolerant of a slow database, since it now fails about once per run here.
 
 ## Hosted trace review and music quality review — 2026-10-11
 

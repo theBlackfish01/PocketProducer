@@ -1,5 +1,15 @@
 # Verification record
 
+## Contours on the start page — October 13
+
+A styling-only change (three selectors in `welcome-room.css`), so only the checks that can see it were run. Fixture providers, tracing disabled, dev servers stopped for the suites.
+
+- `tsc -b`, `eslint . --max-warnings=0`, `vite build` and `git diff --check` pass.
+- Visual: **34/34**. The start-page journey gained assertions: the contour background is present at desktop and 390 px, the background element itself has no animation, forced colours remove it, and it is gone in the early-creation state. The welcome journey's existing assertion that the workspace has no background image still passes.
+- Application browser: **18/18**.
+- Inspected in the local app at desktop and 375 px: present on the welcome and start pages, absent in a saved workspace, no horizontal overflow.
+- Unit, integration and hosted suites were not re-run; no code they exercise changed. Not checked on the hosted site.
+
 ## Music richness loop — October 12–13
 
 Pinned local binaries, isolated `_test` PostgreSQL, fixture/scripted providers and tracing disabled for every suite below; dev servers stopped for the browser suites. No provider calls in these suites. Run on the final tree of branch `music-richness-loop`.

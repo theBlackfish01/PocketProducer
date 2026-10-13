@@ -1,14 +1,17 @@
-.main-area:has(.welcome-room) {
+/* The contours sit behind the welcome page and carry into a new session's start
+   page, so the two read as one place. They stop once work begins: the workspace
+   is tall and the score is its own picture. */
+.main-area:has(.welcome-room), .main-area:has(.native-room.is-start) {
   /* Decoration only: no overlay, hit targets, animation or layout changes. */
   background-image: url("./welcome-contours.svg"), radial-gradient(circle at 52% -12%, #fffdf8 0, var(--background) 58%);
   background-size: 100% 100%, auto;
   background-repeat: no-repeat;
 }
 @media (max-width: 600px) {
-  .main-area:has(.welcome-room) { background-size: auto 100%, auto; background-position: 62% 0, center; }
+  .main-area:has(.welcome-room), .main-area:has(.native-room.is-start) { background-size: auto 100%, auto; background-position: 62% 0, center; }
 }
 @media (forced-colors: active), print {
-  .main-area:has(.welcome-room) { background-image: none; }
+  .main-area:has(.welcome-room), .main-area:has(.native-room.is-start) { background-image: none; }
 }
 .welcome-room { margin-block: 24px 48px; }
 .welcome-hero { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: 24px; background: var(--card); }
