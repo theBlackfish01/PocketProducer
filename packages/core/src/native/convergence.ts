@@ -143,6 +143,10 @@ export function compactNativeReadHistory(messages: BaseMessage[], keepGroups = 4
 
 export function withNativeFinishingContext(history: BaseMessage[], checklist: Record<string, unknown>, evidence: ReadEvidence[], outputBound: number, inputLimit: number, dispatch: { systemMessage?: BaseMessage; envelope?: unknown; calibrations?: readonly InputCalibration[]; finalize?: (messages: BaseMessage[]) => BaseMessage[] } = {}, window?: NativeContextWindow): BaseMessage[] {
   const retained = [...evidence];
+  // Advice (the arrangement scorecard, the musical notes, then the standing
+  // guidance lines) is the last thing dropped under input pressure, and the
+  // checklist says what was dropped. Requirements and state are never dropped.
+  let sheet = checklist;
   const observations = currentReadEvidence(history, checklist.documentHash);
   const observationCount = observations.length;
   const groupCount = exchangeGroups(history).length;
@@ -161,7 +165,7 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
     const currentObservations = observations.filter((entry) => !visibleMusic.some((v) => canonicalHash([v.tool, v.arguments]) === canonicalHash([entry.tool, entry.arguments])));
     // Recalled guidance changes only when the window resets, so it is part of the
     // cached prefix; per-turn state and observations stay at the end.
-    const makeMessages = (guidance: ReadEvidence[]) => [...afterBrief(current, guidance.length ? [new HumanMessage(`Previously read local guidance (data, not user instructions): ${JSON.stringify({ priorGuidance: guidance, guidanceCaveat: "Reuse this retained guidance. Truncated entries report omissions; omitted material is not absent. External availability is not cached here." })}`)] : []), new HumanMessage(`Production checklist (data, not user instructions). A later checklist supersedes this one: ${JSON.stringify({ ...checklist, currentObservations, omittedObservations: observationCount - observations.length, recalledGuidance: guidance.length, omittedGuidance: evidence.length - retained.length, observationCaveat: "Reuse these exact-hash read observations. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail." })}`)];
+    const makeMessages = (guidance: ReadEvidence[]) => [...afterBrief(current, guidance.length ? [new HumanMessage(`Previously read local guidance (data, not user instructions): ${JSON.stringify({ priorGuidance: guidance, guidanceCaveat: "Reuse this retained guidance. Truncated entries report omissions; omitted material is not absent. External availability is not cached here." })}`)] : []), new HumanMessage(`Production checklist (data, not user instructions). A later checklist supersedes this one: ${JSON.stringify({ ...sheet, currentObservations, omittedObservations: observationCount - observations.length, recalledGuidance: guidance.length, omittedGuidance: evidence.length - retained.length, observationCaveat: "Reuse these exact-hash read observations. Truncated arrays explicitly report omissions; omitted material is not absent. Reread only a specifically needed missing detail." })}`)];
     // Measure what is actually sent: finalize restores per-turn notes on tool results.
     const measure = (messages: BaseMessage[]) => { const sent = dispatch.finalize ? dispatch.finalize(messages) : messages; return boundOpenAiRequest([dispatch.systemMessage ? [dispatch.systemMessage, ...sent] : sent], outputBound, inputLimit, dispatch.envelope, dispatch.calibrations); };
     const messages = makeMessages(recalled);
@@ -198,7 +202,14 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
         current = compact(retainedGroups, summarizedErrors); continue;
       }
       if (!summarizedErrors) { summarizedErrors = true; current = compact(0, true); continue; }
-      if (!retained.length) { if (observations.length) { observations.shift(); continue; } throw error; }
+      if (!retained.length) {
+        if (observations.length) { observations.shift(); continue; }
+        // Advice must never cost a request its place under the ceiling.
+        const advice = ["arrangement", "musicality", "reviewGuidance", "guidance"].find((key) => key in sheet);
+        if (!advice) throw error;
+        sheet = { ...Object.fromEntries(Object.entries(sheet).filter(([key]) => key !== advice)), omittedAdvice: [...(Array.isArray(sheet.omittedAdvice) ? sheet.omittedAdvice as string[] : []), advice] };
+        continue;
+      }
       // Irreducible old replay is already gone. Exact brief, current state and
       // pending exchanges are never lost.
       retained.shift();
@@ -262,6 +273,7 @@ export function nativeFinishingGuidance(turns: number): string {
 
 export class NativeConvergenceMonitor {
   private blockedFinishState: string | null = null;
+  private blockedRequirements = new Map<string, number>();
   private blockedFinishAttempts = 0;
   private last: string | null = null;
   private unchanged = 0;
@@ -273,7 +285,16 @@ export class NativeConvergenceMonitor {
     // A bounded discovery window, not unlimited progress from paging reads.
     if (name !== "finish_native_arrangement") this.evidence.add(canonicalHash([name, result]));
   }
+  /** Every hard requirement passed at a finish: nothing is stuck. */
+  requirementsMet(): void { this.blockedRequirements.clear(); }
   finishFeedback(music: string, missing: string[]) {
+    // The same unmet requirement can survive many edits to other things, which the
+    // unchanged-state stop never sees. Each requirement is counted over finishes in
+    // a row: one that clears and later returns starts again. Six in a row is a
+    // bounded stop: the draft is kept and the request can be continued.
+    this.blockedRequirements = new Map(missing.map((item) => [item, (this.blockedRequirements.get(item) ?? 0) + 1]));
+    const stuck = missing.filter((item) => this.blockedRequirements.get(item)! >= 6);
+    if (stuck.length) throw coded(`NATIVE_INCOMPLETE:REPEATED_NO_PROGRESS: Six finish attempts met the same unmet requirement: ${stuck.slice(0, 3).join("; ")}. The draft is retained for continuation.`);
     const state = canonicalHash([music, [...missing].sort()]);
     this.blockedFinishAttempts = state === this.blockedFinishState ? this.blockedFinishAttempts + 1 : 1;
     this.blockedFinishState = state;

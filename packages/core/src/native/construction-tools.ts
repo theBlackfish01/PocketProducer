@@ -2,8 +2,9 @@ import { z } from "zod";
 import { canonicalHash } from "../domain/hash.js";
 import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, NATIVE_PPQ, nativeDocumentSchema, nativeOperationSchema, nativeParameterRanges, automatableDeviceFields, automatableEffectFields, type NativeDocument, type NativeOperation } from "./model.js";
 import { NativeCorrectableError, NativeUnknownIdError } from "./errors.js";
-import { bassHits, bassPatterns, bassRegisters, compHits, compPatterns, feelChangesMaterial, feelFor, nativeFeelSchema, nativeKeySchema, parseChordSymbol, scaleOf, voiceProgression, voicingRegisters, type ChordSpan, type CycleGrid, type NativeFeel, type PatternHit } from "./harmony.js";
-import { nativePresetRecipes, readNativeRecipe } from "./resources.js";
+import { bassHits, bassPatterns, bassRegisters, bassRootLine, compHits, compPatterns, feelChangesMaterial, feelFor, nativeFeelSchema, nativeKeySchema, parseChordSymbol, scaleOf, voiceProgression, voicingRegisters, type ChordSpan, type CycleGrid, type NativeChord, type NativeFeel, type PatternHit, type VoicingOptions } from "./harmony.js";
+import { gmDrumKits, nativePresetRecipes, readNativeRecipe } from "./resources.js";
+import { compileDrumGroove, drumGrooveBody } from "./groove-tools.js";
 
 const stepKey = z.string().regex(/^[a-z0-9-]{1,96}$/);
 const id = nativeDocumentSchema.shape.parts.element.shape.id;
@@ -26,7 +27,7 @@ export const inspectionScope = z.object({ sectionIds: z.array(id).max(3).default
 
 // Symbolic shortcuts. The model chooses chords, pattern, register, feel or a
 // recipe; deterministic code expands them into ordinary validated operations
-// (harmonizeSection, sequenceSectionPattern, setDevice, addEffect) before the
+// (harmonizeSection, sequenceSectionPattern, addNotes, setDevice, addEffect) before the
 // step is stored, so history stays explicit notes and settings.
 const recipeIds = nativePresetRecipes.map((recipe) => recipe.id) as [string, ...string[]];
 const chordProgressionBody = z.object({
@@ -38,7 +39,8 @@ const chordProgressionBody = z.object({
     style: z.enum(["close", "open", "shell"]).default("close"), extensions: z.enum(["as-written", "sevenths", "ninths"]).default("as-written"), velocity: z.number().min(0.05).max(1).default(0.55) }).strict().optional(),
   // Follows the chord roots (or slash-bass notes).
   bass: z.object({ partId: id, pattern: z.enum(bassPatterns).default("roots"), register: z.enum(["low", "mid"]).default("low"), velocity: z.number().min(0.05).max(1).default(0.7) }).strict().optional(),
-  feel: nativeFeelSchema.optional().describe("Swing/humanize for comp and bass")
+  feel: nativeFeelSchema.optional().describe("Swing/humanize for comp and bass"),
+  ending: z.object({ symbol: z.string().min(1).max(16), bars: z.number().min(0.5).max(4).default(1) }).strict().optional().describe("Last section ends on this chord")
 }).strict();
 export const chordProgressionSchema = chordProgressionBody.extend({ kind: z.literal("chordProgression") }).describe("Write chords (and optionally a bass line) from chord symbols into empty sections of MIDI parts");
 export const applyRecipeSchema = z.object({ kind: z.literal("applyRecipe"), partId: id, recipeId: z.enum(recipeIds) }).strict().describe("Set a part's device and add the recipe's effect chain");
@@ -62,6 +64,17 @@ function feelHits(hits: PatternHit[], feel: NativeFeel | undefined, grid: CycleG
     return { ...hit, velocity: felt.velocity, timingOffsetTicks: offset };
   });
 }
+/** A section's repeating cycle as explicit notes up to stopTick, placed the way
+ * harmonizeSection and sequenceSectionPattern place them. */
+function cycleNotes(hits: ReturnType<typeof feelHits>, cycleTicks: number, startTick: number, stopTick: number) {
+  const notes: Array<{ startTick: number; durationTicks: number; pitch: number; velocity: number }> = [];
+  for (let cycleStart = startTick; cycleStart < stopTick; cycleStart += cycleTicks) for (const hit of hits) {
+    const at = cycleStart + hit.tick + hit.timingOffsetTicks;
+    // A hit written at or after stopTick stays out even when feel pulls it just ahead.
+    if (cycleStart + hit.tick < stopTick && at < stopTick) notes.push({ startTick: at, durationTicks: Math.min(hit.durationTicks, stopTick - at), pitch: hit.pitch, velocity: hit.velocity });
+  }
+  return notes;
+}
 
 /** Expand a chord progression into explicit chord and bass notes for each section. */
 export function compileChordProgression(raw: ChordProgression, document: NativeDocument): NativeOperation[] {
@@ -70,8 +83,8 @@ export function compileChordProgression(raw: ChordProgression, document: NativeD
   const grid = gridOf(document), scale = progression.key ? scaleOf(progression.key) : undefined;
   const cycleBars = progression.chords.reduce((sum, chord) => sum + chord.bars, 0);
   if (!Number.isInteger(cycleBars) || cycleBars > 16) throw invalid(`The chord lengths add up to ${cycleBars} bars`, "Make the chord lengths add up to a whole number of bars, at most 16");
-  let chords;
-  try { chords = progression.chords.map((chord) => parseChordSymbol(chord.symbol)); }
+  let chords, finalChord: NativeChord | undefined;
+  try { chords = progression.chords.map((chord) => parseChordSymbol(chord.symbol)); if (progression.ending) finalChord = parseChordSymbol(progression.ending.symbol); }
   catch (error) { throw invalid(error instanceof Error ? error.message : "Unreadable chord symbol", "Use symbols such as Am, Fmaj7, C, G7, Dm9, Bb/D"); }
   const offsets: number[] = [];
   progression.chords.reduce((offset, chord) => { offsets.push(offset); return offset + chord.bars; }, 0);
@@ -86,33 +99,61 @@ export function compileChordProgression(raw: ChordProgression, document: NativeD
   const ops: unknown[] = [];
   const spansFor = (voicings: number[][]): ChordSpan[] => chords.map((chord, index) => ({ chord, voicing: voicings[index]!, startTick: Math.round(offsets[index]! * grid.barTicks), endTick: Math.round((offsets[index]! + progression.chords[index]!.bars) * grid.barTicks) }));
   const cycleTicks = cycleBars * grid.barTicks;
+  // An ending replaces the close of the last listed section only. The cycle
+  // operations repeat unchanged to a section's end, so that one section is
+  // written as explicit notes; every other section compiles as it always did.
+  const last = sections.at(-1)!, lastStart = last.startBar * grid.barTicks, lastEnd = last.endBar * grid.barTicks, endingBars = progression.ending?.bars ?? 0;
+  const endingStart = lastEnd - Math.round(endingBars * grid.barTicks);
+  if (endingStart < lastStart) throw invalid(`The ending lasts ${endingBars} bars but ${last.name} has only ${last.endBar - last.startBar}`, "Shorten ending.bars to fit the last listed section");
+  // The chord sounding just before the ending leads into it (the cycle's last chord when the ending fills the section).
+  const beforeEnding = endingStart > lastStart ? (endingStart - 1 - lastStart) % cycleTicks : cycleTicks - 1;
+  const lead = offsets.filter((offset) => Math.round(offset * grid.barTicks) <= beforeEnding).length - 1;
+  const close = (partId: string, role: "comp" | "bass", hits: ReturnType<typeof feelHits>, pitches: number[], velocity: number) => {
+    const notes = [...cycleNotes(hits, cycleTicks, lastStart, endingStart), ...pitches.map((pitch) => ({ startTick: endingStart, durationTicks: lastEnd - endingStart, pitch, velocity }))]
+      .map((note, index) => ({ id: `n-${canonicalHash([partId, last.id, role, index, note.startTick]).slice(0, 32)}`, ...note }));
+    for (let from = 0; from < notes.length; from += 256) ops.push({ kind: "addNotes", partId, notes: notes.slice(from, from + 256) });
+  };
   if (progression.comp) {
     const comp = progression.comp;
     empty(comp.partId);
-    let voicings: number[][];
-    try { voicings = voiceProgression(chords, { register: voicingRegisters[comp.register], voices: comp.voices, style: comp.style, extensions: comp.extensions, ...(scale ? { scale } : {}) }); }
+    const voicing: VoicingOptions = { register: voicingRegisters[comp.register], voices: comp.voices, style: comp.style, extensions: comp.extensions, ...(scale ? { scale } : {}) };
+    let voicings: number[][], finalVoicing: number[] = [];
+    try { voicings = voiceProgression(chords, voicing); if (finalChord) finalVoicing = voiceProgression([...chords.slice(0, lead + 1), finalChord], voicing).at(-1)!; }
     catch (error) { throw invalid(error instanceof Error ? error.message : "No voicing fits", "Choose another register or fewer voices"); }
-    for (const section of sections) {
+    for (const [sectionIndex, section] of sections.entries()) {
+      const closing = finalChord !== undefined && sectionIndex === sections.length - 1;
       // Held chords keep their full length. Swing or a timing nudge cannot
       // usefully move a held chord, so feel varies only each chord's velocity.
       if (comp.pattern === "sustain") {
         const velocityOf = (index: number) => progression.feel ? feelFor(Math.round(offsets[index]! * grid.barTicks), comp.velocity, progression.feel, grid, [comp.partId, section.id, index]).velocity : comp.velocity;
-        ops.push({ kind: "harmonizeSection", partId: comp.partId, sectionId: section.id, cycleBars, chords: voicings.map((pitches, index) => ({ barOffset: offsets[index]!, durationBars: progression.chords[index]!.bars, pitches, velocity: velocityOf(index), strumTicks: 0 })) });
+        if (closing) close(comp.partId, "comp", voicings.flatMap((pitches, index) => pitches.map((pitch) => ({ tick: Math.round(offsets[index]! * grid.barTicks), durationTicks: Math.round(progression.chords[index]!.bars * grid.barTicks), pitch, velocity: velocityOf(index), timingOffsetTicks: 0 }))), finalVoicing, comp.velocity);
+        else ops.push({ kind: "harmonizeSection", partId: comp.partId, sectionId: section.id, cycleBars, chords: voicings.map((pitches, index) => ({ barOffset: offsets[index]!, durationBars: progression.chords[index]!.bars, pitches, velocity: velocityOf(index), strumTicks: 0 })) });
         continue;
       }
       if (cycleBars > 8) throw invalid(`A rhythmic ${comp.pattern} pattern repeats a cycle of at most 8 bars; this progression is ${cycleBars}`, "Split it into two progressions over different sections, or use the sustain pattern");
       const hits = feelHits(compHits(spansFor(voicings), comp.pattern, grid, comp.velocity), progression.feel, grid, cycleTicks, `${comp.partId}:${section.id}`);
       if (hits.length > 96) throw invalid(`The ${comp.pattern} pattern needs ${hits.length} notes per cycle (limit 96)`, "Use fewer voices, a sparser pattern or fewer bars per progression");
-      ops.push({ kind: "sequenceSectionPattern", partId: comp.partId, sectionId: section.id, cycleBars, hits });
+      if (closing) close(comp.partId, "comp", hits, finalVoicing, comp.velocity);
+      else ops.push({ kind: "sequenceSectionPattern", partId: comp.partId, sectionId: section.id, cycleBars, hits });
     }
   }
   if (progression.bass) {
-    const bass = progression.bass;
+    const bass = progression.bass, [low, high] = bassRegisters[bass.register];
     empty(bass.partId);
     if (cycleBars > 8) throw invalid(`A bass line repeats a cycle of at most 8 bars; this progression is ${cycleBars}`, "Split it into two progressions over different sections");
     const hits = bassHits(spansFor(chords.map(() => [])), bass.pattern, grid, bass.velocity, bassRegisters[bass.register], scale);
     if (hits.length > 96) throw invalid(`The ${bass.pattern} bass needs ${hits.length} notes per cycle (limit 96)`, "Use a sparser bass pattern or fewer bars per progression");
-    for (const section of sections) ops.push({ kind: "sequenceSectionPattern", partId: bass.partId, sectionId: section.id, cycleBars, hits: feelHits(hits, progression.feel, grid, cycleTicks, `${bass.partId}:${section.id}`) });
+    // The final bass note sits next to the root that leads into it (the lower octave on a tie).
+    let landing = -1;
+    if (finalChord) {
+      const leadRoot = bassRootLine(chords.map((chord) => chord.bass), low, high)[lead]!;
+      for (let pitch = low; pitch <= high; pitch++) if (pitch % 12 === finalChord.bass && (landing < 0 || Math.abs(pitch - leadRoot) < Math.abs(landing - leadRoot))) landing = pitch;
+    }
+    for (const [sectionIndex, section] of sections.entries()) {
+      const felt = feelHits(hits, progression.feel, grid, cycleTicks, `${bass.partId}:${section.id}`);
+      if (finalChord && sectionIndex === sections.length - 1) close(bass.partId, "bass", felt, [landing], bass.velocity);
+      else ops.push({ kind: "sequenceSectionPattern", partId: bass.partId, sectionId: section.id, cycleBars, hits: felt });
+    }
   }
   return z.array(nativeOperationSchema).parse(ops);
 }
@@ -157,18 +198,25 @@ const operation = <K extends NativeOperation["kind"]>(kind: K) => nativeOperatio
 const partSchema = nativeDocumentSchema.shape.parts.element;
 const scenePart = partSchema.omit({ device: true, effects: true }).extend({
   device: partSchema.shape.device.optional(), effects: partSchema.shape.effects.optional(),
-  recipe: z.enum(recipeIds).optional().describe("A local recipe id: sets the device and its effect chain (device parameters you give override the recipe's)")
+  recipe: z.enum(recipeIds).optional().describe("Local recipe: device and effect chain; your device parameters override it"),
+  kit: z.enum(gmDrumKits).optional().describe("A GM drum kit: swing, ghost notes and dynamics"),
+  instrument: z.string().regex(/^[a-z0-9-]{2,40}$/).optional().describe("A GM instrument slug, e.g. acoustic-piano")
 });
+// Shared reverb in one word: the bus, then a send per part by its role.
+const spaces = { room: { id: "shared-room", name: "Shared room", roomSize: 0.45, preDelayMs: 30, damp: 0.4 }, hall: { id: "shared-hall", name: "Shared hall", roomSize: 0.72, preDelayMs: 45, damp: 0.3 } } as const;
+const sendByRole: Record<string, number> = { lead: 0.2, melody: 0.2, harmony: 0.16, texture: 0.26, fx: 0.3, percussion: 0.06, source: 0.1 };
 export const nativeSceneSchema = z.object({
   stepKey, replaceSeed: z.boolean().default(false),
   title: z.string().min(1).max(120).optional(),
   meter: nativeDocumentSchema.shape.meter.optional(),
   structure: operation("setStructure").omit({ kind: true }).optional(),
-  parts: z.array(scenePart).max(12).default([]).describe("Each part needs a device or a recipe. Beatbox8 is boolean: pitches 36/38/42/46 only, startTick a multiple of 240, durationTicks 240, velocity 1. For a groove with feel use an inspected/pinned Gakki kit. Choose a recipe or explicit patch settings for distinctive synth voices."),
-  motifs: z.array(nativeDocumentSchema.shape.motifs.element).max(24).default([]).describe("Root motif: omit familyId or set it to this motif's own id. A derived motif must reference its actual parent and the parent's family. Do not invent a separate family label for a root."),
-  patterns: z.array(compactPattern).max(24).default([]).describe("Compact motifs: events are [startTick,durationTicks,MIDI pitch,velocity]. Root familyId must equal id or be omitted; derived patterns reference a real parent/family. Beatbox8 example: [0,240,36,1]. Build a few patterns per call, not the whole piece at once."),
+  parts: z.array(scenePart).max(12).default([]).describe("Each part needs a recipe, kit, instrument or device. Beatbox8 is boolean: pitches 36/38/42/46, startTick a multiple of 240, durationTicks 240, velocity 1."),
+  motifs: z.array(nativeDocumentSchema.shape.motifs.element).max(24).default([]).describe("Root motif: omit familyId or use its own id. A derived motif references its actual parent and that parent's family."),
+  patterns: z.array(compactPattern).max(24).default([]).describe("Compact motifs: events are [startTick,durationTicks,MIDI pitch,velocity]. Root familyId equals id or is omitted; derived patterns reference a real parent/family. Beatbox8 example: [0,240,36,1]. A few patterns per call, not the whole piece."),
   placements: z.array(z.object({ partId: id, placement: nativeDocumentSchema.shape.parts.element.shape.placements.unwrap().element })).max(48).default([]),
-  harmony: z.array(chordProgressionBody).max(6).default([]).describe("Chord progressions written after the parts and phrases above: chord symbols voiced automatically, with an optional bass line"),
+  harmony: z.array(chordProgressionBody).max(6).default([]).describe("Chord progressions from symbols, voiced automatically, with an optional bass line"),
+  grooves: z.array(drumGrooveBody).max(4).default([]).describe("Drum grooves by style, with a fill closing each section"),
+  space: z.enum(["room", "hall"]).optional().describe("Shared reverb with a send per part"),
   inspect: inspectionScope.optional()
 });
 /** Scene arguments as operations. `document` is the current draft: it supplies
@@ -181,9 +229,11 @@ export function sceneOperations(raw: unknown, document?: NativeDocument): Native
   if (args.structure) ops.push({ ...args.structure, kind: "setStructure" });
   if (args.replaceSeed) ops.push({ kind: "removePart", partId: "starting-voice" });
   const grid = gridOf({ meter: args.meter ?? document?.meter ?? { numerator: 4, denominator: 4 } });
-  const parts = args.parts.map(({ recipe, device, effects, ...part }) => {
+  const parts = args.parts.map(({ recipe, kit, instrument, device, effects, ...part }) => {
     if (!recipe) {
-      if (!device) throw invalid(`Part ${part.id} needs a device or a recipe`, "Add recipe: \"<recipe id>\" or a device with explicit parameters");
+      // A kit or instrument is resolved to its pinned Gakki preset before this runs.
+      if (!device && (kit || instrument)) throw invalid(`Part ${part.id} names a GM ${kit ? "kit" : "instrument"} that was not resolved`, "GM sounds need the Audiotool library; use a local recipe for this part");
+      if (!device) throw invalid(`Part ${part.id} needs a recipe, a kit, an instrument or a device`, "Add recipe: \"<recipe id>\", kit: \"<drum kit>\" or a device with explicit parameters");
       return { ...part, device, effects: effects ?? [] };
     }
     const source = readNativeRecipe(recipe);
@@ -202,17 +252,23 @@ export function sceneOperations(raw: unknown, document?: NativeDocument): Native
   })];
   ops.push(...parts.map((part) => ({ kind: "addPart", part })), ...motifs.map((motif) => ({ kind: "defineMotif", motif })), ...args.placements.map((item) => ({ kind: "placeMotif", ...item })));
   const base = z.array(nativeOperationSchema).parse(ops);
-  if (!args.harmony.length) return z.array(nativeOperationSchema).min(1).max(128).parse(base);
-  if (!document) throw invalid("Harmony in a scene needs the current draft", "Retry the scene");
-  let projected = applyNativeOperations(document, base);
-  const harmony: NativeOperation[] = [];
-  for (const progression of args.harmony) {
-    const compiled = compileChordProgression(progression, projected);
-    harmony.push(...compiled);
-    projected = applyNativeOperations(projected, compiled);
+  if (!args.harmony.length && !args.grooves.length && !args.space) return z.array(nativeOperationSchema).min(1).max(128).parse(base);
+  if (!document) throw invalid("Harmony, grooves and space in a scene need the current draft", "Retry the scene");
+  // Shortcuts compile in order against the draft as each one leaves it.
+  let projected = base.length ? applyNativeOperations(document, base) : document;
+  const extra: NativeOperation[] = [];
+  const add = (compiled: NativeOperation[]) => { if (!compiled.length) return; extra.push(...compiled); projected = applyNativeOperations(projected, compiled); };
+  for (const progression of args.harmony) add(compileChordProgression(progression, projected));
+  for (const groove of args.grooves) add(compileDrumGroove(groove, projected));
+  if (args.space) {
+    const bus = projected.reverbBus ?? spaces[args.space];
+    // A protected part keeps its mix: it gets no send, and the rest of the scene still applies.
+    add(z.array(nativeOperationSchema).parse([...(projected.reverbBus ? [] : [{ kind: "setReverbBus", bus }]),
+      ...projected.parts.filter((part) => (sendByRole[part.role] ?? 0) > 0 && !projected.protectedPartIds.includes(part.id) && !(part.sends ?? []).some((send) => send.busId === bus.id)).map((part) => ({ kind: "setSend", partId: part.id, busId: bus.id, gain: sendByRole[part.role] }))]));
   }
-  if (base.length + harmony.length > 128) throw invalid(`This scene expands to ${base.length + harmony.length} operations (limit 128)`, "Move some harmony or parts into a second scene with another step key");
-  return z.array(nativeOperationSchema).min(1).max(128).parse([...base, ...harmony]);
+  if (!base.length && !extra.length) throw invalid("This scene changes nothing: the shared space and its sends are already in place", "Continue with the next musical change");
+  if (base.length + extra.length > 128) throw invalid(`This scene expands to ${base.length + extra.length} operations (limit 128)`, "Move some harmony, grooves or parts into a second scene with another step key");
+  return z.array(nativeOperationSchema).min(1).max(128).parse([...base, ...extra]);
 }
 
 // Reuse the actual operation schemas rather than a second musical vocabulary.

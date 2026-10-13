@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bassHits, bassRootLine, compHits, diatonicInvert, diatonicShift, feelFor, nativeFeelSchema, parseChordSymbol, scalePitchClasses, voiceProgression, voicingRegisters, type ChordSpan } from "./harmony.js";
+import { bassHits, bassRootLine, compHits, nameChord, diatonicInvert, diatonicShift, feelFor, nativeFeelSchema, parseChordSymbol, scalePitchClasses, voiceProgression, voicingRegisters, type ChordSpan } from "./harmony.js";
 
 const dMinor = { tonic: "D", mode: "minor" } as const, cMajor = { tonic: "C", mode: "major" } as const;
 const pcs = (pitches: number[]) => [...new Set(pitches.map((pitch) => pitch % 12))].sort((a, b) => a - b);
@@ -50,6 +50,11 @@ describe("deterministic harmony", () => {
     expect(pcs(i!)).toEqual(pcs([60, 64, 67, 71])); // Cmaj7
     const [rich] = voiceProgression([parseChordSymbol("Em")], { register: voicingRegisters.mid, voices: 5, style: "close", extensions: "ninths", scale: cMajor });
     expect(rich!.some((pitch) => pitch % 12 === 6)).toBe(false); // no F# (b9-type colour outside C major)
+    // Five tones in four voices: the fifth is dropped and the root kept, so Dm9 does not read as Fmaj7.
+    const [nine] = voiceProgression([parseChordSymbol("Dm9")], { register: voicingRegisters.mid, voices: 4, style: "close", extensions: "as-written" });
+    expect(pcs(nine!)).toEqual(pcs([62, 65, 72, 76])); // D F C E
+    const [halfDim] = voiceProgression([parseChordSymbol("Bm7b5")], { register: voicingRegisters.mid, voices: 3, style: "close", extensions: "as-written" });
+    expect(pcs(halfDim!)).toEqual(pcs([62, 65, 69])); // D F A: third, flat fifth, seventh
   });
 
   it("places comping and bass patterns on the meter's beats, in 4/4 and 3/4", () => {
@@ -65,6 +70,25 @@ describe("deterministic harmony", () => {
     expect(walking[0]!.pitch % 12).toBe(9);
     expect([4, 7].includes(walking[3]!.pitch % 12)).toBe(true); // a step below or above F, in C major (E or G)
     expect(walking.every((hit) => hit.pitch >= 28 && hit.pitch <= 56)).toBe(true);
+  });
+
+  it("names sounding pitch classes as the plainest chord, with the bass as root or slash bass", () => {
+    // The voicing a live review called "not Dm7": F D A C.
+    expect(nameChord([53, 62, 69, 72], 38)).toBe("Dm7");
+    expect(nameChord([53, 62, 69, 72])).toBe("Dm7");
+    expect(nameChord([55, 64, 70, 72], 36)).toBe("C7");
+    expect(nameChord([60, 64, 67], 52)).toBe("C/E");
+    expect(nameChord([62, 65, 72, 76], 38)).toBe("Dm9"); // fifth left out
+    expect(nameChord([65, 69, 72, 76], 38)).toBe("Dm9"); // a rootless voicing over its root, as chord progressions write it
+    expect(nameChord([65, 69, 72], 38)).toBe("Dm7"); // F-A-C over D
+    expect(nameChord([65, 69, 72, 76])).toBe("Fmaj7"); // the same notes with no bass
+    expect(nameChord([60, 64, 67], 38)).toBe("D11"); // C over D is the usual eleventh voicing
+    expect(nameChord([60, 64, 67], 41)).toBe("C/F"); // no chord on F fits, so the bass is a slash bass
+    expect(nameChord([60, 64, 67], 45)).toBe("Am7");
+    expect(nameChord([60, 65, 67], 36)).toBe("Csus4");
+    expect(nameChord([59, 62, 65, 69], 35)).toBe("Bm7b5");
+    expect(nameChord([60, 61, 62], 36)).toBeNull();
+    expect(nameChord([60, 67])).toBeNull();
   });
 
   it("keeps a repeating bass cycle smooth, including the step back to its first chord", () => {

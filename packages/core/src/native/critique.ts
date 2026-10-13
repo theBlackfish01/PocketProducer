@@ -4,6 +4,7 @@ import { analyzeNativeSection, barTicks, materializedNotes, type NativeDocument 
 import type { NativePlan } from "./plan.js";
 import { automationValueAt } from "./section.js";
 import { analyzeNativeMusicality, musicalityReviewEvidence } from "./musicality.js";
+import { nameChord } from "./harmony.js";
 
 // A ramp may cross an entire section without a control point inside it. Give
 // the editor local boundary values and the enclosing keyframes, not unrelated
@@ -28,7 +29,9 @@ export const nativeReviewSchema = z.object({
   documentHash: z.string().regex(/^[a-f0-9]{64}$/),
   musicHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   verdict: z.string().min(3).max(360),
-  findings: z.array(nativeReviewFindingSchema).max(4),
+  // citedChord is added by the application, never by the reviewer: the chord the
+  // finding's cited notes spell, so a misnamed inversion can be recognised.
+  findings: z.array(nativeReviewFindingSchema.extend({ citedChord: z.string().max(24).optional() })).max(4),
   // Findings whose cited notes the score does not contain: a misreading, kept as a record, never acted on.
   discardedFindings: z.array(z.object({ observation: z.string().max(300), reason: z.string().max(300) })).max(4).optional(),
   noChangeReason: z.string().max(300).nullable(),
@@ -50,17 +53,30 @@ export function nativeArcEvidence(document: NativeDocument) {
       onsetsPerBar: events.length / (section.endBar - section.startBar), phraseHash: canonicalHash(events.slice(0, 64).map((event) => [event.partId, event.pitch, event.beat])),
       controlSpan: controlSpans.length ? Math.max(...controlSpans) : 0 };
   });
-  const opening = facts[0]!, middle = facts[Math.floor(facts.length / 2)]!, arrival = facts.at(-1)!;
-  const openingToMiddle: string[] = [];
-  if (middle.phraseHash !== opening.phraseHash) openingToMiddle.push("changed note timing or contour");
-  if (middle.highestPitch !== null && opening.highestPitch !== null && middle.highestPitch >= opening.highestPitch + 4) openingToMiddle.push("higher register");
-  if (middle.onsetsPerBar >= opening.onsetsPerBar * 1.25 && middle.onsetsPerBar >= opening.onsetsPerBar + 0.5) openingToMiddle.push("more note onsets per bar");
-  if (middle.activeRoles.some((role) => !opening.activeRoles.includes(role))) openingToMiddle.push("new active role");
-  if (middle.controlSpan >= 0.2) openingToMiddle.push("moving control values");
+  const opening = facts[0]!, arrival = facts.at(-1)!;
+  const changesFrom = (later: typeof opening) => {
+    const changes: string[] = [];
+    if (later.phraseHash !== opening.phraseHash) changes.push("changed note timing or contour");
+    if (later.highestPitch !== null && opening.highestPitch !== null && later.highestPitch >= opening.highestPitch + 4) changes.push("higher register");
+    if (later.onsetsPerBar >= opening.onsetsPerBar * 1.25 && later.onsetsPerBar >= opening.onsetsPerBar + 0.5) changes.push("more note onsets per bar");
+    if (later.activeRoles.some((role) => !opening.activeRoles.includes(role))) changes.push("new active role");
+    if (later.controlSpan >= 0.2) changes.push("moving control values");
+    return changes;
+  };
+  // A build can peak in the middle or climb in small steps to the end, where no
+  // single middle section stands far from the opening. The middle section is the
+  // contrast when it qualifies; otherwise the later section that differs most is.
+  const later = facts.slice(1).map((fact) => ({ fact, changes: changesFrom(fact) }));
+  const centre = later[Math.floor(facts.length / 2) - 1]!;
+  const lift = centre.changes.length >= 2 ? centre : later.reduce((best, item) => item.changes.length > best.changes.length ? item : best, centre);
+  const middle = lift.fact, openingToMiddle = lift.changes;
   const middleToArrival: string[] = [];
-  if (arrival.phraseHash !== middle.phraseHash) middleToArrival.push("different arrival phrase");
-  if (arrival.activeRoles.join("|") !== middle.activeRoles.join("|")) middleToArrival.push("different active roles");
-  if (arrival.highestPitch !== middle.highestPitch) middleToArrival.push("different register peak");
+  if (middle === arrival) { if (openingToMiddle.length >= 2) middleToArrival.push("the build arrives in the last section"); }
+  else {
+    if (arrival.phraseHash !== middle.phraseHash) middleToArrival.push("different arrival phrase");
+    if (arrival.activeRoles.join("|") !== middle.activeRoles.join("|")) middleToArrival.push("different active roles");
+    if (arrival.highestPitch !== middle.highestPitch) middleToArrival.push("different register peak");
+  }
   return { middleSectionId: middle.section.id, openingToMiddle, middleToArrival, symbolicArcEvidenced: openingToMiddle.length >= 2 && middleToArrival.length >= 1 };
 }
 
@@ -173,6 +189,19 @@ function citationMismatch(finding: NativeReview["findings"][number], document: N
   return null;
 }
 
+/** The chord a finding's cited notes spell when they sound as one chord (three or
+ * more notes within a strum), with the sounding bass as root where it fits. */
+function citedChord(finding: NativeReview["findings"][number], document: NativeDocument): string | null {
+  const section = document.sections.find((item) => item.id === finding.sectionId), cited = finding.evidence ?? [];
+  if (!section || cited.length < 3) return null;
+  const first = Math.min(...cited.map((cite) => cite.tick));
+  if (Math.max(...cited.map((cite) => cite.tick)) - first > 120) return null;
+  const at = section.startBar * barTicks(document) + first;
+  const under = document.parts.filter((part) => part.role === "bass" && part.device.type !== "audio").flatMap((part) => materializedNotes(document, part.id))
+    .filter((note) => note.startTick <= at + 30 && note.startTick + note.durationTicks > at + 30).sort((a, b) => a.pitch - b.pitch)[0];
+  return nameChord(cited.map((cite) => cite.pitch), under?.pitch);
+}
+
 export function validateNativeReview(raw: unknown, document: NativeDocument, modelUsed: boolean): NativeReview {
   const parsed = nativeReviewSchema.parse({ ...(raw as object), documentHash: canonicalHash(document), modelUsed });
   for (const finding of parsed.findings) {
@@ -186,8 +215,8 @@ export function validateNativeReview(raw: unknown, document: NativeDocument, mod
     const reason = citationMismatch(finding, document);
     if (reason) discarded.push({ observation: finding.observation, reason });
     return !reason;
-  });
-  if (!discarded.length) return parsed;
+  }).map((finding) => { const chord = citedChord(finding, document); return chord ? { ...finding, citedChord: chord } : finding; });
+  if (!discarded.length) return { ...parsed, findings };
   return { ...parsed, findings, discardedFindings: discarded,
     noChangeReason: findings.length ? parsed.noChangeReason : parsed.noChangeReason ?? "Its findings cited notes the score does not contain, so they were discarded; no verified finding remains." };
 }

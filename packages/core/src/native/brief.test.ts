@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captureNativeBrief, emptyNativeBrief, jobNativeBrief, nativeBriefChecks, nativeBriefPreservation } from "./brief.js";
+import { captureNativeBrief, emptyNativeBrief, jobNativeBrief, nativeBriefChecks, nativeBriefPreservation, resolveBriefSection } from "./brief.js";
 import { applyNativeOperations } from "./model.js";
 import { assertNativeModelCompletion, nativeCompletionIssues, seedNativeDocument } from "./producer.js";
 import { briefKeep, briefRole, briefSection, capturedBrief } from "../test-support.js";
@@ -267,6 +267,42 @@ describe("completion checks from a captured brief", () => {
     expect(nativeCompletionIssues(introDrums, brief, "generation")).toContain("Excluded drums has constructed material in Intro");
     const chorusDrums = applyNativeOperations(introDrums, [{ kind: "replaceNotes", partId: "drums", notes: [{ id: "chorus-hit", startTick: 3840, durationTicks: 960, pitch: 36, velocity: 0.7 }] }]);
     expect(nativeCompletionIssues(chorusDrums, brief, "generation")).toEqual([]);
+  });
+
+  it("keeps exact section names ahead of the near match, and refuses a near match with two candidates", () => {
+    const sections = (names: string[]) => applyNativeOperations(melody, [{ kind: "setStructure", bars: names.length * 4, sections: names.map((name, index) => ({ id: `s${index}`, name, startBar: index * 4, endBar: index * 4 + 4, intent: "" })) }]);
+    const named = (document: ReturnType<typeof sections>, name: string) => resolveBriefSection(briefSection(name), document)?.name;
+    // Names that contain one another still resolve exactly, as they did before the near match existed.
+    const letters = sections(["A", "Part A", "Verse", "Verse 2"]);
+    expect(["A", "Part A", "Verse", "verse 2"].map((name) => named(letters, name))).toEqual(["A", "Part A", "Verse", "Verse 2"]);
+    // Nothing exact: one candidate matches, two do not.
+    expect(named(sections(["Intro", "Main"]), "the main section")).toBe("Main");
+    expect(named(sections(["Intro", "Final Chorus"]), "chorus")).toBe("Final Chorus");
+    expect(named(sections(["Verse 1", "Verse 2"]), "the verse")).toBeUndefined();
+    expect(named(sections(["Main", "Groove"]), "the main groove section")).toBeUndefined();
+    // A section id never takes part in the near match.
+    const ids = applyNativeOperations(melody, [{ kind: "setStructure", bars: 8, sections: [{ id: "main-part", name: "Lift", startBar: 0, endBar: 4, intent: "" }, { id: "b", name: "Main", startBar: 4, endBar: 8, intent: "" }] }]);
+    expect(resolveBriefSection(briefSection("main"), ids)?.id).toBe("b");
+    expect(resolveBriefSection(briefSection("main part"), ids)?.id).toBe("main-part");
+  });
+
+  it("matches a section whose requested name only adds words around the section's own name", () => {
+    // A live build looped on this: the direction said "an 8-bar main section" and the producer named the section "Main".
+    const built = applyNativeOperations(melody, [{ kind: "setStructure", bars: 16, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 8, intent: "" }, { id: "main", name: "Main", startBar: 8, endBar: 16, intent: "" }] }]);
+    const direction = "A 16-bar groove. An 8-bar intro, then an 8-bar main section.";
+    const brief = capturedBrief(direction, { totalBars: { value: 16, quote: "A 16-bar groove" }, sections: [
+      { section: briefSection("intro"), bars: 8, startBar: null, endBar: null, quote: "An 8-bar intro" },
+      { section: briefSection("main section"), bars: 8, startBar: null, endBar: null, quote: "an 8-bar main section" },
+      { section: briefSection("the intro part"), bars: 8, startBar: null, endBar: null, quote: "An 8-bar intro" }] });
+    expect(nativeCompletionIssues(built, brief, "generation")).toEqual([]);
+    // The length is still checked, and a different name still does not match.
+    const short = applyNativeOperations(built, [{ kind: "setStructure", bars: 16, sections: [{ id: "intro", name: "Intro", startBar: 0, endBar: 4, intent: "" }, { id: "main", name: "Main", startBar: 4, endBar: 16, intent: "" }] }]);
+    expect(nativeCompletionIssues(short, brief, "generation")).toContain("Requested 8-bar main section was not constructed");
+    const other = capturedBrief(direction, { sections: [{ section: briefSection("bridge section"), bars: 8, startBar: null, endBar: null, quote: "an 8-bar main section" }] });
+    expect(nativeCompletionIssues(built, other, "generation")).toContain("Requested 8-bar bridge section was not constructed");
+    // A section literally called "Section" matches by its exact name.
+    const literal = applyNativeOperations(melody, [{ kind: "setStructure", bars: 8, sections: [{ id: "section", name: "Section", startBar: 0, endBar: 8, intent: "" }] }]);
+    expect(nativeCompletionIssues(literal, capturedBrief("An 8-bar section.", { sections: [{ section: briefSection("section"), bars: 8, startBar: null, endBar: null, quote: "An 8-bar section" }] }), "generation")).toEqual([]);
   });
 
   it("checks total length and section lengths separately", () => {

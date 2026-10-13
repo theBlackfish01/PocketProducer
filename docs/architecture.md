@@ -1,5 +1,22 @@
 # Architecture — native construction is the current path
 
+## Arrangement scorecard, development nudge and scene building blocks (2026-10-12)
+
+The loop now measures how much music there is, not only whether it is wrong ([ADR 006](adr/006-arrangement-scorecard-and-development-nudge.md)).
+
+- **Scorecard** (`native/richness.ts`): `analyzeNativeRichness(document, depth)` reports layers per section, what changes between adjacent sections, marked section changes, a written ending, movement and shared space, and the gaps against a `focused` or `detailed` target. Bars are compared with a 90-tick tolerance so humanised repeats still match. Pieces under 8 bars get no gaps.
+- **Depth** comes from the run profile: standard is `focused`, extended is `detailed`. Revisions and scripted runs get no scorecard unless a test opts in (`richness` on the offline input).
+- **Checklist and nudge** (`native/producer.ts`, `native/convergence.ts`): once music exists, the per-turn checklist carries an `arrangement` entry of gap codes and one next step. Under input pressure the checklist drops `arrangement`, `musicality` and its standing guidance last of all and lists them in `omittedAdvice`. The first `finish_native_arrangement` on a new piece with gaps returns `category: "development"` once and spends no review; the next call proceeds. A server-side finish skips it, and so does any finish after a review has been paid for.
+- **Scene building blocks** (`native/construction-tools.ts`, `native/groove-tools.ts`, `native/grooves.ts`):
+  - A part's `kit` or `instrument` is a GM sound by slug. The scene tool fetches it, grounds and pins the preset, and hands the scene an ordinary Gakki device (`withGmSounds`). A missing library is a correctable `REMOTE_LIBRARY_UNAVAILABLE`.
+  - `grooves` compiles a style into explicit kit notes with the style's swing and a fill closing each listed section, or into two reusable Beatbox8 patterns.
+  - `space` adds one shared reverb bus and a send per part by role, and only the missing sends on later scenes.
+  - A chord progression's `ending` writes its last listed section as explicit notes landing on a chosen chord.
+- **Musicality** gains `QUIET_MIX` (loudest part's gain × average velocity under 20%), chord names per bar (`chords`, `finalChord`, from `nameChord` in `native/harmony.ts`) and `key.relative`. A key is reported as its relative when both fit and the bass opens on the relative's tonic. The reviewer receives `chordsByBar` and is told not to derive chords from pitch numbers. `validateNativeReview` adds `citedChord` to a finding whose cited notes sound as one chord, so the producer can recognise a misnamed inversion.
+- **Bounded loops** (`native/convergence.ts`, `native/brief.ts`, `native/critique.ts`): six finishes in a row blocked by the same unmet requirement stop the run as resumable partial work. A section reference with no exact match resolves to the single section whose name contains, or is contained in, its words. `nativeArcEvidence` accepts a requested rise from the middle section or, failing that, from the later section that differs most from the opening, and a blocked finish reports `riseMeasured`.
+- **Rewriting a section** (`native/model.ts`, `native/producer.ts`): `harmonizeSection` and `sequenceSectionPattern` accept `replace: true` to clear the part's free notes in that section first. Without it they join what is there, and the mutation reply says so in `layered`.
+- **Envelope:** the scene menu is under its 50,000-byte guard. The batch menu gained only the two optional `replace` flags and its worst case stays under the 96,000-byte input ceiling. The recipe shortlist in the first message is now id, role and styles.
+
 ## Symbolic composition helpers and musicality evidence (2026-10-09)
 
 The model chooses musical decisions and deterministic code does the arithmetic ([ADR 005](adr/005-symbolic-helpers-and-musicality-evidence.md)). Every helper compiles into existing validated operations before the step is stored, so history, diffs, protection and synchronization still see explicit notes and settings.

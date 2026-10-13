@@ -122,4 +122,21 @@ describe("grounded symbolic editor", () => {
     expect(nativeArcEvidence(developed).symbolicArcEvidenced).toBe(true);
     expect(nativeCompletionIssues(developed, captured, "generation")).not.toEqual(expect.arrayContaining([expect.stringContaining("no independently evidenced middle contrast")]));
   });
+
+  it("accepts a build that climbs in small steps to the end, as a live six-section waltz did", () => {
+    // Each section sits one semitone above the last, so the middle is only three
+    // semitones above the opening while the later sections clearly are higher.
+    const climb = (step: number) => applyNativeOperations(seedNativeDocument("A waltz that builds gently toward the end"), [
+      { kind: "setStructure", bars: 24, tempoBpm: 72, sections: ["still", "bloom", "drift", "lift", "rise", "arrival"].map((id, index) => ({ id, name: id, startBar: index * 4, endBar: index * 4 + 4, intent: id })) },
+      { kind: "removePart", partId: "starting-voice" },
+      { kind: "addPart", part: { id: "bell", name: "Bell", role: "lead", device: { type: "heisenberg", parameters: {} }, gain: 0.6, pan: 0, notes: [0, 1, 2, 3, 4, 5].map((section) => ({ id: `note-${section}`, startTick: section * 4 * 3840, durationTicks: 480, pitch: 60 + section * step, velocity: 0.7 })), placements: [], sourceRegions: [], effects: [], automation: [] } }
+    ]);
+    const captured = capturedBrief("A waltz that builds gently toward the end", { construction: [{ kind: "rise", quote: "builds gently toward the end" }] });
+    const gentle = nativeArcEvidence(climb(1));
+    expect(gentle).toMatchObject({ middleSectionId: "rise", openingToMiddle: ["changed note timing or contour", "higher register"], symbolicArcEvidenced: true });
+    expect(nativeCompletionIssues(climb(1), captured, "generation")).toEqual([]);
+    // A piece that never leaves its opening is still blocked, and the middle is named.
+    expect(nativeArcEvidence(climb(0))).toMatchObject({ middleSectionId: "lift", openingToMiddle: [], symbolicArcEvidenced: false });
+    expect(nativeCompletionIssues(climb(0), captured, "generation")).toEqual([expect.stringContaining("A section after the opening must differ from it in two of")]);
+  });
 });

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { canonicalHash } from "../domain/hash.js";
 import { spliceSectionAutomation } from "./section.js";
-import { NativeUnknownIdError } from "./errors.js";
+import { NativeCorrectableError, NativeUnknownIdError } from "./errors.js";
 import { diatonicInvert, diatonicShift, feelChangesMaterial, feelFor, nativeFeelSchema, nativeKeySchema, scaleOf } from "./harmony.js";
 
 export const NATIVE_PPQ = 960;
@@ -218,8 +218,8 @@ export const nativeOperationSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("placeMotif"), partId: id, placement: part.shape.placements.unwrap().element }),
   z.object({ kind: z.literal("replacePlacements"), partId: id, placements: part.shape.placements.unwrap() }),
   z.object({ kind: z.literal("addNotes"), partId: id, notes: z.array(note).min(1).max(256) }),
-  z.object({ kind: z.literal("harmonizeSection"), partId: id, sectionId: id, cycleBars: z.number().int().min(1).max(16), chords: z.array(z.object({ barOffset: z.number().min(0).max(16), durationBars: z.number().positive().max(16), pitches: z.array(z.number().int().min(0).max(127)).min(2).max(8), velocity: z.number().min(0.01).max(1), strumTicks: z.number().int().min(0).max(240).default(0) })).min(1).max(16) }),
-  z.object({ kind: z.literal("sequenceSectionPattern"), partId: id, sectionId: id, cycleBars: z.number().int().min(1).max(8), hits: z.array(z.object({ tick: z.number().int().min(0), durationTicks: z.number().int().min(1).max(3840), pitch: z.number().int().min(0).max(127), velocity: z.number().min(0.01).max(1), timingOffsetTicks: z.number().int().min(-120).max(120).default(0) })).min(1).max(96) }),
+  z.object({ kind: z.literal("harmonizeSection"), partId: id, sectionId: id, cycleBars: z.number().int().min(1).max(16), chords: z.array(z.object({ barOffset: z.number().min(0).max(16), durationBars: z.number().positive().max(16), pitches: z.array(z.number().int().min(0).max(127)).min(2).max(8), velocity: z.number().min(0.01).max(1), strumTicks: z.number().int().min(0).max(240).default(0) })).min(1).max(16), replace: z.boolean().optional() }),
+  z.object({ kind: z.literal("sequenceSectionPattern"), partId: id, sectionId: id, cycleBars: z.number().int().min(1).max(8), hits: z.array(z.object({ tick: z.number().int().min(0), durationTicks: z.number().int().min(1).max(3840), pitch: z.number().int().min(0).max(127), velocity: z.number().min(0.01).max(1), timingOffsetTicks: z.number().int().min(-120).max(120).default(0) })).min(1).max(96), replace: z.boolean().optional() }),
   z.object({ kind: z.literal("replaceNotes"), partId: id, notes: z.array(note).max(4096) }),
   z.object({ kind: z.literal("setDevice"), partId: id, device: part.shape.device }),
   z.object({ kind: z.literal("setMix"), partId: id, gain: z.number().min(0).max(1).optional(), pan: z.number().min(-1).max(1).optional() }),
@@ -345,6 +345,8 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         for (const chord of op.chords) {
           if (chord.barOffset >= op.cycleBars || chord.barOffset + chord.durationBars > op.cycleBars || new Set(chord.pitches).size !== chord.pitches.length) throw new Error("Chord voicing must fit its cycle and contain distinct pitches");
         }
+        // Without `replace` the chords join whatever the part already plays there.
+        if (op.replace) item.notes = item.notes.filter((value) => value.startTick < sectionStart || value.startTick >= sectionEnd);
         for (let cycleStart = sectionStart, repeat = 0; cycleStart < sectionEnd; cycleStart += cycleTicks, repeat++) for (const [chordIndex, chord] of op.chords.entries()) {
           const onset = cycleStart + Math.round(chord.barOffset * ticksPerBar);
           if (onset >= sectionEnd) continue;
@@ -362,6 +364,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
         if (["audio", "beatbox8"].includes(item.device.type)) throw new Error("Expressive pattern notes need a MIDI-capable native instrument");
         const ticksPerBar = barTicks(next), sectionStart = section.startBar * ticksPerBar, sectionEnd = section.endBar * ticksPerBar, cycleTicks = op.cycleBars * ticksPerBar, operationHash = canonicalHash(op);
         if (op.hits.some((hit) => hit.tick >= cycleTicks)) throw new Error("Pattern hit exceeds its cycle");
+        if (op.replace) item.notes = item.notes.filter((value) => value.startTick < sectionStart || value.startTick >= sectionEnd);
         for (let cycleStart = sectionStart, repeat = 0; cycleStart < sectionEnd; cycleStart += cycleTicks, repeat++) for (const [hitIndex, hit] of op.hits.entries()) {
           const startTick = cycleStart + hit.tick + hit.timingOffsetTicks;
           if (cycleStart + hit.tick >= sectionEnd) continue;
@@ -608,6 +611,9 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "removePart": next.parts = next.parts.filter((value) => value.id !== op.partId); next.motifs = next.motifs.filter((value) => value.partId !== op.partId); break;
     }
   }
+  // A piece always has a part. Removing the only one (typically the starting
+  // sketch) is fine inside a batch that also adds parts, not on its own.
+  if (!next.parts.length) throw new NativeCorrectableError("LAST_PART_REQUIRED", "A piece needs at least one part, so its only part cannot be removed on its own.", "Add the new parts in the same call: compose_native_scene with replaceSeed:true replaces the starting sketch, or put addPart before removePart in one batch.");
   next.sourceAssetIds = [...new Set(next.parts.flatMap((item) => item.sourceRegions.map((region) => region.assetId)))];
   const validated = nativeDocumentSchema.parse(next);
   assertNativeDeviceMapping(validated);

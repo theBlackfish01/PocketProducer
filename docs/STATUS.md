@@ -1,5 +1,85 @@
 # Live implementation status
 
+## Music richness loop — 2026-10-12/13
+
+Branch `music-richness-loop`, uncommitted. Four rounds of change → local live builds → trace import → scorecard comparison, using $0.60 of a user-approved $1 of live spend (held reservations included). Design: [ADR 006](adr/006-arrangement-scorecard-and-development-nudge.md). Nothing was heard, rendered or copied to Audiotool; every number below is a symbolic measurement of the saved score.
+
+**Delivered**
+
+- **A scorecard for how much music there is** (`native/richness.ts`), with a `focused` or `detailed` target taken from the run profile, shown on the producer's checklist every turn, and one development nudge at the first finish that spends no review and never blocks twice.
+- **Guidance that stops arguing for less:** two or three development passes before finishing; "at most one refinement pass" is gone.
+- **Bigger scene building blocks:** a part's `kit` or `instrument` pins a GM sound; `grooves` writes a styled drum part with ghost notes, swing and a fill; `space` adds shared reverb and sends; a chord progression's `ending` lands on a chosen chord. A `held-bass` recipe sustains where the Pulverisateur plucks fade.
+- **Harmony facts for the reviewer:** chord names per bar, the final chord, and a key that is told from its relative by the opening bass note. Voicings keep the root.
+- **Rewriting a section:** `replace: true` on `harmonizeSection` and `sequenceSectionPattern`, and a `layered` notice when notes were joined instead.
+- **Requirements that could not pass now can, and are bounded when they cannot:** generic words in section names, a rise that climbs in small steps, and a stop after six finishes blocked by the same requirement.
+
+**Evidence: the same three directions, before and after**
+
+| Direction | Before (October 9, 2–4 builds each) | After (round 2; round 4 on the final code is below) |
+|---|---|---|
+| 16-bar lo-fi groove | 3–4 parts, 208–321 notes, Beatbox8 steps, no section change marked, ending written in 1 of 4, no sends; 3–4 scorecard gaps; 7–20 calls, $0.016–0.039 | 4 parts, 355 notes, a pinned GM kit with a fill, ending on Dm7, shared reverb with 3 sends; **0 gaps**, 0 musicality notes; 11 calls, $0.022 |
+| 24-bar ambient waltz, three named parts | 3–4 parts, 92–146 notes, last chord G in all three (the key is A minor), no sends; 1–4 gaps; 12–17 calls, $0.020–0.031 | 3 parts as asked, 145 notes, six sections with every change marked, ending on Am, shared reverb; **1 gap** (part count, which the direction fixes); 13 calls, $0.024 |
+| Copper Window, 16 bars | 4–5 parts, 479–504 notes, no section change marked, no sends; 2–3 gaps; 8–37 calls, $0.014–0.079 | 4 parts, 594 notes, a pinned GM kit, every change marked, ending on Dm7, 3 sends; **0 gaps**; 12 calls, $0.024 |
+
+A fourth, open direction on the extended profile ("downtempo soul groove… whatever supporting layers make it feel finished") saved six parts at 4 / 6 / 3 layers across intro, groove and outro, 538 notes, two automation curves, four sends and a B7 → Em9 close, with no gaps against the `detailed` target, in 16 calls and $0.036.
+
+**Round 4, on the final code after every fix**
+
+| Direction | Saved result |
+|---|---|
+| 16-bar lo-fi groove | 4 parts, 372 notes, GM kit, ending on Dm9, 1 curve, 2 sends; 0 gaps, 0 musicality notes; 10 calls, $0.020; passed its first review with no findings. The direction check captured "8-bar main section" as a hard requirement this time, and the section named "Main" satisfied it |
+| Copper Window | 4 parts, 542 notes, GM kit, ending on Dm7, 3 sends; 0 gaps; 10 calls, $0.016; passed its first review with no findings |
+| Soul groove, extended | 5 parts, 509 notes, GM kit, 2 curves, 4 sends, every change marked, ending on Em9; 1 gap (5 of 6 layers); 25 calls, $0.048. One real review finding (a busy outro kit) was fixed and confirmed by the second review |
+
+Three correctable tool replies occurred across the round and each was recovered in the next call. None of the four reviews misread a chord or the key.
+
+**What the live rounds caught**
+
+- Round 1: two of three builds looped on a completion check and were cancelled at 48 and 65 calls ($0.094 and $0.120). One was the section-name mismatch; the other was the rise check, which more ambitious six-section forms made harder to pass. Both checks were fixed, and the six-attempt stop now bounds any other such case.
+- Round 1: a review called F–D–A–C "not Dm7" and the key F major. Round 2 reviews used the supplied chord names and raised no harmony finding.
+- Round 2: a review asked for a sparser opening and the producer's fix layered 32 notes onto 64. The `replace` flag and `layered` notice came from that.
+- Round 3 was cut off by a connection outage on this machine. Both builds stopped as designed (one paused with its draft, one failed at its deadline with no spend) and were resubmitted. Both then saved:
+  - Copper Window again: 4 parts, 558 notes, a pinned GM kit, ending on Dm7, 0 gaps, 13 calls, $0.024.
+  - The sparse two-voice sketch that was reported inaudible on the hosted app: 2 parts as asked, shared reverb, 10 calls, $0.021. It is still a soft piece: its loudest part sits at about 24% (gain × average velocity) against the 20% quiet-mix threshold, so no note was raised. The nudge fired once and the producer kept the piece sparse, as the direction asks.
+- Round 3: with chord names supplied, a review still called F–D–A–C over a D bass "an Fmaj7 voicing". The producer added a low D and the next review passed, so the cost was one step. The application now names the chord a finding's cited notes spell (`citedChord`) and tells the producer what a mismatch means. This last change has unit coverage and the full suites behind it but no live build.
+
+**What an independent review of the diff caught**
+
+A read-only review by a separate agent found no stored-data or replay breakage (old operations parse, hash and replay identically; 400 random documents showed no arrangement that the rise check used to accept and now rejects). It found these, all fixed:
+
+- The scripted input-ceiling tests ran with the scorecard off. A new test with the full batch menu, music and an oversized exchange failed by 243 at the 96,000 ceiling. The scorecard entry is now about 350 bytes instead of up to 1,250, advice is dropped last under pressure and named in `omittedAdvice`, and the test passes. By the measured sizes this scenario was already about 770 over before the loop.
+- The first section-name matcher dropped "section", "part" and "the", so "A" and "Part A" collided and exact names could stop resolving. It is now an exact-first match with a word-containment fallback and no word list.
+- The nudge could arrive after a paid review. It is skipped once any review has been spent.
+- Audio parts were invisible to the scorecard and the quiet-mix note. Clips now count as layers, and a mix with clips is not judged for level.
+- Two chords in one bar were named as one merged chord. Halves are now named separately, and a chord over its root in the bass takes the root's name.
+- The six-finish stop counted a requirement across the whole run. It now counts finishes in a row and resets when the requirement clears.
+- Smaller: a groove on a non-percussion part, a groove past 4,096 notes, `space` with a protected part or with nothing to add, and a re-sent kit scene during a library outage are all handled with correctable replies.
+
+Two consequences it identified are accepted and recorded in ADR 006: a symbolic call re-sent across a deploy is refused as a reused key rather than replayed, and `replace` cannot be rolled back under an unfinished job.
+
+**Limits**
+
+- The scorecard is structural. Zero gaps means the piece has layers, contrast, marked changes, an ending and movement; it does not mean it sounds good.
+- A groove's fill and a progression's ending satisfy the transition and ending checks by construction.
+- The sample is small: one build per direction per round, and results vary between runs (the extended build reached six parts in 16 calls once and five parts in 25 calls once).
+- The `detailed` target has two live builds behind it.
+- `citedChord`, the `layered` notice and `replace` did not come up in round 4, so they rest on unit and integration tests.
+- No full integration run on the final tree was clean on this machine: five runs each passed 179 of 180 with one lease failure in a different test. An untouched checkout of `main`, run the same way straight after, lost one lease too, so this is the machine (3-second test leases, an unsteady Docker database), not this change. Details are in the [verification record](testing.md).
+
+**Next action**
+
+Commit and merge when ready. Deploy with no builds in flight, following `docs/RAILWAY-DEPLOYMENT.md`, then make one build and listen to it in Audiotool: nothing in this work has been heard. Separately, the 3-second test lease is worth lengthening or making tolerant of a slow database, since it now fails about once per run here.
+
+## Hosted trace review and music quality review — 2026-10-11
+
+Read-only analysis; no code changed. Full write-up: [music quality review](music-quality-review.md).
+
+- **Nine hosted builds (October 9–10)** ran the merged helper work with no failed calls. They are small: 2–5 parts, 12–24 bars, no shared space, groups or master, and automation in one. Two were saved with an unresolved high finding about the final chord.
+- **"Quiet Orbit" (the session reported as inaudible)** has no error in its trace. It is two soft voices with fast-decaying patches at velocities 0.25–0.47; its channel gains equal Audiotool's default. Likely very quiet rather than broken; not verified by listening.
+- **Diagnosis:** every gate checks that the music is not wrong; none measures how much music there is, and the prompt says to stop at the first passing state.
+- **Verified in the SDK defaults:** an un-preset Pulverisateur decays to silence in 500 ms with one oscillator, and neither is writable here.
+- **Next:** a richness scorecard with targets and a soft finish gate, section-aware harmony, a groove generator, and the Pulverisateur and GM palette work. Order and detail are in the review.
+
 ## Release check: transition interpretation — 2026-10-09
 
 The first release-check run, Copper Window (16 bars), saved Version 1 but exposed a new false hard requirement: the interpreter mapped "with a clear ending" to required transitions in Return. Finish rejected it twice until the producer added a fifth FX part. It took about 14 minutes and $0.079589 including the interpretation; a symbolic ending suggestion remained. No release was made from that check.

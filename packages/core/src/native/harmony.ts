@@ -97,6 +97,35 @@ const qualities: Record<string, { quality: NativeChord["quality"]; intervals: nu
 };
 export const supportedChordSuffixes = Object.keys(qualities).filter(Boolean);
 
+// One spelling per chord type, simplest first: a name is evidence for a reader,
+// so a plain triad is preferred to an exotic chord with the same notes.
+const namedSuffixes = ["", "m", "7", "maj7", "m7", "sus4", "sus2", "dim", "aug", "6", "m6", "m7b5", "dim7", "mmaj7", "7sus4", "add9", "madd9", "9", "maj9", "m9", "6/9", "7b9", "7#9", "7#11", "11", "m11", "13", "maj13", "m13"] as const;
+/** The plainest chord symbol whose tones are exactly these pitch classes, or
+ * that chord with only its fifth left out. The sounding bass is the root where
+ * the chord and bass together spell a chord on it (F-A-C over D is Dm7, as a
+ * rootless voicing is written); otherwise it is shown as a slash bass. Null when
+ * nothing fits. */
+export function nameChord(pitchClasses: number[], bass?: number): string | null {
+  const sounding = [...new Set(pitchClasses.map((pc) => ((pc % 12) + 12) % 12))];
+  if (sounding.length < 3) return null;
+  const under = bass === undefined ? undefined : ((bass % 12) + 12) % 12;
+  const plainest = (heard: number[], roots: number[]) => {
+    let best: { name: string; cost: number } | null = null;
+    for (const root of roots) for (const [order, suffix] of namedSuffixes.entries()) {
+      const tones = [...new Set(qualities[suffix]!.intervals.map((interval) => (root + interval) % 12))];
+      if (heard.some((pc) => !tones.includes(pc))) continue;
+      const missing = tones.filter((pc) => !heard.includes(pc));
+      if (missing.some((pc) => pc !== (root + 7) % 12)) continue;
+      // Prefer the bass as root, then a complete chord, then the plainer type.
+      const cost = (under !== undefined && under !== root ? 100 : 0) + missing.length * 40 + order;
+      if (!best || cost < best.cost) best = { name: `${pitchClassNames[root]}${suffix}${under !== undefined && under !== root ? `/${pitchClassNames[under]}` : ""}`, cost };
+    }
+    return best?.name ?? null;
+  };
+  const onBass = under === undefined ? null : plainest([...new Set([...sounding, under])], [under]);
+  return onBass ?? plainest(sounding, sounding);
+}
+
 function role(interval: number, quality: NativeChord["quality"]): ToneRole {
   if (interval === 0) return "root";
   if (interval === 3 || interval === 4) return "third";
@@ -135,7 +164,11 @@ function chordTones(chord: NativeChord, extensions: ChordExtensions, scale?: Nat
     tones.push({ interval: seventh, role: "seventh" });
   }
   if (extensions === "ninths" && !has("ninth") && chord.quality !== "diminished" && inKey(14)) tones.push({ interval: 14, role: "ninth" });
-  const priority: ToneRole[] = ["third", "sus", "seventh", "sixth", "ninth", "eleventh", "thirteenth", "fifth", "root"];
+  // When voices run out the fifth goes first and the root stays, so the chord still
+  // reads as itself without a bass under it (a rootless Dm9 is an Fmaj7). The
+  // fifth defines a diminished or augmented chord, so there it outranks the root.
+  const altered = chord.quality === "diminished" || chord.quality === "augmented";
+  const priority: ToneRole[] = altered ? ["third", "fifth", "seventh", "root", "sixth", "ninth", "eleventh", "thirteenth", "sus"] : ["third", "sus", "seventh", "root", "sixth", "ninth", "eleventh", "thirteenth", "fifth"];
   return tones.sort((a, b) => priority.indexOf(a.role) - priority.indexOf(b.role));
 }
 

@@ -15,7 +15,7 @@ The advertised tools stay compact: `compose_native_scene` remains available thro
 
 Finish through a short evidence loop: choose the highest-impact unresolved critic finding, inspect the named material once, apply a coherent targeted batch, verify its actual notes/curves and preserved material, then review the final score. A justified no-change decision is valid; repeated unrelated inspections are not musical development. Use the current finishing checklist and retained findings, not older score snapshots. Aim for useful reviewed work before 50 turns without dropping explicit requirements. An unusable critic result is not approval: format recovery is bounded and still consumes the ordinary call/cost allowance. Do not request repeated reviews of an unchanged valid result. Update task checkboxes and discovery references as bookkeeping; put changed musical requirements in the actual plan/goals, not only in `unfinishedTasks`. Stop optional exploration when the requested music is complete.
 
-Continue later tick scenes for new section material. When low-level edits are needed, select `batch` for `apply_native_batch`: `harmonizeSection` writes chosen chord voicings over a cycle and `sequenceSectionPattern` writes expressive velocity/timing on MIDI instruments. Individual motif and note operations handle other details. The older `compose_native_form` is available only through the optional beat-form menu; it is not required preparation for a scene. Keep stable IDs/step keys, inspect actual differences in at least two sections and refine omissions before ending. Correct a definite rejected write with fresh corrected arguments; never reissue an uncertain effect or a committed edit under a new key.
+Continue later tick scenes for new section material. When low-level edits are needed, select `batch` for `apply_native_batch`: `harmonizeSection` writes chosen chord voicings over a cycle and `sequenceSectionPattern` writes expressive velocity/timing on MIDI instruments. Both join the notes a part already has in that section; set `replace: true` to write over them, for example when thinning a busy section. Individual motif and note operations handle other details. The older `compose_native_form` is available only through the optional beat-form menu; it is not required preparation for a scene. Keep stable IDs/step keys, inspect actual differences in at least two sections and refine omissions before ending. Correct a definite rejected write with fresh corrected arguments; never reissue an uncertain effect or a committed edit under a new key.
 
 Read this skill once. Retained local guidance remains valid when its original exchange is compacted. Do not repeat the plan or read the same instructions while the seed remains unchanged. Inspect only the specific control needed, construct with validated settings you know, then refine the confirmed music. A missing optional patch detail is not a reason to delay all composition.
 
@@ -36,10 +36,21 @@ Let the tools do the arithmetic. `chordProgression` (a `harmony` entry in `compo
   "chords": [{ "symbol": "Dm9", "bars": 2 }, { "symbol": "Bbmaj7", "bars": 2 }],
   "comp": { "partId": "keys", "pattern": "broken", "register": "mid", "voices": 4, "extensions": "ninths" },
   "bass": { "partId": "bass", "pattern": "syncopated" },
-  "feel": { "swing": 0.58, "humanizeTicks": 8 } }
+  "feel": { "swing": 0.58, "humanizeTicks": 8 },
+  "ending": { "symbol": "Dm9", "bars": 1 } }
 ```
 
-Comp patterns: sustain, stabs, backbeat, pulse-quarters, pulse-eighths, arpeggio-up, arpeggio-updown, broken, waltz. Bass patterns: roots, root-fifth, syncopated, pulse-eighths, octaves, walking. With a key, added 7ths/9ths and walking approaches stay in the key. Rhythmic patterns repeat a cycle of up to 8 bars; sustained chords up to 16.
+Comp patterns: sustain, stabs, backbeat, pulse-quarters, pulse-eighths, arpeggio-up, arpeggio-updown, broken, waltz. Bass patterns: roots, root-fifth, syncopated, pulse-eighths, octaves, walking. With a key, added 7ths/9ths and walking approaches stay in the key. Rhythmic patterns repeat a cycle of up to 8 bars; sustained chords up to 16. The cycle repeats through every listed section; `ending` replaces the last bars of the last listed section with one held chord and its bass note, so the piece lands on purpose instead of stopping mid-cycle.
+
+Drums: give the drum part a kit and let a scene `grooves` entry write it. The kit is pinned for you, and the groove has ghost notes, dynamics, the style's swing and a fill that closes each listed section:
+
+```json
+{ "parts": [{ "id": "drums", "name": "Drums", "role": "percussion", "kit": "brush-kit", "gain": 0.7, "pan": 0 }],
+  "grooves": [{ "partId": "drums", "sectionIds": ["verse", "chorus"], "style": "boom-bap", "density": "medium", "fill": "snare-roll" }],
+  "space": "room" }
+```
+
+Styles: boom-bap, four-on-the-floor, two-step, half-time, funk, straight-pop, trap, brushed-waltz, shuffle. Use a different density or style in a later section for contrast. Without a library, a Beatbox8 recipe part takes the same groove as straight steps. `space` ("room" or "hall") adds one shared reverb and a send per part by role; later scenes only add sends for new parts. A part can also take a GM `instrument` (for example `acoustic-piano`, `string-ensemble`, `fingered-bass`) instead of a recipe.
 
 Keys are short strings: `"D minor"`, `"Bb dorian"`, `"F# harmonicMinor"` (modes: major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonicMinor, melodicMinor).
 

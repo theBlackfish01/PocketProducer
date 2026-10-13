@@ -1,15 +1,19 @@
 import { barTicks, materializedNotes, NATIVE_PPQ, type NativeDocument, type NativeNote } from "./model.js";
-import { nativeModes, pitchClassNames, pitchName } from "./harmony.js";
+import { nameChord, nativeModes, pitchClassNames, pitchName } from "./harmony.js";
 
 // Deterministic symbolic facts about the music: what a careful editor reading
 // the score would notice. They guide the producer and the reviewer; none is a
 // completion gate, and nothing here claims anything about heard sound.
 
-export type MusicalityCode = "HARSH_OVER_BASS" | "OUT_OF_KEY" | "LOOPED_PART" | "FIXED_VELOCITY" | "MECHANICAL_DRUMS" | "REGISTER_CROWDING" | "VOICE_LEAPS" | "NO_LOW_END";
+export type MusicalityCode = "HARSH_OVER_BASS" | "OUT_OF_KEY" | "QUIET_MIX" | "LOOPED_PART" | "FIXED_VELOCITY" | "MECHANICAL_DRUMS" | "REGISTER_CROWDING" | "VOICE_LEAPS" | "NO_LOW_END";
 export interface MusicalityIssue { code: MusicalityCode; severity: "high" | "medium" | "low"; partId?: string; sectionId?: string; detail: string; suggestion: string }
 export interface NativeMusicality {
-  key: { tonic: string; mode: "major" | "minor"; label: string; confidence: number } | null;
+  /** An estimate. `relative` is the key with the same notes; the two are told apart by the opening bass note only. */
+  key: { tonic: string; mode: "major" | "minor"; label: string; confidence: number; relative: string } | null;
   sections: Array<{ id: string; layers: number; parts: string[]; lowest: string | null; highest: string | null }>;
+  /** Chord names by bar for each section, as the chord parts and bass spell them ("-" silent, "?" unnamed). */
+  chords: Array<{ sectionId: string; bars: string[] }>;
+  finalChord: string | null;
   issues: MusicalityIssue[];
   limits: string;
 }
@@ -55,7 +59,16 @@ export function analyzeNativeMusicality(document: NativeDocument): NativeMusical
       const r = correlation(histogram, profile.map((_, i) => profile[(i - tonic + 12) % 12]!));
       if (r > best.r) best = { tonic, mode, r };
     }
-    key = { tonic: pitchClassNames[best.tonic]!, mode: best.mode, label: `${pitchClassNames[best.tonic]} ${best.mode}`, confidence: Number(best.r.toFixed(2)) };
+    // A key and its relative share every note, so note weights alone often pick
+    // the wrong one of the pair (Dm7 Bbmaj7 Fmaj7 C7 weighs as F major). When the
+    // relative also fits and the bass opens on its tonic, the piece is in the relative.
+    const relativeOf = (of: typeof best) => ({ tonic: (of.tonic + (of.mode === "major" ? 9 : 3)) % 12, mode: of.mode === "major" ? "minor" as const : "major" as const });
+    const relative = relativeOf(best);
+    const relativeFit = correlation(histogram, (relative.mode === "major" ? majorProfile : minorProfile).map((_, i, profile) => profile[(i - relative.tonic + 12) % 12]!));
+    const opening = parts.filter((part) => part.role === "bass" && pitched(part)).flatMap((part) => notes.get(part.id)!).sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch)[0];
+    if (opening && opening.pitch % 12 === relative.tonic && relativeFit >= 0.6 && best.r - relativeFit <= 0.25) best = { ...relative, r: relativeFit };
+    const other = relativeOf(best);
+    key = { tonic: pitchClassNames[best.tonic]!, mode: best.mode, label: `${pitchClassNames[best.tonic]} ${best.mode}`, confidence: Number(best.r.toFixed(2)), relative: `${pitchClassNames[other.tonic]} ${other.mode}` };
     // Minor keys also admit the raised sixth and seventh (melodic/harmonic minor).
     allowed = new Set((best.mode === "major" ? [...nativeModes.major] : [...nativeModes.minor, 9, 11]).map((interval) => (best.tonic + interval) % 12));
   }
@@ -165,21 +178,57 @@ export function analyzeNativeMusicality(document: NativeDocument): NativeMusical
   if (!parts.some((part) => part.role === "bass") && allPitched.length && Math.min(...allPitched.map((note) => note.pitch)) >= 48 && parts.length >= 2)
     issues.push({ code: "NO_LOW_END", severity: "low", detail: "No part plays below C3, so the arrangement has no bass register", suggestion: "Add a bass line or let one part reach the low register, unless the brief wants a weightless texture" });
 
+  // Chords by bar, named from what the chord parts and the bass actually play,
+  // so a reader never has to work out a chord from pitch numbers.
+  const chordNotes = parts.filter((part) => pitched(part) && (part.role === "harmony" || part.role === "texture")).flatMap((part) => notes.get(part.id)!);
+  const named = (from: number, to: number) => {
+    const inside = chordNotes.filter((note) => note.startTick < to - beat / 4 && note.startTick + note.durationTicks > from + beat / 4);
+    if (!inside.length) return "-";
+    const under = soundingBass(from + beat / 4) ?? soundingBass(from) ?? bassNotes.filter((note) => note.startTick >= from && note.startTick < to).sort((a, b) => a.startTick - b.startTick)[0];
+    return nameChord(inside.map((note) => note.pitch), under?.pitch) ?? "?";
+  };
+  const barChord = (index: number) => {
+    const from = index * bar, half = from + bar / 2, to = from + bar, plain = (name: string) => name !== "?" && name !== "-";
+    // Two chords in one bar are two names; their notes together would spell a third chord that is not there.
+    const first = named(from, half), second = named(half, to);
+    if (plain(first) && plain(second) && first !== second) return `${first} ${second}`;
+    const whole = named(from, to);
+    if (whole !== "?") return whole;
+    return plain(first) || plain(second) ? `${first} ${second}` : "?";
+  };
+  const chords = chordNotes.length ? document.sections.map((section) => ({ sectionId: section.id, bars: Array.from({ length: section.endBar - section.startBar }, (_, offset) => barChord(section.startBar + offset)) })) : [];
+  // The last chord that sounds; null when it is not a plain chord.
+  const lastChord = chords.flatMap((entry) => entry.bars).filter((name) => name !== "-").at(-1)?.split(" ").filter((name) => name !== "-").at(-1);
+  const finalChord = lastChord && lastChord !== "?" ? lastChord : null;
+
+  // Level: nothing here was heard, but every part playing softly at a low gain
+  // is a mix that reads as near-silent once copied. Velocity scales loudness on
+  // these instruments; Beatbox8 always plays at full velocity.
+  const levels = parts.map((part) => { const list = notes.get(part.id)!; return { part, level: part.gain * (part.device.type === "beatbox8" ? 1 : list.reduce((sum, note) => sum + note.velocity, 0) / list.length) }; }).sort((a, b) => b.level - a.level);
+  // An audio clip's level is in its recording, which the score cannot read.
+  const hasAudio = document.parts.some((part) => part.sourceRegions.length > 0 || (part.libraryRegions?.length ?? 0) > 0);
+  if (!hasAudio && levels[0] && levels[0].level < 0.2) issues.push({ code: "QUIET_MIX", severity: "medium", partId: levels[0].part.id,
+    detail: `The whole mix is very quiet: the loudest part (${levels[0].part.name}) plays at about ${Math.round(levels[0].level * 100)}% of full level (gain × average velocity)`,
+    suggestion: "Raise note velocities (melodies usually 0.6–0.9) or part gains (0.5–0.75); keep the balance between parts" });
+
   const order = { high: 0, medium: 1, low: 2 };
-  return { key, sections, issues: issues.sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 10),
+  return { key, sections, chords, finalChord, issues: issues.sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 10),
     limits: "Symbolic score facts only. Intentional tension, chromatic color, repetition or sparseness can be valid; nothing here was heard." };
 }
 
 /** Review evidence: the key, issues and limits. Section layers and ranges are
  * already in the review's own section facts, so they are not repeated. */
 export function musicalityReviewEvidence(analysis: NativeMusicality) {
-  return { key: analysis.key, issues: analysis.issues, limits: analysis.limits };
+  // Repeated bars collapse ("Dm7 x2"), so a long section stays one short line.
+  const line = (bars: string[]) => bars.reduce<Array<{ name: string; count: number }>>((runs, name) => { const last = runs.at(-1); if (last?.name === name) last.count++; else runs.push({ name, count: 1 }); return runs; }, []).map((run) => run.count > 1 ? `${run.name} x${run.count}` : run.name).join(" | ");
+  return { key: analysis.key, chordsByBar: Object.fromEntries(analysis.chords.map((entry) => [entry.sectionId, line(entry.bars)])), finalChord: analysis.finalChord, issues: analysis.issues, limits: analysis.limits };
 }
 
 /** A compact form for the producer's per-turn checklist. */
 export function musicalityChecklist(analysis: NativeMusicality) {
   return {
     key: analysis.key ? `${analysis.key.label} (fit ${analysis.key.confidence})` : null,
+    ...(analysis.finalChord ? { finalChord: analysis.finalChord } : {}),
     layersBySection: Object.fromEntries(analysis.sections.map((section) => [section.id, section.layers])),
     notes: analysis.issues.slice(0, 5).map((issue) => `${issue.code}: ${issue.detail}. ${issue.suggestion}.`),
     caveat: "Score facts, not requirements."

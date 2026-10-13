@@ -1,5 +1,50 @@
 # Verification record
 
+## Music richness loop — October 12–13
+
+Pinned local binaries, isolated `_test` PostgreSQL, fixture/scripted providers and tracing disabled for every suite below; dev servers stopped for the browser suites. No provider calls in these suites. Run on the final tree of branch `music-richness-loop`.
+
+- `tsc -b`, `eslint . --max-warnings=0`, `vite build` (apps/web) and `git diff --check` pass. The existing >500 kB chunk warning remains.
+- Unit: **336/336**, 50 files. New files: `richness.test.ts` (6), `grooves.test.ts` (17), `groove-tools.test.ts` (6). New cases elsewhere:
+  - `harmony.test.ts`: `nameChord` names F–D–A–C over D as Dm7, F–A–C over D as Dm7, a rootless voicing over its root as Dm9, shows a slash bass where no chord on the bass fits, and returns null for clusters and dyads.
+  - `symbolic.test.ts`:
+    - chord names per bar, two chords in one bar named separately, and the relative-key tie-break on the Copper Window cycle;
+    - a section pattern joins existing notes unless `replace` is set, and an operation without the flag parses without it;
+    - a finding citing F3–D4–A4–C5 over a D bass gains `citedChord: "Dm7"`; one cited note, or notes from different moments, gain none.
+  - `critique.test.ts`: a six-section build climbing one semitone per section is evidenced as a rise; a piece that never leaves its opening is still blocked and the message states the measures.
+  - `brief.test.ts`: "the main section" resolves to "Main"; "A" and "Part A" still resolve exactly; two near candidates resolve to nothing; ids take no part in the near match.
+  - `convergence.test.ts`: the sixth finish in a row blocked by one requirement stops the run; a requirement that cleared or was met starts again; one that stays is counted whatever is listed beside it.
+  - `richness.test.ts`: the per-turn entry is codes and one next step under 420 bytes; an audio clip counts as a layer where it plays and a mix with clips is not judged for level.
+  - `groove-tools.test.ts`: a groove on a pitched Gakki part and a groove past 4,096 notes are correctable; `space` skips a protected part and says when nothing is left to add.
+- Integration, `--no-file-parallelism`, 180 tests. New in `native-finishing-recovery.test.ts`:
+  - the development nudge fires once before any review and the second finish proceeds;
+  - a scene part's GM kit is pinned, its groove and shared reverb are written, and without a library the reply is correctable;
+  - a second `harmonizeSection` on the same section returns `layered`, and `replace: true` leaves only the new chords;
+  - with the full batch menu, music, the `detailed` scorecard and an oversized exchange at the 96,000 ceiling, the build succeeds, every dispatched request is reserved at or under 96,000, and dropped advice is named. Before the fix this test stopped with `OPENAI_INPUT_LIMIT_EXCEEDED:96243:96000`.
+- Integration results, stated in full:
+  - **179/179** twice on the tree before the independent review's fixes.
+  - **No full run on the final tree was clean on this machine, and neither was `main`.** Five full runs each passed **179 of 180**, with one failure in a different test each time:
+    - `native-export-layout`: a sync lease lost, in code this work does not touch;
+    - "keeps initial creative bookkeeping…": the lease lost at `saveNativePlan`, straight after the claim;
+    - "compacts final system/schema/reasoning input…": the job still `running`;
+    - `model-selection`, "captures Luna xhigh…": the claim returned no job;
+    - "completes procedural inspection and review…": the job still `running`.
+  - The first three passed when run alone (8/8 for the file, 3/3 and 2/2 repeats). Every new or changed test passed in all five runs. Suite time did not grow (253–417 s against 287–317 s before).
+  - **The same suite on an untouched checkout of `main`** (a temporary worktree at `90d8566` with its own offline install and the same environment file, run straight after) also lost one lease: 167 of 168 run tests passed, and "constructs, develops, shapes and inspects…" ended `running` with the same `Provider execution context lost its active job lease` message. The 8 `hosted-access` tests were skipped there because that worktree's API would not start; a first `main` run without the environment file failed 8 and is not comparable.
+  - So the one-per-run failure is not caused by this change. The tests renew a 3-second lease every second, so any two-second stall loses it; the Docker database container stopped or restarted three times during this session. The exact stall was not identified. The two clean runs earlier in the session show the suite passes when the machine is steady.
+- One earlier run reported 10 failures while that container was failing (it exited with code 255 shortly after, and the run took 441 s). With the container restarted the same tree passed; the only reproducible failure was a new test missing its saved plan, since fixed.
+- Application browser: **18/18**. Visual: **34/34**, no snapshot changes. Hosted fixture browser: **2/2**. All three were re-run on the final tree.
+- An independent read-only review of the diff by a separate agent replayed operations stored before this change against a copy of `main` (identical parse, hash and document), compared `nativeArcEvidence` with `main` on 400 random documents (none newly rejected, 15 newly accepted), and ran 84,240 groove combinations over 13 meters (no failure, no Beatbox8 contract violation). Its findings and their fixes are listed in [status](STATUS.md).
+
+Live local builds (GPT-6 Luna, LangSmith traces imported and read, symbolic inspection only, nothing heard or copied). Total committed spend including held reservations: $0.60.
+
+| Round | Builds | Outcome |
+|---|---|---|
+| 1 | lo-fi, Copper Window, waltz | 1 saved (0 gaps, 20 calls, $0.038); 2 cancelled after looping on a completion check (48 and 65 calls) |
+| 2 | lo-fi, waltz, Copper Window, soul (extended) | 4 of 4 saved in 11–16 calls and $0.022–0.036 each; 0, 1, 0 and 0 gaps; one correctable tool error, recovered; no harmony misreading in 7 reviews |
+| 3 | sparse sketch, Copper Window | first attempt cut off by a connection outage (one paused with its draft, one failed at its deadline with no spend); resubmitted, 2 of 2 saved in 10 and 13 calls, $0.021 and $0.024; no tool errors; one review misnamed an inverted Dm7, which led to the `citedChord` annotation |
+| 4 (final code) | lo-fi, Copper Window, soul (extended) | 3 of 3 saved in 10, 10 and 25 calls, $0.020, $0.016 and $0.048; 0, 0 and 1 gaps; three correctable tool replies, each recovered; no harmony misreading in 4 reviews |
+
 ## Transition interpretation release correction — October 9–10
 
 - Regression reproduced before the fix: a captured `required` or `change` transitions role for "with a clear ending" created a hidden FX-part completion gate. Both cases now retain guidance without a role requirement. Explicit lead requirements, transition exclusions/protections and historical capture reading still pass.

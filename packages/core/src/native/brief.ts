@@ -172,9 +172,15 @@ export function resolveBriefSection(ref: BriefSectionRef, document: NativeDocume
   if (ref.position === "first") return document.sections[0];
   if (ref.position === "last") return document.sections.at(-1);
   if (!ref.name) return undefined;
-  const wanted = words(ref.name).join(" ");
+  const asked = words(ref.name), wanted = asked.join(" ");
   const matches = document.sections.filter((section) => words(section.id).join(" ") === wanted || words(section.name).join(" ") === wanted);
-  return matches.length === 1 ? matches[0] : undefined;
+  if (matches.length) return matches.length === 1 ? matches[0] : undefined;
+  // No section has exactly that name. "The main section" still points at the one
+  // section named "Main": every word of one name appears in the other. This is a
+  // fallback only, uses no word list, and two candidates mean no match.
+  const within = (inner: string[], outer: string[]) => inner.length > 0 && inner.every((word) => outer.includes(word));
+  const near = document.sections.filter((section) => { const name = words(section.name); return within(name, asked) || within(asked, name); });
+  return near.length === 1 ? near[0] : undefined;
 }
 
 export function briefSectionLabel(ref: BriefSectionRef, document?: NativeDocument | null): string {

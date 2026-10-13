@@ -272,4 +272,30 @@ describe("bounded native finishing", () => {
     expect(() => monitor.observeState("same")).toThrow(/NATIVE_INCOMPLETE:REPEATED_NO_PROGRESS/);
     expect(monitor.observeState("edited").stagnantTurns).toBe(0);
   });
+
+  it("stops after six finishes blocked by one requirement, even while other music keeps changing", () => {
+    // A live build spent 48 calls here: it kept editing other parts while one section check could never pass.
+    const monitor = new NativeConvergenceMonitor(), blocker = ["Requested 8-bar main section was not constructed"];
+    for (let attempt = 1; attempt <= 5; attempt++) expect(monitor.finishFeedback(`music-${attempt}`, blocker).repeated).toBe(false);
+    expect(() => monitor.finishFeedback("music-6", blocker)).toThrow(/NATIVE_INCOMPLETE:REPEATED_NO_PROGRESS: Six finish attempts met the same unmet requirement: Requested 8-bar main section/);
+    // The count is of finishes in a row. A requirement that cleared starts again when it returns...
+    const cleared = new NativeConvergenceMonitor(), plan = ["Record the durable musical plan"];
+    for (let attempt = 0; attempt < 3; attempt++) cleared.finishFeedback("music", blocker);
+    cleared.finishFeedback("music", plan);
+    for (let attempt = 0; attempt < 5; attempt++) expect(() => cleared.finishFeedback("music", blocker)).not.toThrow();
+    expect(() => cleared.finishFeedback("music", blocker)).toThrow(/REPEATED_NO_PROGRESS/);
+    // ...as does one that was met at a finish in between...
+    const met = new NativeConvergenceMonitor();
+    for (let attempt = 0; attempt < 5; attempt++) met.finishFeedback("music", blocker);
+    met.requirementsMet();
+    expect(() => met.finishFeedback("music", blocker)).not.toThrow();
+    // ...while one that stays unmet is counted whatever else is listed beside it.
+    const beside = new NativeConvergenceMonitor();
+    for (let attempt = 0; attempt < 5; attempt++) beside.finishFeedback("music", attempt % 2 ? [...blocker, ...plan] : blocker);
+    expect(() => beside.finishFeedback("music", [...blocker, "Requested 84 BPM, but the draft is 90 BPM"])).toThrow(/same unmet requirement: Requested 8-bar main section was not constructed\./);
+    // A different requirement has its own count.
+    const other = new NativeConvergenceMonitor();
+    for (let attempt = 0; attempt < 5; attempt++) other.finishFeedback("music", blocker);
+    expect(() => other.finishFeedback("music", ["Requested 84 BPM was not constructed"])).not.toThrow();
+  });
 });

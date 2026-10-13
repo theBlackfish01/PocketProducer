@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { getConfig } from "@pocket/core";
-import { AIMessage, briefRole, fakeModel, focusedNativeReview, nativeFormatRecoveryAvailable, scriptedBrief } from "@pocket/core/test-support";
+import { AIMessage, briefRole, createOfflineDocument, fakeModel, focusedNativeReview, nativeFormatRecoveryAvailable, scriptedBrief } from "@pocket/core/test-support";
 import { canonicalHash, claimJobById, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, getPool, jobSnapshot, loadNativePlan, nativeDraftView, nativeSnapshot, nativePlanSchema, nativeCreativeStateSchema, nativeReviewContextHash, NativeToolSession, seedNativeDocument, nativeFormOperations, saveNativePlan, saveNativeCreativeState, saveNativeReview, advanceNativePlan, reserveProviderEffect, markEffectDispatched, needsAttentionJob, resumeNativePartialJob, type JobRecord } from "@pocket/core";
 import { processJob } from "@pocket/worker";
 import { nativeFormSchema } from "@pocket/core";
@@ -523,6 +523,51 @@ it.each([96000, 128000])("survives a mixed oversized error exchange before initi
   expect(rows.every((row) => row.bounds.envelope < 80000)).toBe(true);
 }, 30_000);
 
+it("fits the full batch menu, a thin piece's scorecard and an oversized exchange under the production input ceiling", async () => {
+  config.MAX_OPENAI_INPUT_TOKENS = 96000;
+  const project = await createProject(owner, "Scorecard ceiling test");
+  const text = "An 8-bar groove";
+  const checked = await interpretNativeDirection(owner, project.id, randomUUID(), { direction: text, expectedHeadId: null }, scriptedBrief({ totalBars: { value: 8, quote: "An 8-bar groove" } }));
+  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), request: { direction: text, profile: "extended", model: "gpt-6-luna", interpretationId: checked.interpretationId }, expectedHeadId: null });
+  await dispatchOutbox();
+  const job = (await claimJobById(made.id, "finishing-test"))!;
+  await saveNativePlan(job, plan);
+  // Two looping parts on one patch: every gap of the detailed target at once.
+  const scene = { stepKey: "sketch", replaceSeed: true, title: "Thin sketch", structure: { bars: 8, sections: [{ id: "a", name: "A", startBar: 0, endBar: 4 }, { id: "b", name: "B", startBar: 4, endBar: 8 }] },
+    parts: [{ id: "keys", name: "Keys", role: "harmony", recipe: "lofi-keys", gain: 0.6, pan: 0 }, { id: "lead", name: "Lead", role: "lead", recipe: "lofi-keys", gain: 0.6, pan: 0 }],
+    patterns: [{ id: "k", partId: "keys", name: "K", lengthTicks: 3840, events: [[0, 960, 62, 0.7], [1920, 960, 65, 0.7]] }, { id: "l", partId: "lead", name: "L", lengthTicks: 3840, events: [[0, 960, 74, 0.8], [1920, 960, 77, 0.8]] }],
+    placements: [{ partId: "keys", placement: { id: "k-all", motifId: "k", startTick: 0, repeats: 8, transpose: 0 } }, { partId: "lead", placement: { id: "l-all", motifId: "l", startTick: 0, repeats: 8, transpose: 0 } }] };
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_scene", args: scene }])
+    .respondWithTools([{ name: "select_native_tools", args: { focus: "batch" } }])
+    .respond(new AIMessage({ content: "", response_metadata: { output: [{ type: "reasoning", encrypted_content: "x".repeat(60000) }] }, tool_calls: [
+      { id: "bad", name: "inspect_native_section", args: { sectionId: "missing" } }, { id: "part", name: "inspect_native_part", args: { partId: "keys" } },
+      { id: "skill", name: "read_file", args: { file_path: "/skills/native-arrangement/SKILL.md", limit: 1000 } }] }))
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "mix", operations: [{ kind: "setMix", partId: "lead", gain: 0.55 }] } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null), richness: "detailed" });
+  const snapshot = await jobSnapshot(owner, job.id);
+  expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
+  type Sheet = { arrangement?: { stillThin: string[]; next: string }; musicality?: unknown; omittedAdvice?: string[] };
+  const sheetOf = (call: { messages: Array<{ text: string }> }) => { const found = checklistIn(call.messages).text; return JSON.parse(found.slice(found.indexOf("{"))) as Sheet; };
+  // An ordinary turn carries the scorecard as codes and one next step.
+  const scorecard = sheetOf(producer.calls[1]!).arrangement!;
+  expect(scorecard.stillThin).toEqual(["THIN_ARRANGEMENT", "FLAT_SECTIONS", "NO_TRANSITIONS", "NO_ENDING", "STATIC_SOUND", "SHARED_PATCH"]);
+  expect(JSON.stringify(scorecard).length).toBeLessThan(420);
+  // The turn after the oversized exchange has the batch menu open. Advice is the last
+  // thing dropped to fit, and what was dropped is named; the request is never refused for it.
+  const pressed = producer.calls[3]!;
+  expect(JSON.stringify(pressed.messages)).not.toContain("x".repeat(1000));
+  const tight = sheetOf(pressed);
+  for (const advice of ["arrangement", "musicality"] as const) expect(Boolean(tight[advice]) || (tight.omittedAdvice ?? []).includes(advice)).toBe(true);
+  expect(tight.omittedAdvice ?? []).not.toEqual([]);
+  // Every dispatched request was reserved inside the ceiling (the last reply ends the run without one).
+  const rows = (await getPool().query<{ bounds: { envelope: number; messages: number; framing: number } | null }>("SELECT output->'inputReservationBytes' AS bounds FROM effect WHERE job_id=$1 AND step='producer-model-call'", [job.id])).rows.flatMap((row) => row.bounds ? [row.bounds] : []);
+  expect(rows.length).toBeGreaterThanOrEqual(5);
+  expect(rows.every((bounds) => bounds.envelope + bounds.messages + bounds.framing <= 96000)).toBe(true);
+}, 30_000);
+
 it("constructs, develops, shapes and inspects through compound tools with replay-safe receipts", async () => {
   const job = await create();
   const scene = { stepKey: "scene", replaceSeed: true, title: "Tick scene", structure: { bars: 4, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 4 }] },
@@ -590,6 +635,109 @@ it("compiles recipes, chord symbols, in-key moves and feel into explicit stored 
   expect(keys.some((note) => note.startTick % 480 !== 0)).toBe(true);
   expect(current.motifs.find((motif) => motif.id === "hook-up")!.notes.map((note) => note.pitch)).toEqual([72, 76, 69]);
   expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(3);
+}, 30_000);
+
+it("pins a GM kit named on a scene part, writes its groove and shared reverb, and replies correctably without a library", async () => {
+  // A real Gakki preset from the offline SDK, served by a fake pinned catalog.
+  const source = await createOfflineDocument({ validated: true });
+  let data: unknown;
+  await source.modify((t) => { data = t.createPresetFor(t.create("gakki", { soundfontId: "11111111-1111-4111-8111-111111111111", gain: 0.6 })); });
+  const preset = { entityType: "gakki", _presetName: "presets/brush-kit-fixture", data, meta: { name: "presets/brush-kit-fixture", displayName: "Brush Drum Kit", ownerName: "users/audiotool", tags: ["drums"] } };
+  const kit = { id: "presets/brush-kit-fixture", slug: "brush-kit", displayName: "Brush Drum Kit", category: "Drums", program: 40, tags: ["drums", "acoustic", "soft"] };
+  let fetched = 0;
+  const library = createNativeLibrary({ samples: { list: () => Promise.resolve({ samples: [], nextPageToken: "" }), get: () => Promise.resolve(new Error("missing")) },
+    presets: { gmInstruments: [], gmDrums: [kit], getDrums: () => { fetched++; return Promise.resolve(preset); }, get: () => Promise.resolve(preset), search: () => Promise.resolve([]) } } as never);
+  const scene = { stepKey: "kit-groove", replaceSeed: true, title: "Kit groove", structure: { bars: 4, sections: [{ id: "a", name: "A", startBar: 0, endBar: 2 }, { id: "b", name: "B", startBar: 2, endBar: 4 }] },
+    parts: [{ id: "drums", name: "Drums", role: "percussion", kit: "brush-kit", gain: 0.7, pan: 0 }, { id: "keys", name: "Keys", role: "harmony", recipe: "lofi-keys", gain: 0.6, pan: 0 }],
+    harmony: [{ sectionIds: ["a", "b"], key: "D minor", chords: [{ symbol: "Dm7", bars: 1 }, { symbol: "Gm7", bars: 1 }], comp: { partId: "keys" }, ending: { symbol: "Dm7", bars: 1 } }],
+    grooves: [{ partId: "drums", sectionIds: ["a", "b"], style: "boom-bap", bars: 2 }], space: "room" };
+  const job = await create();
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_scene", args: scene }]).respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: producer, library });
+  const snapshot = await jobSnapshot(owner, job.id);
+  expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
+  expect(fetched).toBe(1);
+  const current = (await nativeSnapshot(owner, job.projectId)).current!.document;
+  const drums = current.parts.find((item) => item.id === "drums")!;
+  expect(drums.device).toMatchObject({ type: "gakki", preset: { name: "presets/brush-kit-fixture", displayName: "Brush Drum Kit" } });
+  expect(drums.device.preset!.contentHash).toMatch(/^[a-f0-9]{64}$/);
+  const hits = materializedNotes(current, "drums");
+  expect(hits.length).toBeGreaterThan(20);
+  expect(new Set(hits.map((note) => Math.round(note.velocity * 10))).size).toBeGreaterThanOrEqual(3);
+  expect(current.reverbBus).toMatchObject({ id: "shared-room" });
+  expect(current.parts.find((item) => item.id === "keys")!.sends).toEqual([{ busId: "shared-room", gain: 0.16 }]);
+  // Without a library the same scene is a correctable reply and nothing is committed.
+  const offline = await create();
+  const fallback = { stepKey: "steps", replaceSeed: true, structure: scene.structure, parts: [{ id: "drums", name: "Drums", role: "percussion", recipe: "dry-step-kit", gain: 0.7, pan: 0 }],
+    grooves: [{ partId: "drums", sectionIds: ["a", "b"], style: "four-on-the-floor", bars: 2 }] };
+  const second = fakeModel().respondWithTools([{ name: "compose_native_scene", args: { ...scene, stepKey: "no-library" } }]).respondWithTools([{ name: "compose_native_scene", args: fallback }]).respond(new AIMessage("Finished"));
+  await processJob(offline, { scriptedModel: second, library: createNativeLibrary(null) });
+  expect(JSON.stringify(second.calls[1]!.messages)).toContain("REMOTE_LIBRARY_UNAVAILABLE");
+  const steps = (await nativeSnapshot(owner, offline.projectId)).current!.document;
+  expect(steps.parts.find((item) => item.id === "drums")!.device.type).toBe("beatbox8");
+  expect(materializedNotes(steps, "drums").every((note) => note.velocity === 1 && note.startTick % 240 === 0)).toBe(true);
+}, 30_000);
+
+it("nudges a thin new piece toward development once, before any review is spent", async () => {
+  const project = await createProject(owner, "Development nudge test");
+  const text = "An 8-bar groove";
+  const checked = await interpretNativeDirection(owner, project.id, randomUUID(), { direction: text, expectedHeadId: null }, scriptedBrief({ totalBars: { value: 8, quote: "An 8-bar groove" } }));
+  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), request: { direction: text, profile: "standard", model: "gpt-6-luna", interpretationId: checked.interpretationId }, expectedHeadId: null });
+  await dispatchOutbox();
+  const job = (await claimJobById(made.id, "finishing-test"))!;
+  await saveNativePlan(job, plan);
+  const scene = { stepKey: "sketch", replaceSeed: true, title: "Thin sketch", structure: { bars: 8, sections: [{ id: "a", name: "A", startBar: 0, endBar: 4 }, { id: "b", name: "B", startBar: 4, endBar: 8 }] },
+    parts: [{ id: "keys", name: "Keys", role: "harmony", recipe: "lofi-keys", gain: 0.6, pan: 0 }, { id: "bass", name: "Bass", role: "bass", recipe: "dusty-bass", gain: 0.7, pan: 0 }],
+    patterns: [{ id: "k", partId: "keys", name: "K", lengthTicks: 3840, events: [[0, 960, 62, 0.7], [1920, 960, 65, 0.7]] }, { id: "b", partId: "bass", name: "B", lengthTicks: 3840, events: [[0, 960, 38, 0.8], [1920, 960, 45, 0.8]] }],
+    placements: [{ partId: "keys", placement: { id: "k-all", motifId: "k", startTick: 0, repeats: 8, transpose: 0 } }, { partId: "bass", placement: { id: "b-all", motifId: "b", startTick: 0, repeats: 8, transpose: 0 } }] };
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_scene", args: scene }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "ending", operations: [{ kind: "addNotes", partId: "bass", notes: [{ id: "last", startTick: 7 * 3840 + 3600, durationTicks: 240, pitch: 38, velocity: 0.8 }] }] } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respond(new AIMessage("Finished"));
+  const reviewer = fakeModel().respond(good());
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null), richness: "focused" });
+  const snapshot = await jobSnapshot(owner, job.id);
+  expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
+  // Once music exists, the checklist carries the scorecard.
+  expect(checklistIn(producer.calls[1]!.messages).text).toContain('"arrangement"');
+  // The first finish names what is thin and spends no review.
+  const nudge = JSON.stringify(producer.calls[2]!.messages);
+  expect(nudge).toMatch(/category\\*":\\*"development/);
+  expect(nudge).toContain("THIN_ARRANGEMENT");
+  expect(nudge).toContain("NO_ENDING");
+  // The second finish proceeds although the piece is still below target: one nudge, never a gate.
+  expect(reviewer.calls).toHaveLength(1);
+  expect(producer.calls).toHaveLength(4);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(2);
+}, 30_000);
+
+it("says when a section pattern joined existing notes, and writes over them with replace", async () => {
+  const job = await create("standard", "gpt-6-luna");
+  await saveNativePlan(job, plan);
+  const scene = { stepKey: "sketch", replaceSeed: true, structure: { bars: 4, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 4 }] },
+    parts: [{ id: "keys", name: "Keys", role: "harmony", recipe: "lofi-keys", gain: 0.6, pan: 0 }] };
+  const chords = (stepKey: string, perBar: number, replace?: boolean) => ({ stepKey, operations: [{ kind: "harmonizeSection", partId: "keys", sectionId: "whole", cycleBars: 1,
+    chords: Array.from({ length: perBar }, (_, index) => ({ barOffset: index / perBar, durationBars: 0.125, pitches: [53, 62, 69, 72], velocity: 0.5 })), ...(replace ? { replace } : {}) }] });
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_scene", args: scene }])
+    .respondWithTools([{ name: "apply_native_batch", args: chords("busy", 4) }])
+    .respondWithTools([{ name: "apply_native_batch", args: chords("meant-to-thin", 2) }])
+    .respondWithTools([{ name: "apply_native_batch", args: chords("thin", 2, true) }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respond(new AIMessage("Finished"));
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null) });
+  const snapshot = await jobSnapshot(owner, job.id);
+  expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
+  // The first pattern met an empty section: nothing to report.
+  expect(JSON.stringify(producer.calls[2]!.messages.at(-1))).not.toContain("layered");
+  // The second joined it, and the reply says so and names the way to write over it.
+  const joined = JSON.stringify(producer.calls[3]!.messages.at(-1));
+  expect(joined).toContain("keys already had 64 notes in whole");
+  expect(joined).toContain("replace: true");
+  // With replace the section holds only the new chords, and no notice is given.
+  expect(JSON.stringify(producer.calls[4]!.messages.at(-1))).not.toContain("layered");
+  const saved = (await nativeDraftView(owner, job.projectId, job.id)).document!;
+  expect(materializedNotes(saved, "keys")).toHaveLength(32);
 }, 30_000);
 
 it("keeps incremental scenes and recent inspection context after music, with focused sound and full edits on demand", async () => {
