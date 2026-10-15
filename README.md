@@ -6,9 +6,9 @@
   <p><a href="#try-it-locally">Try it locally</a> · <a href="#the-creative-loop">The creative loop</a> · <a href="#how-it-works">Architecture</a> · <a href="docs/PROJECT-WALKTHROUGH.md">Project walkthrough</a></p>
 </div>
 
-![Pocket Producer Listening Room: an editable arrangement beside the Producer conversation](docs/assets/listening-room.png)
+![Pocket Producer Listening Room: a saved ambient waltz, with its musical parts and Producer updates](docs/assets/listening-room.jpg)
 
-*Actual application, running with isolated deterministic test data. This screenshot demonstrates the interface—not live-model musical quality or rendered audio.*
+*Captured from the deployed app on October 15, 2026: an existing test arrangement in the current Listening Room. Explore its sections and parts, ask for changes, or copy a saved version to Audiotool.*
 
 ## From a feeling to something you can shape
 
@@ -47,8 +47,6 @@ The result is **editable music**, not just a flattened audio file. When you're r
 - **Docker with Compose**, running, for PostgreSQL 17.
 
 ### Start with the no-cost demo
-
-This repository is private; cloning requires access through your GitHub account.
 
 ```sh
 git clone https://github.com/theBlackfish01/PocketProducer.git

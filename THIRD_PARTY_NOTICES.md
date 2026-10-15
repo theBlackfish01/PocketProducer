@@ -1,6 +1,6 @@
 # Dependencies and asset provenance
 
-Original Pocket Producer code and documentation are licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses; this note does not replace their license texts or grant rights to third-party music or trademarks. Repository visibility remains private until the owner changes it explicitly.
+Original Pocket Producer code and documentation are licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses; this note does not replace their license texts or grant rights to third-party music or trademarks.
 
 ## Software
 
@@ -12,7 +12,7 @@ The locally owned UI wrappers originated from the shadcn/Base UI component workf
 
 - The Pocket Producer mark is an SVG interpretation of the logo reference supplied for this project. The wordmark is live text. No claim of trademark registration is made.
 - Hero and section artwork is composed from local CSS/SVG shapes.
-- README screenshots are captures of the actual application using isolated deterministic test data, not images of a live user's session or claims of model-generated musical quality.
+- The current README screenshot was captured from the deployed application on October 15, 2026, using an existing project created for release testing. It shows the saved score and public-facing Producer updates, not private traces or a claim of heard musical quality. The older fixture screenshot remains a historical asset.
 - Test audio is synthesized by repository scripts. No commercial track or external sample pack is bundled for the demo.
 - Original sound recipes and musical examples describe editable musical construction; they are not recordings or guarantees of acoustic quality.
 - User uploads and Audiotool library resources are not licensed by this repository. Users must have the necessary rights for their use; resource discovery or copying is not a rights determination.

@@ -1,5 +1,13 @@
 # Live implementation status
 
+## Storage recovery and deployed README capture — 2026-10-15
+
+The owner expanded the existing Railway PostgreSQL volume to 5,000 MB. Both services are online again, the volume reports approximately 1.08 GB used, and the public `/healthz` endpoint returns HTTP 200 with `status: ok`. Browser checks loaded preserved saved arrangements and section-level note inspection. The interrupted October Groove revision remains paused with its saved version intact; it was not retried. No projects or database records were deleted, and no new generation or Audiotool copy was started for these checks.
+
+Replaced the README's fixture image with `docs/assets/listening-room.jpg`, a cropped browser capture of the deployed October Waltz Check test arrangement. Updated its provenance and removed stale private-repository wording after verifying the repository is public. This is a documentation/image-only update; runtime behavior is unchanged. Checked the captured image visually, its local reference and JPEG dimensions, and `git diff --check`.
+
+The confirmed outage was PostgreSQL disk exhaustion during checkpoint writes, followed by failure-report persistence and worker shutdown. More capacity restores headroom but does not bound growth. Next: measure table/index/TOAST/WAL usage; design conservative retention for fully settled, completed agent threads (never active, paused or unresolved-effect work); preserve canonical music, versions and accounting; add storage alerts and safe backpressure/degraded-service behavior. The checkpoint store currently retains historical execution state without an application cleanup policy, but its exact share of disk usage has not been measured. No retention, cleanup or runtime resilience changes were applied in this documentation update.
+
 ## Release validation and minimal context repair — 2026-10-13
 
 Validated the music-richness and start-page contour commits against deployed `90d8566`. Six default-96,000-input integration failures also reproduced on that deployed base; they were not introduced by the new music/UI work. The unmodified candidate passed all 180 integration tests at the existing local 128,000 setting. These are conservative request-size bounds, not measured model tokens.
