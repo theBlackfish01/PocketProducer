@@ -9,11 +9,13 @@ import { z } from "zod";
 import { registerAuth } from "./auth.js";
 import { registerWeb } from "./web.js";
 import { registerActivityRoutes } from "./activity-stream.js";
-import { assistMusicalPrompt, byteRange, issue, clearConnectedProfile, connectedAudiotoolProfile, fundedProducerModels, selectableProducerModelSchema as producerModelSchema, type OAuthFetch } from "@pocket/core";
+import { ensureDatabaseHeadroom } from "@pocket/core/maintenance";
+import { startRuntimeMetrics } from "@pocket/core/runtime-metrics";
+import { assistMusicalPrompt, byteRange, issue, clearConnectedProfile, connectedAudiotoolProfile, fundedProducerModels, selectableProducerModelSchema as producerModelSchema, type OAuthFetch } from "@pocket/core/api";
 import {
   audiotoolSessionStatus, cancelJob, createAudiotoolServerClient, createNativeLibrary, createProject, decodeWav, encodeWav, deleteAudiotoolSession, getConfig, getPool, getProjectSnapshot,
   NATIVE_RECIPE_VERSION, abandonNativePartialJob, createNativeJob, discoverNativeCapabilities, extendNativePartialJob, findCommandJob, getNativeRevision, insertAsset, inspectNativeCapability, jobSnapshot, listNativeSoundFeedback, listProjects, nativeDraftView, nativePresetRecipes, nativeSnapshot, providerAvailability, readNativeRecipe, requireProject, interpretNativeDirection, resumeNativePartialJob, safeStoragePath, saveAudiotoolSession, saveNativeSoundFeedback, selectNativeRevision, storeImmutableAudio
-} from "@pocket/core";
+} from "@pocket/core/api";
 
 export async function createApi(oauthTransport?: OAuthFetch) {
 const config = getConfig();
@@ -24,6 +26,9 @@ await app.register(multipart, { limits: { fileSize: config.MAX_UPLOAD_BYTES, fil
 
 const idSchema = z.uuid();
 await registerAuth(app, oauthTransport);
+app.addHook("preHandler", async (request) => {
+  if (request.method === "POST" && /^\/api\/v1\/projects\/[^/]+\/(prompt-assistance|native\/(interpretations|constructions|revisions|synchronizations|requests\/[^/]+\/continue))$/.test(request.url.split("?")[0]!)) await ensureDatabaseHeadroom();
+});
 registerActivityRoutes(app, config.APP_ORIGIN);
 
 app.setErrorHandler((error: unknown, request, reply) => {
@@ -314,6 +319,8 @@ return app;
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
 const config = getConfig(), app = await createApi();
+const stopMetrics = startRuntimeMetrics("api");
+app.addHook("onClose", () => { stopMetrics(); return Promise.resolve(); });
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { void app.close().then(() => process.exit(0)); });
 await app.listen({ host: config.APP_ENV === "production" ? "0.0.0.0" : "127.0.0.1", port: config.PORT ?? config.API_PORT });
 }

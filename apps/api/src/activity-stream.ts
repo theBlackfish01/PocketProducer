@@ -1,6 +1,6 @@
 import type { ServerResponse } from "node:http";
 import type { FastifyInstance } from "fastify";
-import { readProjectActivity } from "@pocket/core";
+import { readProjectActivity } from "@pocket/core/api";
 import { z } from "zod";
 import { stillAuthenticated } from "./auth.js";
 

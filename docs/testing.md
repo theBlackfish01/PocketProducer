@@ -1,5 +1,14 @@
 # Verification record
 
+## Checkpoint retention and memory imports — November 2
+
+- Pinned pnpm 11.19.0, local PostgreSQL 17.6 and provider-free fixtures; tracing disabled. `pnpm check` passes lint, TypeScript, 337 unit tests and production build (existing large-chunk advisory only).
+- Full integration: 194/194 pass in a sequential run. The earlier broad run had one existing activity fixture failure while other CPU-heavy checks were running; the unchanged activity file passed 7/7 in isolation before the clean full rerun. No existing assertions or input/lease limits were weakened for this release.
+- Fourteen new retention/storage cases exercise real PostgresSaver data: dry-run versus apply, all checkpoint namespaces/tables, preservation of immutable versions/steps/accounting, a successful follow-up revision after pruning, excluded active/recent/paused/failed/cancelled/uncertain work, missing completion, unknown thread formats, locked jobs, simultaneous cleanup and rollback after an injected mid-delete database failure. Storage-pressure checks retain read/health/cancel routes while rejecting new generation/copy/continuation.
+- Hosted authentication journeys: 2/2. Application browser journeys: 18/18, including fixture creation, protected revision, comparison/restore/reload, copy separation, recovery, sample search and mobile access. No paid generation or live Audiotool copy was started.
+- Memory comparison is import-only, with providers blocked and explicit local GC: full core roughly 296 MiB RSS; API entry roughly 176 MiB; config-only roughly 82 MiB. Production peak and post-generation memory still require observation; no heap ceiling was reduced.
+
+
 ## Release validation and context repair — October 13
 
 - Before the repair: the exact candidate `d02949f` passed 336 unit tests, 34 visual journeys, 18 application journeys, 2 hosted-auth fixture journeys, lint, typecheck and production build. Integration passed 180/180 at the existing local 128,000 input setting, but 174/180 at the clean-install 96,000 default. The same six failures reproduced in the two relevant integration files on deployed `90d8566` (87/93). This separates a pre-existing default-envelope problem from a regression in the new work.

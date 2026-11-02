@@ -2,9 +2,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createServer } from "node:http";
-import { getConfig, storageRoot } from "@pocket/core";
+import { getConfig } from "@pocket/core/config";
+import { storageRoot } from "@pocket/core/storage";
+import { startRuntimeMetrics } from "@pocket/core/runtime-metrics";
 
 const config = getConfig(); // Fail closed before binding any public socket.
+startRuntimeMetrics("supervisor");
 if (!config.SERVE_WEB || config.DEV_LOCAL_AUTH) throw new Error("Hosted startup requires built-web serving and individual authentication");
 await mkdir(storageRoot(), { recursive: true });
 await access(storageRoot(), constants.W_OK);

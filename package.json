@@ -20,6 +20,7 @@
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "tsx packages/core/src/db/migrate.ts",
+    "db:maintenance": "tsx scripts/maintain-database.ts",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "generate:fixtures": "tsx scripts/generate-fixtures.ts",
     "lint": "eslint . --max-warnings=0",

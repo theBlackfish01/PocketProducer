@@ -1,5 +1,15 @@
 # Live implementation status
 
+## Bounded checkpoint retention and RAM diagnostics — 2026-11-02
+
+Implemented opt-in cleanup of completed, fully settled agent execution checkpoints after seven days. Cleanup runs between jobs in bounded, transactional batches with an advisory lock, job-lock recheck and ordinary vacuum. Active, paused, failed, cancelled, unknown-charge and uncertain-copy work is excluded. Canonical music, revisions, job steps, owned sources, accounting and Audiotool copy records remain intact, even though the owner authorized deletion of existing data if necessary.
+
+Added private per-process memory and database/relation/WAL size reports, a dry-run maintenance command and independently configurable storage admission protection. At 95% of configured database volume capacity, new generation/copy admission and queue claiming stop; saved-work reads, cancellation and already-running jobs remain available. This is a database-plus-WAL estimate, not a filesystem free-space guarantee. Probe failures do not introduce a new outage. Railway's custom metric notifications require Pro; this release adds no paid plan or external notification endpoint.
+
+The API and supervisor now import narrower core entry points instead of loading the worker's producer graph. Same implementations, model limits and budgets. Isolated local imports measured about 176 MiB API RSS and 82 MiB config-only RSS versus roughly 296 MiB for the full core; these are not sustained production savings. Before deployment Railway reported about 2.93 GB API RAM and 4.52 GB used on the 5 GB PostgreSQL volume.
+
+Local lint, TypeScript, 337 unit tests, production build, the sequential 194-test integration run, 2 hosted-auth journeys and 18 application browser journeys pass. The first broad integration run had one existing activity fixture failure while other CPU-heavy checks ran; that file then passed unchanged in isolation and the full sequential rerun passed. Production measurements follow. Retention remains disabled until the first production dry-run report is reviewed. See [deployment controls](RAILWAY-DEPLOYMENT.md) and [verification record](testing.md).
+
 ## Storage recovery and deployed README capture — 2026-10-15
 
 The owner expanded the existing Railway PostgreSQL volume to 5,000 MB. Both services are online again, the volume reports approximately 1.08 GB used, and the public `/healthz` endpoint returns HTTP 200 with `status: ok`. Browser checks loaded preserved saved arrangements and section-level note inspection. The interrupted October Groove revision remains paused with its saved version intact; it was not retried. No projects or database records were deleted, and no new generation or Audiotool copy was started for these checks.

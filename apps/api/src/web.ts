@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { resolve, join, extname } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { REPOSITORY_ROOT } from "@pocket/core";
+import { REPOSITORY_ROOT } from "@pocket/core/config";
 
 /** Serve only files inventoried in the built frontend. Never expose the repository. */
 export async function registerWeb(app: FastifyInstance) {

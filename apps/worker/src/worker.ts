@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { awaitAllCallbacks } from "@langchain/core/callbacks/promises";
+import { createDatabaseMaintenance, databaseUnderPressure } from "@pocket/core/maintenance";
+import { startRuntimeMetrics } from "@pocket/core/runtime-metrics";
 import { boundedStopCodes, findCodedError, handoffNativeToLuna, hasErrorCode, isRateLimited, isRecoverableInterruption, isTransientNetworkError, nativeMappingVersion, uncertainOutcomeCodes } from "@pocket/core";
 import {
   appendAttemptEvent, canonicalHash, claimNextJob, closePool, commitCancelled, createAudiotoolServerClient, dispatchOutbox, expireJob, failJob, getConfig, heartbeat, isCancelled, jobNativeRunLimits, needsAttentionJob, providerAvailability, readProjectActivity, requeueJob, profileOwnedSourceWav, safeStoragePath, AudiotoolSessionExpiredError, JobControlError, NativeToolSession, advanceNativeSync, applyNativeOperations, applyNativeSnapshot, beginNativeSync, beginOwnedSampleUpload, commitNativeRevision, createNativeLibrary, finishNativeSync, finishOwnedSampleUpload, getNativeRevision, getPool, markOwnedSampleUncertain, nativeDocumentSchema, nativeHasMaterial, nativeStructuralReadback, produceNative, readyOwnedSampleResources, resolveNativePresets, resolveNativeSamples, seedNativeDocument, setNativeProtections, validateNativeOffline, type JobRecord, type NativeLibrary, type NativeLibraryClient, type NativeRemoteClient, type NativeSource
@@ -344,6 +346,8 @@ export async function processJob(job: JobRecord, offlineNative?: OfflineNativeCo
 
 export async function runWorker(): Promise<void> {
   await getPool().query("SELECT 1");
+  const maintenance = createDatabaseMaintenance();
+  const stopMetrics = startRuntimeMetrics("worker");
   process.send?.("worker-ready");
   const heartbeat = setInterval(() => { if (process.connected) process.send?.("worker-heartbeat"); }, 5_000);
   heartbeat.unref();
@@ -352,8 +356,10 @@ export async function runWorker(): Promise<void> {
   process.on("SIGTERM", () => { stopping = true; });
   process.stdout.write(`Pocket Producer worker ${workerId} started\n`);
   while (!stopping) {
+    await maintenance();
+    if (stopping) break;
     await dispatchOutbox();
-    const job = await claimNextJob(workerId);
+    const job = await databaseUnderPressure() ? null : await claimNextJob(workerId);
     if (job) await processJob(job);
     else await new Promise((resolve) => setTimeout(resolve, 600));
   }
@@ -362,6 +368,7 @@ export async function runWorker(): Promise<void> {
   try { await awaitAllCallbacks(); }
   catch { process.stderr.write("Trace callback flush failed\n"); }
   await closePool();
+  stopMetrics();
   process.stdout.write("Worker stopped after current job\n");
 }
 

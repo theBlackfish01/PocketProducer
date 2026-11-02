@@ -44,6 +44,11 @@ const configSchema = z.object({
   DEV_LOCAL_AUTH: booleanString.default(true),
   FIXTURE_MODE: booleanString.default(false),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(1).default(1),
+  CHECKPOINT_RETENTION_ENABLED: booleanString.default(false),
+  CHECKPOINT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(7),
+  RUNTIME_METRICS_ENABLED: booleanString.default(false),
+  // A conservative database + WAL budget, not an exact filesystem free-space probe.
+  DATABASE_VOLUME_CAPACITY_MB: z.coerce.number().int().min(0).max(1_000_000).default(0),
   JOB_LEASE_SECONDS: z.coerce.number().int().min(3).max(300).default(45),
   MAX_MODEL_CALLS_PER_JOB: z.coerce.number().int().min(0).max(300).default(80),
   MAX_OPENAI_INPUT_TOKENS: z.coerce.number().int().min(1_000).max(256_000).default(96_000),

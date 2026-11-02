@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { devOwnerId, getConfig, hostedIdentity, endHostedSession, startHostedSession, sessionSeconds, beginAudiotoolSignIn, finishAudiotoolSignIn, throttleHostedWrite, type OAuthFetch } from "@pocket/core";
+import { devOwnerId, getConfig, hostedIdentity, endHostedSession, startHostedSession, sessionSeconds, beginAudiotoolSignIn, finishAudiotoolSignIn, throttleHostedWrite, type OAuthFetch } from "@pocket/core/api";
 import { z } from "zod";
 
 declare module "fastify" { interface FastifyRequest { ownerId: string } }
