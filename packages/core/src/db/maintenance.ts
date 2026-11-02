@@ -29,6 +29,44 @@ async function hasCheckpoints(client: pg.PoolClient) {
   return result.rows[0]!.present;
 }
 
+/** Explicit, offline-only reclamation. Never called by the worker's retention loop.
+ * Discards provider execution history, not canonical drafts, versions or the ledger.
+ * A resumed native job gets a new attempt/thread and rebuilds from domain records.
+ * Unknown provider liabilities remain unknown and still block unsafe recovery.
+ */
+export async function discardExecutionCheckpoints() {
+  if (!getConfig().HOSTED_MAINTENANCE) throw new Error("CHECKPOINT_RESET_REQUIRES_MAINTENANCE");
+  const client = await getPool().connect();
+  let committed = false;
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL statement_timeout='30s'");
+    await client.query("SET LOCAL lock_timeout='2s'");
+    const lock = await client.query<{ acquired: boolean }>("SELECT pg_try_advisory_xact_lock(hashtext('pocket-checkpoint-retention')) AS acquired");
+    if (!lock.rows[0]!.acquired) throw new Error("CHECKPOINT_MAINTENANCE_BUSY");
+    // Also serialize against job creation/claims: maintenance must already be
+    // serving on every replica, with API and worker processes stopped.
+    await client.query("LOCK TABLE public.job IN SHARE ROW EXCLUSIVE MODE");
+    const active = await client.query(`SELECT 1 FROM public.job WHERE state IN ('queued','running','cancel_requested')
+      OR lease_owner IS NOT NULL OR lease_until IS NOT NULL OR attempt_id IS NOT NULL LIMIT 1`);
+    if (active.rowCount) throw new Error("CHECKPOINT_RESET_HAS_ACTIVE_JOBS");
+    if (!await hasCheckpoints(client)) throw new Error("CHECKPOINT_TABLES_MISSING");
+    await client.query("LOCK TABLE public.checkpoint_writes, public.checkpoint_blobs, public.checkpoints IN ACCESS EXCLUSIVE MODE");
+    const before = await client.query<{ bytes: string; rows: string }>(`SELECT
+      (pg_total_relation_size('public.checkpoint_writes') + pg_total_relation_size('public.checkpoint_blobs') + pg_total_relation_size('public.checkpoints'))::text AS bytes,
+      ((SELECT count(*) FROM public.checkpoint_writes) + (SELECT count(*) FROM public.checkpoint_blobs) + (SELECT count(*) FROM public.checkpoints))::text AS rows`);
+    // RESTRICT is intentional. Never follow foreign keys into unrelated tables.
+    // Unlike DELETE/VACUUM this releases the table files without a large rewrite.
+    await client.query("TRUNCATE ONLY public.checkpoint_writes, ONLY public.checkpoint_blobs, ONLY public.checkpoints CONTINUE IDENTITY RESTRICT");
+    await client.query("COMMIT");
+    committed = true;
+    return { discardedRows: Number(before.rows[0]!.rows), previousTableBytes: Number(before.rows[0]!.bytes) };
+  } finally {
+    if (!committed) await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+  }
+}
+
 export async function pruneCheckpoints(options: { apply?: boolean; retentionDays?: number; limit?: number } = {}) {
   const retentionDays = options.retentionDays ?? getConfig().CHECKPOINT_RETENTION_DAYS;
   const limit = options.limit ?? 10;

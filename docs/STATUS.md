@@ -1,5 +1,11 @@
 # Live implementation status
 
+## Physical checkpoint reclamation — 2026-11-02
+
+The owner confirmed that reusable internal pages are insufficient and authorized deletion of old data to recover physical disk space. The volume still used about 4.63 GB of 5 GB after ordinary retention/vacuum; database files remained 4.25 GB. Added an explicit maintenance-only CLI mode to truncate just the three LangGraph execution tables, retaining canonical drafts, immutable versions, plans, reviews, sources, copy records and accounting. It refuses active/queued work or uncleared leases, serializes with retention and jobs, and rolls back atomically on failure. It is not invoked by ordinary startup or background cleanup. Historical checkpoint messages are deliberately discarded, including paused/failed graph history; native continuation uses a new attempt and the preserved domain records. See the Railway runbook for the one-time operation and removal of any temporary pre-deploy command.
+
+Eight isolated PostgreSQL regression cases pass, including physical file-size reduction, unchanged saved music/steps/effects, successful real-graph fixture continuation after reset, active-work refusal and injected truncate rollback. The complete 203-test integration suite, 337 unit tests, lint, TypeScript and production build pass. Production reclamation is pending; do not yet claim the live disk has been reduced.
+
 ## Bounded checkpoint retention and RAM diagnostics — 2026-11-02
 
 Implemented opt-in cleanup of completed, fully settled agent execution checkpoints after seven days. Cleanup runs between jobs in bounded, transactional batches with an advisory lock, job-lock recheck and ordinary vacuum. Active, paused, failed, cancelled, unknown-charge and uncertain-copy work is excluded. Canonical music, revisions, job steps, owned sources, accounting and Audiotool copy records remain intact, even though the owner authorized deletion of existing data if necessary.

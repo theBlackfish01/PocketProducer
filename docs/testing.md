@@ -1,5 +1,9 @@
 # Verification record
 
+## Physical checkpoint reset — November 2
+
+`tests/integration/checkpoint-reset.test.ts` creates and drops its own randomly named `_test` database. Eight passing cases cover maintenance-mode refusal, queued/running/cancel-requested/uncleared-lease refusal, contention with scheduled retention, atomic rollback after a truncate-trigger failure, physical table-size reduction, identical saved music/draft/plan/step/accounting records, and successful scripted graph completion after continuing a paused draft with a fresh attempt. Provider access and tracing remain disabled. Full `pnpm test:integration` passes 203 tests; `pnpm check` passes lint, TypeScript, 337 unit tests and production build. Production operation evidence will be recorded after completion.
+
 ## Checkpoint retention and memory imports — November 2
 
 - Pinned pnpm 11.19.0, local PostgreSQL 17.6 and provider-free fixtures; tracing disabled. `pnpm check` passes lint, TypeScript, 337 unit tests and production build (existing large-chunk advisory only).
