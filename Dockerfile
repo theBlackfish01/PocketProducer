@@ -9,5 +9,8 @@ COPY packages/core/package.json packages/core/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build && mkdir -p /data && chown node:node /data
+# Bound glibc arena retention after Nexus WASM compilation. These are allocator
+# reuse/release settings, not heap or container memory limits (see the runbook).
+ENV MALLOC_ARENA_MAX=2 MALLOC_TRIM_THRESHOLD_=131072 MALLOC_MMAP_THRESHOLD_=131072
 ENV NODE_ENV=production APP_ENV=production DEV_LOCAL_AUTH=false SERVE_WEB=true OBJECT_STORAGE_LOCAL_ROOT=/data/audio
 CMD ["node", "--import", "tsx", "scripts/container-entry.ts"]

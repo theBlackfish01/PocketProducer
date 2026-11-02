@@ -37,6 +37,19 @@ The hosted demo uses `NODE_OPTIONS=--max-old-space-size=1536` (September 30 cost
 
 Apply or revert only while generation/copy is idle, since variable updates restart the app. Roll back this trial by removing `NODE_OPTIONS` (or restoring its previous value) and redeploying. Compare memory after representative jobs and an idle period, not just immediately after restart. Do not promise savings from a fresh-process reading alone. Leave serverless sleeping disabled while this deployment uses continuous durable-job polling.
 
+The Linux image also sets `MALLOC_ARENA_MAX=2`, `MALLOC_TRIM_THRESHOLD_=131072` and `MALLOC_MMAP_THRESHOLD_=131072`. A network-disabled Node 22.14.0 comparison in the final image retained roughly 2.19 GB RSS with the default allocator versus 0.63 GB with all three settings, after three identical full-document validations and an idle period. Both used the existing 1,536 MiB V8 old-space limit. Arena-only and threshold-only trials were less effective. This is native allocator retention, largely outside the JavaScript heap; a smaller V8 heap limit would not address it. These glibc settings limit allocator arenas and keep allocation/release thresholds static ([glibc reference](https://sourceware.org/glibc/manual/latest/html_node/Memory-Allocation-Tunables.html)); they do not cap the application's usable RAM, disable SDK validation or recycle a running job.
+
+The defaults take effect on the **app image's next deployment**; no PostgreSQL setting or storage reset is needed. Railway app variables with the same names override image defaults. Leave existing CPU/RAM ceilings and `NODE_OPTIONS` unchanged. Compare private worker RSS and Railway service RAM after several generations/copies and at least five minutes idle before estimating savings. Local fixture figures are not a production billing guarantee. Roll back by redeploying the previous image and removing any explicit allocator overrides. `tests/fixtures/native-memory-probe.ts` is a repeatable offline reproduction:
+
+```sh
+docker build -t pocket-producer:readiness .
+docker run --rm --network none --env NODE_OPTIONS=--max-old-space-size=1536 --entrypoint node pocket-producer:readiness --import tsx tests/fixtures/native-memory-probe.ts
+# Unmodified glibc comparison in the same image (env removes its Docker defaults):
+docker run --rm --network none --env NODE_OPTIONS=--max-old-space-size=1536 --entrypoint env pocket-producer:readiness -u MALLOC_ARENA_MAX -u MALLOC_TRIM_THRESHOLD_ -u MALLOC_MMAP_THRESHOLD_ node --import tsx tests/fixtures/native-memory-probe.ts
+```
+
+Build the candidate image locally before these commands. The probe uses fixed musical fixtures, clears provider/tracing keys, verifies identical validated readback across runs, and emits only resource counts/timings. It does not contact a database, model or Audiotool. Do not make its RSS a cross-platform CI assertion: Windows and Linux allocators behave differently.
+
 ## 3. Exact service variables
 
 ### Checkpoint retention and storage pressure

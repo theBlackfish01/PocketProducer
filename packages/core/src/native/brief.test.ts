@@ -9,6 +9,25 @@ const melody = applyNativeOperations(seedNativeDocument("A melody"), [{ kind: "r
 const empty = { totalBars: null, tempoBpm: null, meter: null, sections: [], chordProgressions: [], roles: [], keep: [], construction: [], guidance: [] };
 
 describe("captured brief validation", () => {
+  it("checks a shared section-length clause without inventing positions or accepting name-only evidence", () => {
+    const quote = "three eight-bar sections: Arrival, Lift, and Afterglow";
+    const direction = `Make a 24-bar piece with ${quote}.`;
+    const sections = ["Arrival", "Lift", "Afterglow"].map((name) => ({ section: briefSection(name), bars: 8, startBar: null, endBar: null, quote }));
+    const brief = capturedBrief(direction, { sections });
+    expect(brief.rejected).toEqual([]);
+    expect(brief.sections).toEqual(sections);
+    const built = applyNativeOperations(melody, [{ kind: "setStructure", bars: 24, sections: sections.map((item, index) => ({ id: item.section.name.toLowerCase(), name: item.section.name, startBar: index * 8, endBar: (index + 1) * 8, intent: "" })) }]);
+    expect(nativeCompletionIssues(built, brief, "generation")).toEqual([]);
+    built.sections[1]!.endBar = 15;
+    expect(nativeCompletionIssues(built, brief, "generation")).toContain("Requested 8-bar Lift was not constructed");
+    for (const invalid of [sections.map((item) => ({ ...item, quote: item.section.name })), sections.map((item, index) => ({ ...item, startBar: index * 8 + 1, endBar: (index + 1) * 8 }))]) {
+      const rejected = capturedBrief(direction, { sections: invalid });
+      expect(rejected.sections).toEqual([]);
+      expect(rejected.rejected).toHaveLength(3);
+      expect(rejected.rejected.every((item) => item.reason === "The section length or position could not be verified from this quote")).toBe(true);
+    }
+  });
+
   it.each(["required", "change"] as const)("keeps a %s transition interpretation as guidance, not an extra FX-part gate", (kind) => {
     const direction = "Bring back the lead in Return with a clear ending";
     const brief = capturedBrief(direction, { roles: [
