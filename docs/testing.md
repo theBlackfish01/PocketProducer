@@ -2,7 +2,7 @@
 
 ## Physical checkpoint reset — November 2
 
-`tests/integration/checkpoint-reset.test.ts` creates and drops its own randomly named `_test` database. Eight passing cases cover maintenance-mode refusal, queued/running/cancel-requested/uncleared-lease refusal, contention with scheduled retention, atomic rollback after a truncate-trigger failure, physical table-size reduction, identical saved music/draft/plan/step/accounting records, and successful scripted graph completion after continuing a paused draft with a fresh attempt. Provider access and tracing remain disabled. Full `pnpm test:integration` passes 203 tests; `pnpm check` passes lint, TypeScript, 337 unit tests and production build. Production operation evidence will be recorded after completion.
+`tests/integration/checkpoint-reset.test.ts` creates and drops its own randomly named `_test` database. Eight passing cases cover maintenance-mode refusal, queued/running/cancel-requested/uncleared-lease refusal, contention with scheduled retention, atomic rollback after a truncate-trigger failure, physical table-size reduction, identical saved music/draft/plan/step/accounting records, and successful scripted graph completion after continuing a paused draft with a fresh attempt. Provider access and tracing remain disabled. Full `pnpm test:integration` passes 203 tests; `pnpm check` passes lint, TypeScript, 337 unit tests and production build. GitHub CI `41413095669` passed all steps. Live reset removed 34,933 checkpoint rows and physically reduced the volume to 0.45 GB; authenticated saved-work reload and section inspection passed afterward, with no captured console errors. This is not a new live-provider generation or listening test.
 
 ## Checkpoint retention and memory imports — November 2
 
