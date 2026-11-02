@@ -143,7 +143,9 @@ export function createDatabaseMaintenance() {
     try {
       const report = await databaseStorageReport();
       process.stdout.write(`${JSON.stringify({ event: "database_storage", ...report })}\n`);
-      const cleanup = await pruneCheckpoints({ apply: config.CHECKPOINT_RETENTION_ENABLED });
+      // DELETE and VACUUM themselves generate WAL. Drain a nearly-full volume
+      // slowly so cleanup does not consume the headroom it is meant to protect.
+      const cleanup = await pruneCheckpoints({ apply: config.CHECKPOINT_RETENTION_ENABLED, limit: report.pressure === "normal" ? 10 : 1 });
       process.stdout.write(`${JSON.stringify({ event: "checkpoint_retention", ...cleanup })}\n`);
       if (cleanup.prunedThreads) {
         // Ordinary VACUUM reuses free pages without a table rewrite or exclusive

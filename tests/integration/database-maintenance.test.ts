@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { checkpoint, createNativeJob, createProject, dispatchOutbox, claimJobById, getConfig, getPool, getNativeRevision, nativeSnapshot, jobSnapshot } from "@pocket/core";
 import { processJob } from "@pocket/worker";
 import { createApi } from "../../apps/api/src/server.js";
-import { databaseStorageReport, ensureDatabaseHeadroom, pruneCheckpoints, storagePressure } from "@pocket/core/maintenance";
+import { createDatabaseMaintenance, databaseStorageReport, ensureDatabaseHeadroom, pruneCheckpoints, storagePressure } from "@pocket/core/maintenance";
 
 let ownerId: string;
 const projects: string[] = [];
@@ -153,4 +153,22 @@ it("reports sizes without payloads and gates new work while leaving reads and ca
     getConfig().DATABASE_VOLUME_CAPACITY_MB = 0;
     await expect(ensureDatabaseHeadroom()).resolves.toBeUndefined();
   } finally { getConfig().DATABASE_VOLUME_CAPACITY_MB = 0; await api.close(); }
+});
+
+it("drains only one completed thread per maintenance interval under storage pressure", async () => {
+  const first = await completed(), second = await completed();
+  const config = getConfig();
+  config.CHECKPOINT_RETENTION_ENABLED = true;
+  config.DATABASE_VOLUME_CAPACITY_MB = 1;
+  try {
+    const maintain = createDatabaseMaintenance();
+    await maintain();
+    const remaining = () => getPool().query("SELECT DISTINCT thread_id FROM checkpoints WHERE thread_id=ANY($1::text[])", [[first.thread, second.thread]]);
+    expect((await remaining()).rowCount).toBe(1);
+    await maintain();
+    expect((await remaining()).rowCount).toBe(1);
+  } finally {
+    config.CHECKPOINT_RETENTION_ENABLED = false;
+    config.DATABASE_VOLUME_CAPACITY_MB = 0;
+  }
 });
