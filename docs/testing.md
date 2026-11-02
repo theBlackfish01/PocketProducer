@@ -7,6 +7,7 @@
 - Fourteen new retention/storage cases exercise real PostgresSaver data: dry-run versus apply, all checkpoint namespaces/tables, preservation of immutable versions/steps/accounting, a successful follow-up revision after pruning, excluded active/recent/paused/failed/cancelled/uncertain work, missing completion, unknown thread formats, locked jobs, simultaneous cleanup and rollback after an injected mid-delete database failure. Storage-pressure checks retain read/health/cancel routes while rejecting new generation/copy/continuation.
 - Hosted authentication journeys: 2/2. Application browser journeys: 18/18, including fixture creation, protected revision, comparison/restore/reload, copy separation, recovery, sample search and mobile access. No paid generation or live Audiotool copy was started.
 - Memory comparison is import-only, with providers blocked and explicit local GC: full core roughly 296 MiB RSS; API entry roughly 176 MiB; config-only roughly 82 MiB. Production peak and post-generation memory still require observation; no heap ceiling was reduced.
+- Railway built and deployed runtime commit `e2e5dc1`. A production dry run preceded enabling seven-day retention and the 5,000 MB pressure budget. The first live batch committed eight threads / 2,709 deleted checkpoint rows without deleting saved musical versions. Live `/healthz` and authenticated browser reload/section inspection passed; no console errors were captured. Live provider generation and Audiotool copying were not exercised.
 
 
 ## Release validation and context repair — October 13
