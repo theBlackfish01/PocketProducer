@@ -28,6 +28,23 @@ The existing scene/batch tools remain the mutation path. Added guidance covers r
 
 ## Verification and release
 
-Verification is provider-free: unit regressions, real local PostgreSQL integration tests, scripted production-graph generation/revision/recovery, and desktop/phone Chromium fixtures. Screenshots are under ignored `.local/evidence/`. No paid generation, live Audiotool action, deployment or production data change is part of this implementation. See `STATUS.md` for final command results.
+Initial verification was provider-free: unit regressions, real local PostgreSQL integration tests, scripted production-graph generation/revision/recovery, and desktop/phone Chromium fixtures. The subsequently authorized release and two hosted generations are recorded below. See `STATUS.md` for command results.
 
 There is no database migration. Rollback is the previous application build; old readers tolerate the extra optional review fields and private event payload. A later hosted comparison should measure completion, calls, read/write ratio and cost using fresh requests, without changing allowances or deleting saved projects.
+
+### Hosted release verification
+
+Runtime commits `e1dbddf` and `6674061` were reviewed, pushed and deployed on November 4. CI exposed a real edge case in the first commit: the new producer guidance put a near-maximum brief five tokens above the default 96,000 input ceiling. The follow-up shortened the guidance while preserving its rules and made offline tests explicitly use the shipped default instead of inheriting a larger developer setting. No input limit, fixture assertion, lease or spending cap was raised.
+
+Two browser-driven Luna generations saved Version 1 without manual continuation:
+
+| Assistant test | Structure | Trace duration | Model / tool calls | Traced generation cost |
+| --- | --- | --- | --- | --- |
+| Copper Lantern Release Test | 24 bars, three sections, four parts, 112 BPM, 4/4 | 240.9 seconds | 17 / 18 | $0.035926 |
+| Willow Orbit Release Test | 16 bars, four sections, four parts, 90 BPM, 3/4, no percussion | 234.3 seconds | 13 / 13 | $0.027038 |
+
+Copper ran on the initial release; Willow ran after the input-envelope correction. Both traces were imported privately, including root and tool outputs. No trace errors or tool error responses appeared. Copper's first review requested an actual melodic variation; the producer changed it and saved after a second review, retaining suggestions about a lead/bass tension and ending phrase density. Willow's reviewer emitted a self-correcting observation about a bass note while declaring its single-note citation to be Dm9; the exact-voicing guard discarded that malformed finding. This demonstrates bounded filtering, not universally correct musical judgment. Willow added a pitched atmosphere layer; the request did not require exactly three parts, and no percussion part appeared.
+
+Section inspection, exact part facts, saved-version reload and Copper's version history worked. The standalone playback question preserved its text and displayed unpaid help without beginning a revision. The upload panel displayed the server's 20 MB WAV limit. No captured browser warnings/errors appeared. Bounded Railway HTTP windows contained 273 and 337 requests respectively, all 200/202; the second window's runtime log sample contained no errors. These successful UI generations do not prove Audiotool copy fidelity or heard audio quality: neither copying nor playback was performed. The traced costs exclude any untraced prompt-interpretation charge.
+
+Private screenshots, trace JSON and analysis are under `.local/reviews/release-2026-11-04/`. The two test projects are `d3bf69ba-a099-4791-93d5-78865092bdc5` and `5a42fb38-a9d5-4351-b6d2-bb2014f1d3b4`; exclude them from outside-traffic reports. No existing saved projects, budgets, database records or infrastructure settings were changed by the release.
