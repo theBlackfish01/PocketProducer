@@ -55,6 +55,7 @@ app.get("/api/v1/status", async (request) => {
       audiotoolExport: !config.AUDIOTOOL_CLIENT_ID ? "unconfigured" : session.connected ? "authorized-not-live-verified" : "awaiting-user-authorization"
     },
     uploadFormats: ["audio/wav"],
+    maxUploadBytes: config.MAX_UPLOAD_BYTES,
     ffmpeg: false,
     nativePlayback: "deferred",
     nexus: {

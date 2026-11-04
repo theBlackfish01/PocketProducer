@@ -1,3 +1,4 @@
+import { requireMusicalDirection } from "../native/request-help.js";
 import OpenAI from "openai";
 import { z } from "zod";
 import { getConfig } from "../config.js";
@@ -50,6 +51,7 @@ async function captureDirectionBrief(ownerId: string, projectId: string, key: st
   const input = nativeInterpretationSchema.parse(raw);
   z.uuid().parse(key);
   const project = await requireProject(ownerId, projectId);
+  requireMusicalDirection(input.direction);
   if (project.currentRevisionId !== input.expectedHeadId) throw issue("HEAD_CHANGED", "The selected version changed. Review your direction before sending.", 409);
   const document = input.expectedHeadId ? (await getNativeRevision(ownerId, projectId, input.expectedHeadId)).document : null;
   const section = document?.sections.find((item) => item.id === input.targetSectionId);

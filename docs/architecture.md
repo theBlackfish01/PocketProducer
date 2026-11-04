@@ -1,5 +1,7 @@
 # Architecture — native construction is the current path
 
+November 4 [request/review reliability follow-up](trace-reliability-followup-2026-11-04.md): shared unpaid playback-help admission, qualitative identity capture, explicit whole-piece revision scope, optional stored critic fact claims and bounded continuation diagnostics extend the existing workflow. There is no new service, table, renderer, automatic synchronization or allowance change.
+
 ## Arrangement scorecard, development nudge and scene building blocks (2026-10-12)
 
 The loop now measures how much music there is, not only whether it is wrong ([ADR 006](adr/006-arrangement-scorecard-and-development-nudge.md)).

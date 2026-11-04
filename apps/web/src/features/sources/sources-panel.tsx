@@ -14,6 +14,7 @@ interface SourcesPanelProps {
 }
 
 export function SourcesPanel({ projectId, assets, selectedIds, onSelection, onChanged }: SourcesPanelProps) {
+  const [maxUploadBytes, setMaxUploadBytes] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [recording, setRecording] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -29,6 +30,7 @@ export function SourcesPanel({ projectId, assets, selectedIds, onSelection, onCh
   useEffect(() => {
     const controller = new AbortController()
     lifetime.current = controller
+    void api.status().then(status => { if (!controller.signal.aborted && status.maxUploadBytes) setMaxUploadBytes(status.maxUploadBytes) }).catch(() => undefined)
     // Recover an upload whose acknowledgement arrived after a previous close.
     void refreshRef.current().catch(() => undefined)
     return () => { controller.abort(); recordingAbortRef.current?.abort(); sessionRef.current?.discard(); sessionRef.current = null }
@@ -37,7 +39,11 @@ export function SourcesPanel({ projectId, assets, selectedIds, onSelection, onCh
   const upload = async (file: File) => {
     const signal = lifetime.current?.signal
     if (!signal || signal.aborted) return
-    setBusy(true); setError(null)
+    setError(null)
+    if (fileRef.current) fileRef.current.value = ""
+    if (!/\.wav$/i.test(file.name) && !["audio/wav", "audio/x-wav", "audio/wave"].includes(file.type)) { setError("Choose a WAV file to add a sound."); return }
+    if (maxUploadBytes && file.size > maxUploadBytes) { setError(`Choose a WAV smaller than ${(maxUploadBytes / 1048576).toFixed(0)} MB.`); return }
+    setBusy(true)
     try {
       await api.upload(projectId, file, signal)
       // Refresh the owning room even if the sheet closed after acceptance.
@@ -93,6 +99,7 @@ export function SourcesPanel({ projectId, assets, selectedIds, onSelection, onCh
       <Button variant="outline" onClick={() => fileRef.current?.click()} disabled={busy || recording}><Upload /> Add WAV</Button>
       {recording ? <><Button onClick={() => void finishRecording()} disabled={busy}><Square /> Stop and use</Button><Button variant="ghost" onClick={discard} disabled={busy}><X /> Discard recording</Button></> : <Button variant="outline" onClick={() => void record()} disabled={busy}><Mic /> Record a sound</Button>}
     </div>
+    <p className="side-note">WAV files{maxUploadBytes ? ` · up to ${(maxUploadBytes / 1048576).toFixed(0)} MB` : ""}.</p>
     <input ref={fileRef} className="sr-only" type="file" accept="audio/wav,.wav" aria-label="Upload a WAV source" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file) }} />
     {notice ? <p className="side-note" role="status">{notice}</p> : null}
     {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}

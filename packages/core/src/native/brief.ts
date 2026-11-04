@@ -1,3 +1,4 @@
+import { qualitativeIdentity } from "./request-help.js";
 import { z } from "zod";
 import { canonicalHash } from "../domain/hash.js";
 import { containsWords, words, writtenNumbers } from "../domain/words.js";
@@ -144,11 +145,12 @@ When a length applies to a list, reuse the complete quoted clause for each named
 - chordProgressions: an explicit ordered sequence of at least three chords, as symbols such as Dm9, Bbmaj7, Fmaj9, Cadd9, Am, C or G7.
 - roles: kind required (include, add, bring in), absent (no, without, remove, avoid), change (simplify, thin, vary or brighten an existing role; set reduceDensity when asking for fewer notes or hits), preserve (keep a role unchanged or exactly as it is). role is drums, bass, harmony (chords, pads), lead (melody) or transitions (existing FX parts to preserve or exclude).
 Requests to add or develop transitions, risers, fills or endings belong in guidance: they can use existing instruments and do not require a separate FX part. For example, "Return with a clear ending" is guidance about the ending, never a required transitions role. Explicit keep/remove instructions for existing FX parts remain checks.
+- Recognizable identity is guidance, not exact preservation. "Keep the theme recognizable but vary its rhythm/register" must not create keep/preserve checks. Explicit "keep unchanged" still means exact preservation. For conflicting exact keep and change instructions on the same material, explain the conflict.
 - keep: in a revision, a named part or phrase to keep unchanged, using only ids from the document; theme true for "the theme", "the hook" or "the motif" without a specific phrase.
 - construction: shared-parallel-drums, sidechain, automation (changing controls), rise (a build, lift or upswing), shorter-ambience (shorter reverb or delay tails).
 - section: an existing section by its document id; for a new piece, the section name as written; position first or last for "the first/opening" or "the last/final" section. Use null for the whole piece.
 Bar ranges that say where a note or change applies ("Bass (bars 5-6): sparser", "in bars 13 and 15") are scope, not a section's length or span: never put them in sections, and put them in guidance unless the direction asks to resize a section.
-Checkable ranges: overall length 1–128 bars, tempo 40–220 BPM, meter 2–12 over 4 or 8, chord progressions of 3–16 chords; at most 16 sections, 4 progressions, 24 roles, 24 keep items, 8 construction items and 16 guidance notes (put anything beyond these in guidance or leave it out).
+Do not silently shorten an unsupported overall length or promise generated singing: the current product constructs native instrumental arrangements and places supplied audio. Quote unsupported requests in guidance with a clear explanation of the supported limit; do not invent a smaller requested length. Checkable ranges: overall length 1–128 bars, tempo 40–220 BPM, meter 2–12 over 4 or 8, chord progressions of 3–16 chords; at most 16 sections, 4 progressions, 24 roles, 24 keep items, 8 construction items and 16 guidance notes (put anything beyond these in guidance or leave it out).
 Put anything soft, conditional, qualitative or uncertain in guidance with a short reason instead: maybe, perhaps, if useful, optionally; "keep it coherent"; "keep its character"; "leave room for the pad" (space for something, not a lock); sections or parts that do not exist. When unsure, use guidance: a missed hard item only means less checking, but a wrong one blocks the producer.
 In a new piece nothing exists yet, so do not use keep or preserve. Do not invent numbers, chords, ids or sections. Empty arrays and nulls are normal.`;
 
@@ -349,6 +351,7 @@ export function captureNativeBrief(raw: unknown, context: BriefContext): NativeB
     const resolved = section(item.section);
     if (!written(item.quote)) reject(item.quote, notWritten);
     else if ("problem" in resolved) reject(item.quote, resolved.problem);
+    else if (item.kind === "preserve" && qualitativeIdentity(item.quote)) soften(item.quote, "Retain recognizable identity while allowing musical development");
     else if (item.kind === "preserve" && !document) soften(item.quote, "Nothing exists yet to keep unchanged");
     // A transition is a musical function, not proof that a separate FX voice
     // must exist. Keep its direction without inventing a part-presence gate.
@@ -364,10 +367,18 @@ export function captureNativeBrief(raw: unknown, context: BriefContext): NativeB
       brief.roles = brief.roles.filter((rule) => rule.role !== role || rule.section || rule.kind === "preserve");
     }
   }
+  // Only an identical scope is provably contradictory. Keeping one phrase while
+  // developing the rest is valid; leave overlapping/ambiguous scopes to the user.
+  brief.roles = brief.roles.filter((rule) => {
+    if (rule.kind !== "change" || !brief.roles.some((other) => other.kind === "preserve" && other.role === rule.role && sameRef(other.section, rule.section))) return true;
+    reject(rule.quote, `This also asks to keep ${briefRoleRules[rule.role].label} unchanged in the same scope. The exact keep instruction takes priority unless you revise it`);
+    return false;
+  });
   for (const item of proposal.keep) {
     const resolved = section(item.section);
     const targets = [item.partId !== null, item.motifId !== null, item.theme].filter(Boolean).length;
     if (!written(item.quote)) reject(item.quote, notWritten);
+    else if (qualitativeIdentity(item.quote)) soften(item.quote, "Retain recognizable identity while allowing musical development");
     else if (!document) soften(item.quote, "Nothing exists yet to keep unchanged");
     else if ("problem" in resolved) reject(item.quote, resolved.problem);
     else if (targets !== 1) reject(item.quote, "Name one part or phrase to keep");

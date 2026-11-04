@@ -140,3 +140,18 @@ describe("grounded symbolic editor", () => {
     expect(nativeCompletionIssues(climb(0), captured, "generation")).toEqual([expect.stringContaining("A section after the opening must differ from it in two of")]);
   });
 });
+
+it("checks the exact cited chord voicing without rejecting equivalent chord names or uncited opinions", () => {
+  const score = seedNativeDocument("Ending chord");
+  score.parts[0]!.notes = [62, 65, 69].map((pitch, i) => ({ id: `tone-${i}`, pitch, startTick: 0, durationTicks: 960, velocity: 0.7 }));
+  const finding = { priority: "medium", sectionId: score.sections[0]!.id, partId: score.parts[0]!.id, observation: "The final cited voicing is F6", suggestedChange: "Change its root", evidence: [62, 65, 69].map(pitch => ({ tick: 0, pitch })), claimedCitedChord: "F6" };
+  const bad = validateNativeReview({ verdict: "Check the cadence", findings: [finding], noChangeReason: null }, score, true);
+  expect(bad.findings).toEqual([]);
+  expect(bad.discardedFindings).toHaveLength(1);
+  expect(bad.noChangeReason).toContain("no verified finding");
+  const correct = validateNativeReview({ verdict: "Check the cadence", findings: [{ ...finding, observation: "The cited voicing is Dm", claimedCitedChord: "Dm" }], noChangeReason: null }, score, true);
+  expect(correct.findings).toHaveLength(1);
+  score.parts[0]!.notes.push({ id: "seventh", pitch: 72, startTick: 0, durationTicks: 960, velocity: 0.7 });
+  const equivalent = validateNativeReview({ verdict: "An ambiguous voicing", findings: [{ ...finding, evidence: [...finding.evidence, { tick: 0, pitch: 72 }] }], noChangeReason: null }, score, true);
+  expect(equivalent.findings).toHaveLength(1);
+});

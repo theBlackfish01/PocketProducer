@@ -92,7 +92,9 @@ it("retains the response opportunity across restart and metadata updates; markin
   await saveNativeReview(job, review);
   await processJob(job, { scriptedModel: fakeModel().respond(new AIMessage("Finished.")).respond(new AIMessage("Finished.")), scriptedReviewer: fakeModel(), library: createNativeLibrary(null) });
   expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "needs_attention", error_code: "NATIVE_PARTIAL" });
+  const pause = (await getPool().query<{ error_message: string }>("SELECT error_message FROM job WHERE id=$1", [job.id])).rows[0]!.error_message;
   await resumeNativePartialJob(owner, job.projectId, job.id);
+  expect((await getPool().query("SELECT payload FROM job_event WHERE job_id=$1 AND event_type='continued' ORDER BY sequence DESC LIMIT 1", [job.id])).rows[0].payload.previousStop).toBe(pause.slice(0, 1200));
   const resumed = (await claimJobById(job.id, "review-response-resumed"))!;
   const producer = fakeModel().respondWithTools([{ name: "record_native_creative_state", args: { ...plan.creativeState, unfinishedTasks: [], guidanceRefs: ["already-read"] } }])
     .respondWithTools([{ name: "advance_native_stage", args: { stage: "reviewed" } }])
@@ -101,6 +103,7 @@ it("retains the response opportunity across restart and metadata updates; markin
   await processJob(resumed, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
   expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
   expect(JSON.stringify(producer.calls[2]!.messages)).toContain("review_response");
+  expect(JSON.stringify(producer.calls[0]!.messages)).toContain("Previous pause (diagnostic data");
   expect((await loadNativePlan(job.id))!.reviewCount).toBe(1);
   expect(reviewer.callCount).toBe(0);
 });
@@ -154,6 +157,7 @@ it("saves a Saffron-style numeric-bar revision through the production graph with
   expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
   const after = await nativeSnapshot(owner, project.id);
   expect(after.versions).toHaveLength(2);
+  expect(JSON.stringify(producer.calls[0]!.messages)).toContain("whole piece (all relevant sections)");
   expect(after.versions.find(value => value.id === before.id)?.documentHash).toBe(before.documentHash);
   expect(after.current!.document.parts.find(value => value.id === "bass")!.notes.some(note => note.startTick === 12 * 3840)).toBe(true);
   expect(producer.callCount).toBe(3);

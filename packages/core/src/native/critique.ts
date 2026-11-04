@@ -4,7 +4,7 @@ import { analyzeNativeSection, barTicks, materializedNotes, type NativeDocument 
 import type { NativePlan } from "./plan.js";
 import { automationValueAt } from "./section.js";
 import { analyzeNativeMusicality, musicalityReviewEvidence } from "./musicality.js";
-import { nameChord } from "./harmony.js";
+import { nameChord, parseChordSymbol } from "./harmony.js";
 
 // A ramp may cross an entire section without a control point inside it. Give
 // the editor local boundary values and the enclosing keyframes, not unrelated
@@ -24,7 +24,10 @@ function sectionAutomation(curve: NativeDocument["parts"][number]["automation"][
 export const nativeReviewCitationSchema = z.object({ tick: z.number().int().min(0).max(2_000_000), pitch: z.number().int().min(0).max(127) });
 export const nativeReviewFindingSchema = z.object({ priority: z.enum(["high", "medium", "low"]), sectionId: z.string().max(64).nullable(), partId: z.string().max(64).nullable(), observation: z.string().min(3).max(300), suggestedChange: z.string().min(3).max(300),
   // Older reviews and the symbolic fallback cite nothing.
-  evidence: z.array(nativeReviewCitationSchema).max(4).optional() });
+  evidence: z.array(nativeReviewCitationSchema).max(4).optional(),
+  // Optional in historical reviews; required nullable facts on new provider output.
+  claimedTempoChange: z.enum(["increased", "unchanged", "decreased"]).nullable().optional(),
+  claimedCitedChord: z.string().min(1).max(24).nullable().optional() });
 export const nativeReviewSchema = z.object({
   documentHash: z.string().regex(/^[a-f0-9]{64}$/),
   musicHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -202,7 +205,7 @@ function citedChord(finding: NativeReview["findings"][number], document: NativeD
   return nameChord(cited.map((cite) => cite.pitch), under?.pitch);
 }
 
-export function validateNativeReview(raw: unknown, document: NativeDocument, modelUsed: boolean): NativeReview {
+export function validateNativeReview(raw: unknown, document: NativeDocument, modelUsed: boolean, previousVersion?: NativeDocument): NativeReview {
   const parsed = nativeReviewSchema.parse({ ...(raw as object), documentHash: canonicalHash(document), modelUsed });
   for (const finding of parsed.findings) {
     if (finding.sectionId && !document.sections.some((section) => section.id === finding.sectionId)) throw new Error(`Reviewer named nonexistent section ${finding.sectionId}`);
@@ -212,11 +215,24 @@ export function validateNativeReview(raw: unknown, document: NativeDocument, mod
   // the review and its other findings (best effort) and record why it was dropped.
   const discarded: Array<{ observation: string; reason: string }> = [];
   const findings = parsed.findings.filter((finding) => {
-    const reason = citationMismatch(finding, document);
+    let reason = citationMismatch(finding, document);
+    if (!reason && finding.claimedTempoChange && previousVersion) {
+      const change = document.tempoBpm > previousVersion.tempoBpm ? "increased" : document.tempoBpm < previousVersion.tempoBpm ? "decreased" : "unchanged";
+      if (finding.claimedTempoChange !== change) reason = `Tempo ${change} from ${previousVersion.tempoBpm} to ${document.tempoBpm} BPM against the accepted base`;
+    }
+    if (!reason && finding.claimedCitedChord && finding.evidence?.length) {
+      let pitches: number[] = [];
+      try { const chord = parseChordSymbol(finding.claimedCitedChord); pitches = [...chord.tones.map((tone) => (chord.root + tone.interval) % 12), chord.bass]; }
+      catch { /* Unrecognized notation cannot establish a contradiction. */ }
+      // This field names exactly the cited voicing, not an inferred full chord.
+      // Equivalent pitch sets (inversions/enharmonic names) remain valid opinions.
+      const actual = [...new Set(finding.evidence.map((note) => note.pitch % 12))].sort((a, b) => a - b);
+      if (pitches.length && canonicalHash([...new Set(pitches)].sort((a, b) => a - b)) !== canonicalHash(actual)) reason = `The exact cited voicing is not ${finding.claimedCitedChord}; inspect the actual notes before suggesting a correction`;
+    }
     if (reason) discarded.push({ observation: finding.observation, reason });
     return !reason;
   }).map((finding) => { const chord = citedChord(finding, document); return chord ? { ...finding, citedChord: chord } : finding; });
   if (!discarded.length) return { ...parsed, findings };
   return { ...parsed, findings, discardedFindings: discarded,
-    noChangeReason: findings.length ? parsed.noChangeReason : parsed.noChangeReason ?? "Its findings cited notes the score does not contain, so they were discarded; no verified finding remains." };
+    noChangeReason: findings.length ? parsed.noChangeReason : parsed.noChangeReason ?? "Its findings contradicted confirmed score facts, so they were discarded; no verified finding remains." };
 }

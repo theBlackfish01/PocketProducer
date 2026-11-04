@@ -34,6 +34,7 @@ export interface NativeDraftView { jobId: string; state: string; selected: false
 export interface AppStatus {
   providers: { openai: boolean; gemini: boolean; audiotool: boolean };
   uploadFormats: string[];
+  maxUploadBytes?: number;
   nexus: {
     sdk: string;
     liveExportVerified: boolean;

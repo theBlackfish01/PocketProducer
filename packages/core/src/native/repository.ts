@@ -1,3 +1,4 @@
+import { requireMusicalDirection } from "./request-help.js";
 import { randomUUID } from "node:crypto";
 import { nativeOutputRecoveryBlocked } from "./model-completion.js";
 import type pg from "pg";
@@ -100,6 +101,7 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
       if (uncertain.rowCount) throw issue("OUTCOME_UNCERTAIN", "An earlier request has an uncertain outcome. Review it before starting another.", 409);
     }
     const current = await head(client, input.ownerId, input.projectId, true);
+    if (input.kind !== "native-sync") requireMusicalDirection(input.request.direction);
     await hostedQueueCapacity(client, input.ownerId);
     if (current !== input.expectedHeadId) throw issue("HEAD_CHANGED", "Native head changed; refresh before continuing", 409);
     if (input.kind === "native-generation" && current) throw Object.assign(new Error("This room already has a native construction; revise it instead"), { statusCode: 409 });
@@ -341,7 +343,7 @@ export async function resumeNativePartialJob(ownerId: string, projectId: string,
     if (aggregate?.state !== "dispatched" && !legacyZeroStepPause) throw Object.assign(new Error("No safely resumable producer effect remains"), { statusCode: 409 });
     await hostedQueueCapacity(client, ownerId);
     await client.query("UPDATE job SET state='queued',stage=NULL,error_code=NULL,error_message=NULL,deadline_at=now()+make_interval(secs=>$2),updated_at=now() WHERE id=$1", [jobId, limits?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS]);
-    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'continued',$2 FROM job WHERE id=$1", [jobId, { message: "Continuing confirmed native work under the original request and budget" }]);
+    await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) SELECT id,next_event_sequence,'continued',$2 FROM job WHERE id=$1", [jobId, { message: "Continuing confirmed native work under the original request and budget", previousStop: (job.error_message ?? "").slice(0, 1200) }]);
     await client.query("UPDATE job SET next_event_sequence=next_event_sequence+1 WHERE id=$1", [jobId]);
     await appendPublicActivity(client, { ownerId, projectId, jobId }, `continued:${jobId}:${randomUUID()}`, { version: 1, kind: "continued", text: "Continuing your saved work with the same request and spending record." });
     await client.query("COMMIT");

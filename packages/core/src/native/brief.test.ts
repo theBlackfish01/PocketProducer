@@ -399,3 +399,24 @@ describe("completion checks from a captured brief", () => {
     expect(() => assertNativeModelCompletion({ response_metadata: { finish_reason: "stop" } })).not.toThrow();
   });
 });
+
+it("allows a recognizable theme to develop while retaining explicit exact protection", () => {
+  const direction = "Change the melody while keeping its musical identity recognizable";
+  const brief = capturedBrief(direction, { roles: [briefRole("change", "lead", "Change the melody"), briefRole("preserve", "lead", "keeping its musical identity recognizable")], keep: [briefKeep("keeping its musical identity recognizable", { theme: true })] }, melody);
+  expect(brief.roles).toMatchObject([{ kind: "change" }]);
+  expect(brief.keep).toEqual([]);
+  expect(brief.guidance.length).toBeGreaterThan(0);
+  expect(brief.rejected).toEqual([]);
+  const changed = structuredClone(melody); changed.parts[0]!.notes[0]!.pitch = 65;
+  expect(nativeCompletionIssues(changed, brief, "revision", [], melody)).toEqual([]);
+  const exact = capturedBrief("Keep the recognizable lead unchanged", { keep: [briefKeep("Keep the recognizable lead unchanged", { partId: "lead" })] }, melody);
+  expect(exact.keep).toHaveLength(1);
+  expect(nativeCompletionIssues(changed, exact, "revision", [], melody).length).toBeGreaterThan(0);
+  // Historical captures are parsed as saved; no migration relaxes their locks.
+  expect(jobNativeBrief({ _brief: exact })).toEqual(exact);
+});
+it("surfaces an identical-scope change/keep conflict without removing exact protection", () => {
+  const brief = capturedBrief("Change the melody. Keep the melody unchanged.", { roles: [briefRole("change", "lead", "Change the melody"), briefRole("preserve", "lead", "Keep the melody unchanged")] }, melody);
+  expect(brief.roles).toMatchObject([{ kind: "preserve" }]);
+  expect(brief.rejected).toEqual([expect.objectContaining({ reason: expect.stringContaining("same scope") })]);
+});

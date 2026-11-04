@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { cancelJob, captureMissingJobBrief, claimJobById, createNativeJob, createProject, dispatchOutbox, getPool, interpretNativeDirection, nativeSnapshot, readProjectActivity, type BriefGenerator } from "@pocket/core";
+import { cancelJob, captureMissingJobBrief, claimJobById, createNativeJob, createProject, dispatchOutbox, getPool, jobSnapshot, interpretNativeDirection, nativeSnapshot, readProjectActivity, type BriefGenerator } from "@pocket/core";
 import { briefKeep, briefRole, scriptedBrief } from "@pocket/core/test-support";
 import { processJob } from "@pocket/worker";
 
@@ -86,6 +86,7 @@ it("keeps a revision's worded parts, reports them with the request and rejects u
   const generation = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: randomUUID(), expectedHeadId: null, request: { direction: "A warm evolving instrumental" } });
   await dispatchOutbox();
   await processJob((await claimJobById(generation.id, "brief-seed"))!);
+  expect(await jobSnapshot(ownerId, generation.id)).toMatchObject({ state: "succeeded" });
   const current = (await nativeSnapshot(ownerId, projectId)).current!;
   const kept = current.document.parts[0]!;
   const direction = `Brighten the ending, keep ${kept.name} unchanged and leave room for the pad`;
@@ -133,4 +134,18 @@ it("records an explicit no-check choice, and checks an older request's direction
   const checks = await getPool().query("SELECT 1 FROM prompt_assistance p JOIN effect e ON e.prompt_assistance_id=p.id WHERE p.project_id=$1 AND e.step='native-brief'", [projectId]);
   expect(checks.rowCount).toBe(1);
   await cancelJob(ownerId, sent.id);
+});
+
+it("answers playback help before reserving or queuing work, with ownership still enforced", async () => {
+  const projectId = await room();
+  const { calls, generator } = counted(scriptedBrief());
+  const request = { direction: "how can i hear it", expectedHeadId: null };
+  await expect(interpretNativeDirection(ownerId, projectId, randomUUID(), request, generator)).rejects.toMatchObject({ code: "PLAYBACK_HELP" });
+  await expect(interpretNativeDirection(otherId, projectId, randomUUID(), request, generator)).rejects.toMatchObject({ statusCode: 404 });
+  await expect(createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: randomUUID(), expectedHeadId: null, request })).rejects.toMatchObject({ code: "PLAYBACK_HELP" });
+  expect(calls).toEqual([]);
+  expect((await getPool().query("SELECT 1 FROM job WHERE project_id=$1", [projectId])).rowCount).toBe(0);
+  expect((await getPool().query("SELECT 1 FROM prompt_assistance WHERE project_id=$1", [projectId])).rowCount).toBe(0);
+  await interpretNativeDirection(ownerId, projectId, randomUUID(), { ...request, direction: "Make it warmer. How can I hear it?" }, generator);
+  expect(calls).toHaveLength(1);
 });

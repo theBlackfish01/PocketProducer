@@ -1,7 +1,10 @@
 import type { Job, NativeVersion } from "./api"
 
+import { playbackHelp } from "@pocket/core/request-help"
+
 const issueCopy: Record<string, string> = {
-  ACTIVE_REQUEST_LIMIT: "An arrangement or Audiotool copy is already running in one of your sessions. Let it finish before starting another request.",
+  PLAYBACK_HELP: playbackHelp,
+  ACTIVE_REQUEST_LIMIT: "An arrangement or Audiotool copy is already running in one of your sessions. Open the session marked Working to follow it, and let it finish before starting another request.",
   STUDIO_BUSY: "The shared studio is busy. Please try again shortly.",
   HEAD_CHANGED: "This piece changed while you were working. Reopen it before trying again.",
   OUTCOME_UNCERTAIN: "We need to check what happened before another attempt can start.",

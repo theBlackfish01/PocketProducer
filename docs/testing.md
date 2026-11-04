@@ -1,5 +1,15 @@
 # Verification record
 
+## Trace-driven reliability follow-up — November 4
+
+- Installed pinned tooling was invoked through `node_modules/.bin/*.cmd`; the pnpm launcher attempted an unavailable registry lookup. Windows sandbox temporary-file isolation initially prevented Vitest loading; provider-free tests ran outside that sandbox. The dedicated local PostgreSQL test container was started and `node --import tsx packages/core/src/db/prepare-test.ts` applied only the existing test schema.
+- Full unit command: `vitest run --config vitest.config.ts --exclude 'tests/integration/**' --exclude 'tests/e2e/**' --exclude 'tests/visual/**' --exclude 'tests/hosted/**'`: **351 tests / 51 files pass**.
+- `vitest run tests/integration --config vitest.config.ts`: **204 tests / 16 files pass** on the sequential rerun. First broad run was 203/204 (seed fixture missing its version); the interpretation file passed 7/7 in isolation. Added an explicit success assertion before reading that version. No lease limits or invariants were relaxed.
+- Final review prompt expansion exposed `OPENAI_INPUT_LIMIT_EXCEEDED:110044:110000` in the existing large-score critic regression. Compressed only the new instructions; `vitest run tests/integration/native-finishing-recovery.test.ts packages/core/src/native/review-model.test.ts` then passed **52/52**, including the unchanged limit and coverage assertions.
+- `playwright test --config tests/visual.playwright.config.ts --grep 'playback help|upload guidance|copy owner-busy'`: **3 journeys** covering desktop and 390px phone, draft preservation, zero generation/interpretation writes for help, client upload rejection and no automatic copy retry. Screenshots: `.local/evidence/playback-help-{desktop,phone}.png` and `upload-guidance-{desktop,phone}.png`. These are mocked Chromium checks, not live-provider/real-device evidence.
+- Final shared-help/UI-copy regressions pass **12/12**. A final typecheck caught an unnecessary import of the core error class into the browser-safe helper; removing that import retained the same typed API issue without pulling non-erasable server syntax into the web project.
+- `tsc -b`, full ESLint with a final targeted recheck, Vite production build and `git diff --check` pass. The existing frontend chunk-size advisory remains. No paid usage, external copy, production change or listening claim.
+
 ## Native allocator and section-quote follow-up — November 2
 
 - `node node_modules/vitest/vitest.mjs run --config vitest.config.ts --exclude 'tests/integration/**' --exclude 'tests/e2e/**' --exclude 'tests/visual/**' --exclude 'tests/hosted/**'`: 338/338 passing, including the new shared-length quote regression and existing SDK mapping/review checks.

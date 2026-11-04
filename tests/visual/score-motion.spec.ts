@@ -60,7 +60,7 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
     if (path.endsWith("/auth/session")) json = { mode: "development", user: { ownerId: "fixture", displayName: "Fixture" } }
     else if (path.endsWith("/integrations/audiotool/profile")) json = { profile: { userName: "fixture", displayName: "Fixture musician", avatarUrl: null } }
     else if (path.endsWith("/producer-models")) json = { models: [{ id: "gpt-6-luna", label: "GPT-6 Luna", provider: "openai", available: true }] }
-    else if (path.endsWith("/status")) json = { providers: { openai: false, gemini: false, audiotool: Boolean(options.audiotool) }, uploadFormats: ["audio/wav"], nexus: { sdk: "fixture", liveExportVerified: false, connection: options.audiotool ? "authorized" : "unconfigured", oauth: options.audiotool ? { clientId: "fixture", redirectUrl: "http://127.0.0.1:15174/auth/audiotool/callback", scope: "project:write" } : null, session: { connected: Boolean(options.audiotool), userName: options.audiotool ? "fixture" : null, expiresAt: null } } }
+    else if (path.endsWith("/status")) json = { providers: { openai: false, gemini: false, audiotool: Boolean(options.audiotool) }, uploadFormats: ["audio/wav"], maxUploadBytes: 1048576, nexus: { sdk: "fixture", liveExportVerified: false, connection: options.audiotool ? "authorized" : "unconfigured", oauth: options.audiotool ? { clientId: "fixture", redirectUrl: "http://127.0.0.1:15174/auth/audiotool/callback", scope: "project:write" } : null, session: { connected: Boolean(options.audiotool), userName: options.audiotool ? "fixture" : null, expiresAt: null } } }
     else if (path.endsWith("/projects")) json = { projects: [{ id: projectId, title: "Night Drive", currentRevisionId: "version-2", version: 1, createdAt: "2026-09-26", workspaceStatus: "ready", fingerprint: nativeFingerprint(after) }] }
     else if (path.endsWith(`/projects/${projectId}`)) json = { project: { id: projectId, title: "Night Drive", currentRevisionId: null }, assets: options.ownedSound ? [{ id: "owned-fixture", name: "Own sound", audioUrl: "/api/v1/assets/fixture/audio", durationSeconds: 8, sampleRate: 8_000, channels: 2 }] : [], revisions: [], analyses: [], latestJob: null, currentRevision: null }
     else if (path.endsWith("/activity/stream")) { await route.abort(); return }
@@ -1109,4 +1109,42 @@ test("pinned notes stay local until added to an editable, scoped direction", asy
   await expect(page.locator(".producer-panel")).toContainText("Slow lead ×")
   await expect(page.getByRole("region", { name: /Pinned notes · 1/ })).toContainText("Sub foundation")
   expect(room.writes()).toBe(0)
+})
+
+test("playback help keeps the direction and makes no paid request on desktop or phone", async ({ page }) => {
+  const room = await mockRoom(page)
+  await page.getByRole("button", { name: "Change whole piece", exact: true }).click()
+  const input = page.getByRole("textbox", { name: "Describe your arrangement" })
+  await input.fill("how can i hear it")
+  await page.getByRole("button", { name: "Make this change", exact: true }).click()
+  await expect(page.getByText(/To listen, finish the arrangement/)).toBeVisible()
+  await expect(input).toHaveValue("how can i hear it")
+  expect(room.writes()).toBe(0)
+  await page.screenshot({ path: `${evidence}/playback-help-desktop.png`, fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await input.fill("Make the bass warmer. How can I hear it?")
+  await expect(page.getByText(/To listen, finish the arrangement/)).toHaveCount(0)
+  await page.getByRole("button", { name: "How do I listen?", exact: true }).click()
+  await expect(page.getByText(/To listen, finish the arrangement/)).toBeVisible()
+  await expect(input).toHaveValue("Make the bass warmer. How can I hear it?")
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: `${evidence}/playback-help-phone.png`, fullPage: true })
+  expect(room.writes()).toBe(0)
+})
+
+test("upload guidance rejects unsupported formats and oversized WAVs before sending", async ({ page }) => {
+  const room = await mockRoom(page)
+  await page.getByRole("button", { name: "Sounds", exact: true }).click()
+  const upload = page.getByLabel("Upload a WAV source")
+  await expect(page.getByText("WAV files · up to 1 MB.", { exact: true })).toBeVisible()
+  await upload.setInputFiles({ name: "sound.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("fixture") })
+  await expect(page.getByRole("alert")).toContainText("Choose a WAV file")
+  await upload.setInputFiles({ name: "large.wav", mimeType: "audio/wav", buffer: Buffer.alloc(1048577) })
+  await expect(page.getByRole("alert")).toContainText("Choose a WAV smaller than 1 MB")
+  expect(room.writes()).toBe(0)
+  await page.screenshot({ path: `${evidence}/upload-guidance-desktop.png` })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole("alert")).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: `${evidence}/upload-guidance-phone.png` })
 })

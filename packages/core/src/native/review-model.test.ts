@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseNativeReview, nativeReviewResponseFormat } from "./review-model.js";
+import { parseNativeReview, nativeReviewResponseFormat, nativeReviewVersionEvidence } from "./review-model.js";
 import { seedNativeDocument } from "./producer.js";
 import { nativePlanSchema, nativeReviewPlanHash } from "./plan.js";
 
@@ -34,4 +34,17 @@ it("distinguishes review-relevant intent from task and discovery bookkeeping", (
   expect(nativeReviewPlanHash(newlyIndexed)).toBe(nativeReviewPlanHash(withoutState));
   expect(nativeReviewPlanHash({ ...plan, hardConstraints: ["No bass"] })).not.toBe(nativeReviewPlanHash(plan));
   expect(nativeReviewPlanHash(nativePlanSchema.parse({ ...plan, creativeState: { ...plan.creativeState, decisions: ["Double the density"] } }))).not.toBe(nativeReviewPlanHash(plan));
+});
+
+it("compares tempo against the accepted base and keeps valid findings when another contradicts it", () => {
+  const before = seedNativeDocument("A quiet motif"); before.tempoBpm = 96;
+  const current = structuredClone(before); current.tempoBpm = 120;
+  expect(nativeReviewVersionEvidence(before, current)).toMatchObject({ originalTempoBpm: 96, currentTempoBpm: 120, tempoChange: { from: 96, to: 120 } });
+  const finding = { priority: "medium", sectionId: null, partId: null, observation: "The tempo has not changed", suggestedChange: "Increase the tempo", claimedTempoChange: "unchanged" };
+  const valid = { ...finding, observation: "The rhythm is still sparse", suggestedChange: "Add a contrasting answer", claimedTempoChange: null };
+  const parsed = parseNativeReview(JSON.stringify({ verdict: "A faster version with room to develop", findings: [finding, valid], noChangeReason: null }), current, "stop", before).review!;
+  expect(parsed.findings).toHaveLength(1);
+  expect(parsed.findings[0]!.observation).toBe(valid.observation);
+  expect(parsed.discardedFindings).toEqual([expect.objectContaining({ reason: expect.stringContaining("96 to 120") })]);
+  expect(before.tempoBpm).toBe(96);
 });

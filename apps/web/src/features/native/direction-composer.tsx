@@ -121,6 +121,6 @@ export function DirectionComposer(props: Props) {
       {message ? <p className="prompt-helper-message" role="status">{message}</p> : null}
       {props.direction.length > 30_000 ? <small>{props.direction.length.toLocaleString()} / 32,768</small> : null}
     </form>
-    <Dialog open={optionsOpen} onOpenChange={setOptionsOpen}><DialogContent><DialogHeader><DialogTitle>Creation options</DialogTitle><DialogDescription>Choose how much detail to explore.</DialogDescription></DialogHeader><label className="direction-options">Depth <select value={props.profile} disabled={props.active || props.busy} onChange={(event) => props.onProfile(event.target.value as Props["profile"])}><option value="standard">Focused arrangement</option><option value="extended">Detailed composition</option></select></label></DialogContent></Dialog>
+    <Dialog open={optionsOpen} onOpenChange={setOptionsOpen}><DialogContent><DialogHeader><DialogTitle>Creation options</DialogTitle><DialogDescription>Choose how much detail to explore. Native arrangements support up to 128 bars. Generated singing is not available; you can add your own vocal audio.</DialogDescription></DialogHeader><label className="direction-options">Depth <select value={props.profile} disabled={props.active || props.busy} onChange={(event) => props.onProfile(event.target.value as Props["profile"])}><option value="standard">Focused arrangement</option><option value="extended">Detailed composition</option></select></label></DialogContent></Dialog>
   </section>
 }

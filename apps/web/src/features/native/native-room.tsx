@@ -1,3 +1,4 @@
+import { isPlaybackHelp, playbackHelp } from "@pocket/core/request-help"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowRight, AudioLines, Check, GitCompareArrows, History, LockKeyhole, Music2, MoreHorizontal, ExternalLink, RotateCcw, Search } from "lucide-react"
 import { api, issueOf, type NativeInterpretation, type Activity, type Asset, type Job, type NativeDraftView, type NativeSnapshot, type SoundRecipe, type SoundFeedback } from "../../lib/api"
@@ -54,6 +55,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   }, [])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [showPlaybackHelp, setShowPlaybackHelp] = useState(false)
   const [error, setError] = useState<{ code: string | null } | null>(null)
   // A submission that could not start is explained inside the composer.
   const [submitIssue, setSubmitIssue] = useState<{ code: string | null } | null>(null)
@@ -148,7 +150,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
     let active = true
     roomActiveRef.current = true
     setPanel(null); setExtendOpen(false); setAbandonOpen(false)
-    libraryAudioRef.current?.pause(); pendingCompare.current = null; setDraftProjectId(null); setLoading(true); setBusy(false); setSnapshot(null); setJob(null); setTentative(null); setTentativeError(null); setError(null); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds([]); setSourceIds([]); setRoleFilter("all"); setPartLimit(8); setCompareOpen(false); setComparePair(null); setInspectedPartId(null); setViewSectionId(null); setSoundsOpen(false); setPartsOpen(false); setComparePartId(null); setReplay(0); setShowUnchanged(false); setSampleAnalysis(null); setSampleAuditioned(false); setSampleFeedback(null); setLibraryResults([]); setLibraryError(null)
+    libraryAudioRef.current?.pause(); pendingCompare.current = null; setDraftProjectId(null); setShowPlaybackHelp(false); setLoading(true); setBusy(false); setSnapshot(null); setJob(null); setTentative(null); setTentativeError(null); setError(null); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds([]); setSourceIds([]); setRoleFilter("all"); setPartLimit(8); setCompareOpen(false); setComparePair(null); setInspectedPartId(null); setViewSectionId(null); setSoundsOpen(false); setPartsOpen(false); setComparePartId(null); setReplay(0); setShowUnchanged(false); setSampleAnalysis(null); setSampleAuditioned(false); setSampleFeedback(null); setLibraryResults([]); setLibraryError(null)
     void api.nativeSnapshot(projectId).then((value) => {
       if (!active) return
       let stored: unknown = null
@@ -375,6 +377,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
 
   const submit = async (freshAttempt = false, submittedModel = producerModel, confirmed?: { interpretationId: string | null }) => {
     if (!direction.trim() || busy || activeJob || activity.state?.actions.canSubmit === false || activity.state?.headId !== snapshot?.currentRevisionId || draftNotices.length) return
+    if (isPlaybackHelp(direction)) { setShowPlaybackHelp(true); return }
     const head = snapshot?.currentRevisionId ?? null
     const operation: Receipt["operation"] = head ? "native-revision" : "native-generation"
     const signature = JSON.stringify({ operation, head, direction: direction.trim(), profile, model: submittedModel, targetPartId, targetSectionId, protectedPartIds: [...protectedPartIds].sort(), sourceIds: [...sourceIds].sort() })
@@ -581,12 +584,14 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const ToolHeader = panel ? DialogHeader : SheetHeader;
   const ToolTitle = panel ? DialogTitle : SheetTitle;
   const ToolDescription = panel ? DialogDescription : SheetDescription;
-  const composer = <><DirectionComposer projectId={projectId} headId={current?.id ?? null} direction={direction} onDirection={(value) => { setDirection(value); setSubmitIssue(null) }} revision={Boolean(current)} active={Boolean(activeJob) || job?.state === "needs_attention"} busy={busy}
+  const composer = <><DirectionComposer projectId={projectId} headId={current?.id ?? null} direction={direction} onDirection={(value) => { setDirection(value); setShowPlaybackHelp(false); setSubmitIssue(null) }} revision={Boolean(current)} active={Boolean(activeJob) || job?.state === "needs_attention"} busy={busy}
     canSubmit={!busy && !activeJob && activity.state?.headId === snapshot?.currentRevisionId && Boolean(activity.state?.actions.canSubmit) && draftNotices.length === 0 && direction.trim().length >= 3}
     onSubmit={(model) => { setProducerModel(model); void submit(false, model) }} onAddSound={() => setSoundsOpen(true)} sectionId={targetSectionId} partId={targetPartId} protectedPartIds={protectedPartIds} sourceIds={sourceIds}
     sections={current?.document.sections ?? []} onSection={setTargetSectionId} partName={selectedPart?.name} clearPart={() => setTargetPartId(null)}
     protectedNames={[...new Set(protectedPartIds.map(partName))]} profile={profile} onProfile={setProfile} issue={submitIssue ? friendlyIssue(submitIssue.code, "Your direction is unchanged. Check it and try again.") : null}>
     {draftNotices.length ? <div className="job-status" role="status">{draftNotices.map((notice) => <p key={notice}>{notice}</p>)}<Button size="sm" variant="outline" onClick={() => setDraftNotices([])}>I reviewed the updated scope</Button></div> : null}
+    <Button type="button" variant="ghost" size="sm" aria-expanded={showPlaybackHelp} onClick={() => setShowPlaybackHelp((shown) => !shown)}>How do I listen?</Button>
+    {showPlaybackHelp ? <p className="side-note" role="status">{playbackHelp}</p> : null}
   </DirectionComposer></>
 
   const producer = <section className="producer-panel" aria-label="Producer"><div className="producer-heading"><h2>Producer</h2>{current || tentative?.document ? <Button className="producer-view-arrangement" variant="ghost" onClick={() => setWorkspaceView("arrangement")}>View arrangement <ArrowRight size={14} /></Button> : null}</div>{job && job.kind !== "native-sync" && (activeJob || job.state === "needs_attention") ? <ConstructionProgress plan={tentative?.jobId === job.id ? tentative.plan : null} document={tentative?.jobId === job.id ? tentative.document : null} paused={job.state === "needs_attention"} /> : null}<ProducerFeed events={activity.events} connection={activity.connection} older={activity.older} onOlder={() => void activity.loadOlder().catch(() => setError({ code: null }))} onLatest={activity.closeOlder} historyBusy={activity.historyBusy} onCompare={reviewActivityVersion} resolveTargets={resolveTargets} onPreview={previewTargets} onReveal={revealTargets} />{activeJob && activeJob.kind !== "native-sync" ? <div className="producer-current" role="status"><strong>{jobProgress(activeJob)}</strong><Button size="sm" variant="outline" disabled={!activity.state?.actions.canStop} onClick={() => void api.cancel(activeJob.id).then(() => api.job(activeJob.id)).then(setJob).catch(() => setError({ code: null }))}>Stop</Button></div> : null}{job && job.kind !== "native-sync" && terminal.has(job.state) && job.state !== "succeeded" ? <div className="job-status" role="status">

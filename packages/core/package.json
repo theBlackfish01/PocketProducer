@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./request-help": "./src/native/request-help.ts",
     "./api": "./src/api.ts",
     "./config": "./src/config.ts",
     "./storage": "./src/storage/local-storage.ts",
