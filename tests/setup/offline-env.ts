@@ -18,6 +18,8 @@ Object.assign(process.env, {
   LANGSMITH_HIDE_OUTPUTS: "true",
   DEV_LOCAL_AUTH: "true",
   OPENAI_API_KEY: "",
+  // Exercise the shipped default even when a developer's .env has a larger cap.
+  MAX_OPENAI_INPUT_TOKENS: "96000",
   AI_GATEWAY_API_KEY: "",
   VERCEL_AI_GATEWAY_API_KEY: "",
   OPENAI_POOL_BUDGET_USD: "5",
