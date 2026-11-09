@@ -85,6 +85,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  submitFeedback: (input: { id: string; message: string }) => request<{ saved: true }>("/feedback", { method: "POST", body: JSON.stringify(input) }),
   audiotoolProfile: (signal?: AbortSignal) => request<{ profile: { userName: string; displayName: string; avatarUrl: string | null } | null }>("/integrations/audiotool/profile", { signal }),
   disconnectAudiotool: async () => { const response = await fetch("/api/v1/integrations/audiotool/session", { method: "DELETE" }); if (!response.ok) throw new Error("Unable to disconnect Audiotool") },
   assistPrompt: (id: string, input: { mode: "rewrite" | "inspire"; direction: string; expectedHeadId: string | null; sectionId: string | null; partId: string | null; protectedPartIds: string[]; sourceIds: string[]; recent: string[] }, key: string, signal?: AbortSignal) => request<{ prompt: string; provenance: "luna" | "fixture" }>(`/projects/${id}/prompt-assistance`, { method: "POST", headers: { "Idempotency-Key": key }, body: JSON.stringify(input), signal }),

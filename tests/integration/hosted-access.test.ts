@@ -6,6 +6,7 @@ import { getPool, getConfig, saveAudiotoolSession, issueAccess, revokeAccess, st
 
 const base = "http://127.0.0.1:19279", origin = "https://pocket.example";
 const owners: string[] = [];
+const feedbackIds: string[] = [];
 let child: ChildProcess, a: string, b: string, ownerA: string, project: string, asset: string;
 async function start() {
   child = spawn(process.execPath, ["--import", "tsx", "apps/api/src/server.ts"], { windowsHide: true, stdio: "ignore", env: {
@@ -41,6 +42,7 @@ beforeAll(async () => {
 }, 60_000);
 afterAll(async () => {
   await stop();
+  await getPool().query("DELETE FROM app_feedback WHERE id=ANY($1::uuid[])", [feedbackIds]);
   await getPool().query("DELETE FROM asset WHERE owner_id=ANY($1::uuid[])", [owners]);
   await getPool().query("DELETE FROM project WHERE owner_id=ANY($1::uuid[])", [owners]);
   await getPool().query("DELETE FROM audiotool_session WHERE owner_id=ANY($1::uuid[])", [owners]);
@@ -92,6 +94,34 @@ it("retains sessions, project ownership and source bytes across an actual API re
   expect((await (await call("/status",a)).json()).nexus.session.connected).toBe(true);
   expect((await (await call("/status",b)).json()).nexus.session.connected).toBe(false);
 },60_000);
+it("stores feedback with verified identity, rejects spoofing, and safely retries lost acknowledgements", async () => {
+  const id = randomUUID(); feedbackIds.push(id);
+  const payload = { id, message: "  Please improve section navigation.  " };
+  expect((await call("/feedback", undefined, payload)).status).toBe(401);
+  expect((await call("/feedback", a, payload, "https://evil.example")).status).toBe(403);
+  expect((await call("/feedback", a, { ...payload, username: "forged" })).status).toBe(422);
+  expect((await call("/feedback", a, { ...payload, message: " " })).status).toBe(422);
+  expect((await call("/feedback", a, { ...payload, message: "x".repeat(4001) })).status).toBe(422);
+  expect((await call("/feedback", a, payload)).status).toBe(201);
+  expect((await call("/feedback", a, payload)).status).toBe(200);
+  expect((await call("/feedback", b, payload)).status).toBe(409);
+  expect((await call("/feedback", a, { ...payload, message: "Changed contents" })).status).toBe(409);
+  const rows = await getPool().query("SELECT f.*,u.display_name FROM app_feedback f JOIN app_user u ON u.id=f.owner_id WHERE f.id=$1", [id]);
+  expect(rows.rowCount).toBe(1);
+  expect(rows.rows[0]).toMatchObject({ owner_id: ownerA, username: rows.rows[0].display_name, message: payload.message.trim() });
+  expect((await call("/feedback", a)).status).toBe(404);
+});
+it("retains feedback even after its account is deleted", async () => {
+  const access = await issueAccess("Feedback retention fixture");
+  const cookie = await signIn(access.code), id = randomUUID(); feedbackIds.push(id);
+  try {
+    expect((await call("/feedback", cookie, { id, message: "Keep this feedback." })).status).toBe(201);
+  } finally {
+    await getPool().query("DELETE FROM hosted_access WHERE owner_id=$1", [access.ownerId]);
+    await getPool().query("DELETE FROM app_user WHERE id=$1", [access.ownerId]);
+  }
+  expect((await getPool().query("SELECT owner_id,username,message FROM app_feedback WHERE id=$1", [id])).rows).toEqual([{ owner_id: null, username: "Feedback retention fixture", message: "Keep this feedback." }]);
+});
 it("logout revokes the session and closes its existing stream", async () => {
   const controller=new AbortController();
   try {

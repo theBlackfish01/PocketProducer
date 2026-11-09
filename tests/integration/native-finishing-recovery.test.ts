@@ -1042,3 +1042,22 @@ it("counts a lost final review as one attempt and reviews again with a fresh req
   const reviews = (await getPool().query("SELECT state,cost_status FROM effect WHERE job_id=$1 AND step='producer-model-call' AND prompt_version='native-symbolic-review-v2' ORDER BY created_at", [job.id])).rows;
   expect(reviews).toEqual([{ state: "uncertain", cost_status: "unknown" }, { state: "succeeded", cost_status: "observed" }]);
 });
+
+
+it("directs a revision inspection loop toward its first edit without accepting unchanged music", async () => {
+  const seed = await create();
+  await processJob(seed);
+  const head = (await nativeSnapshot(owner, seed.projectId)).current!;
+  const revision = await createNativeJob({ ownerId: owner, projectId: seed.projectId, kind: "native-revision", idempotencyKey: randomUUID(), expectedHeadId: head.id, request: { direction: "dubstep", sourceAssetIds: [], baseNativeRevisionId: head.id, expectedNativeHeadId: head.id } });
+  await dispatchOutbox();
+  const producer = fakeModel();
+  for (let i = 0; i < 30; i++) producer.respondWithTools([{ name: "inspect_native_workspace", args: {} }]);
+  await processJob((await claimJobById(revision.id, "revision-loop"))!, { scriptedModel: producer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, revision.id)).toMatchObject({ state: "needs_attention", error_message: expect.stringContaining("REPEATED_NO_PROGRESS") });
+  const sent = producer.calls.map((call) => JSON.stringify(call.messages)).join("\n");
+  expect(sent).toContain("No revision edit is confirmed");
+  expect(sent).toContain("latest revision request is authoritative");
+  expect(sent).toContain("dubstep");
+  expect(producer.callCount).toBeLessThan(30);
+  expect((await nativeSnapshot(owner, seed.projectId)).current!.id).toBe(head.id);
+}, 30000);

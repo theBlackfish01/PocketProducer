@@ -93,7 +93,7 @@ it("prunes only settled execution history, preserving versions, steps, ownership
 it.each(["recent", "paused", "failed", "cancelled", "leased", "uncertain", "reserved", "missing-completion", "copy-uncertain", "unrecognized-thread"])("retains %s history", async (condition) => {
   const f = await completed();
   if (condition === "recent") await getPool().query("UPDATE job SET updated_at=now() WHERE id=$1", [f.jobId]);
-  if (["paused", "failed", "cancelled"].includes(condition)) await getPool().query("UPDATE job SET state=$2 WHERE id=$1", [f.jobId, condition === "paused" ? "needs_attention" : condition]);
+  if (["paused", "failed", "cancelled"].includes(condition)) await getPool().query("UPDATE job SET state=$2,updated_at=now() WHERE id=$1", [f.jobId, condition === "paused" ? "needs_attention" : condition]);
   if (condition === "leased") await getPool().query("UPDATE job SET lease_owner='active',lease_until=now()+interval '1 minute' WHERE id=$1", [f.jobId]);
   if (condition === "uncertain" || condition === "reserved") await getPool().query("UPDATE effect SET state=$2,cost_status=$3 WHERE job_id=$1", [f.jobId, condition, condition === "uncertain" ? "unknown" : "observed"]);
   if (condition === "missing-completion") await getPool().query("DELETE FROM native_producer_completion WHERE job_id=$1", [f.jobId]);
@@ -171,4 +171,33 @@ it("drains only one completed thread per maintenance interval under storage pres
     config.CHECKPOINT_RETENTION_ENABLED = false;
     config.DATABASE_VOLUME_CAPACITY_MB = 0;
   }
+});
+
+
+it.each(["needs_attention", "failed", "cancelled"])("expires settled inactive %s history after 24h, preserving bounded discovery", async (state) => {
+  const f = await completed();
+  const saver = await checkpoint();
+  const config = (await saver.getTuple({ configurable: { thread_id: f.thread } }))!.config;
+  await saver.putWrites(config, [["messages", [
+    { tool_calls: [{ id: "read", name: "read_native_recipe", args: { id: "warm" } }] },
+    { tool_call_id: "read", content: "Original local recipe" },
+    { tool_calls: [{ id: "score", name: "inspect_native_workspace", args: {} }] },
+    { tool_call_id: "score", content: "Mutable score must not survive as current evidence" }
+  ]]], "discovery");
+  await getPool().query("UPDATE job SET state=$2,updated_at=now()-interval '25 hours' WHERE id=$1", [f.jobId, state]);
+  await getPool().query(`INSERT INTO effect(job_id,step,idempotency_key,input_hash,state,provider,model,cost_status,reservation_microusd) VALUES($1,'native-producer-result','wrapper','fixture','dispatched','openai','gpt-6-luna','observed',0)`, [f.jobId]);
+  expect((await pruneCheckpoints({ apply: true })).prunedThreads).toBeGreaterThan(0);
+  const cache = (await getPool().query("SELECT evidence FROM native_checkpoint_read_cache WHERE job_id=$1", [f.jobId])).rows[0].evidence;
+  expect(cache).toEqual([{ tool: "read_native_recipe", arguments: { id: "warm" }, content: "Original local recipe", truncated: false }]);
+  expect((await getPool().query("SELECT state FROM effect WHERE job_id=$1 AND step='native-producer-result'", [f.jobId])).rows[0].state).toBe("dispatched");
+});
+
+it("cleans orphan writes/blobs and uses one hour for successes without touching recent work", async () => {
+  const f = await completed();
+  await getPool().query("UPDATE job SET updated_at=now()-interval '59 minutes' WHERE id=$1", [f.jobId]);
+  expect((await pruneCheckpoints({ apply: true })).prunedThreads).toBe(0);
+  await getPool().query("DELETE FROM checkpoints WHERE thread_id=$1", [f.thread]);
+  await getPool().query("UPDATE job SET updated_at=now()-interval '61 minutes' WHERE id=$1", [f.jobId]);
+  expect((await pruneCheckpoints({ apply: true })).prunedThreads).toBe(1);
+  for (const table of ["checkpoint_writes", "checkpoint_blobs"]) expect((await getPool().query(`SELECT 1 FROM ${table} WHERE thread_id=$1`, [f.thread])).rowCount).toBe(0);
 });

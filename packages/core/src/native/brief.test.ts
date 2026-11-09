@@ -182,13 +182,15 @@ describe("captured brief validation", () => {
     expect(fresh.sections).toHaveLength(2);
   });
 
-  it("softens what cannot apply and conflicting whole-piece instructions", () => {
+  it("surfaces conflicting whole-piece instructions and softens inapplicable keeps", () => {
     const fresh = capturedBrief("Keep the bass simple; no drums, but add drums later", {
       keep: [briefKeep("Keep the bass simple", { partId: "bass" })],
       roles: [briefRole("absent", "drums", "no drums"), briefRole("required", "drums", "add drums later")]
     });
-    expect(fresh).toMatchObject({ keep: [], roles: [], rejected: [] });
-    expect(fresh.guidance.map((item) => item.reason)).toEqual(["Conflicting whole-piece drums instructions", "Conflicting whole-piece drums instructions", "Nothing exists yet to keep unchanged"]);
+    expect(fresh).toMatchObject({ keep: [], roles: [] });
+    expect(fresh.rejected).toHaveLength(2);
+    expect(fresh.rejected.every((item) => item.reason.includes("Conflicting"))).toBe(true);
+    expect(fresh.guidance.map((item) => item.reason)).toEqual(["Nothing exists yet to keep unchanged"]);
   });
 
   it("rejects an ambiguous theme with the reason, and keeps one melodic part when no phrase is linked", () => {
@@ -419,4 +421,28 @@ it("surfaces an identical-scope change/keep conflict without removing exact prot
   const brief = capturedBrief("Change the melody. Keep the melody unchanged.", { roles: [briefRole("change", "lead", "Change the melody"), briefRole("preserve", "lead", "Keep the melody unchanged")] }, melody);
   expect(brief.roles).toMatchObject([{ kind: "preserve" }]);
   expect(brief.rejected).toEqual([expect.objectContaining({ reason: expect.stringContaining("same scope") })]);
+});
+
+
+it("does not turn sparse existing kicks or avoiding layers into drum exclusion", () => {
+  const base = structuredClone(melody);
+  base.sections = [{ id: "drive", name: "Hard Drive", startBar: 0, endBar: base.bars, intent: "" }];
+  const direction = "In Hard Drive, use fewer kick hits. Keep its sound and role; avoid adding layers or extra rhythmic detail.";
+  expect(capturedBrief("Remove the kick but keep the snare", { roles: [briefRole("absent", "drums", "Remove the kick")] }, base).roles).toEqual([]);
+  const brief = capturedBrief(direction, { roles: [briefRole("change", "drums", "use fewer kick hits", "Hard Drive", true), briefRole("absent", "drums", "avoid adding layers or extra rhythmic detail", "Hard Drive")] }, base);
+  expect(brief.roles).toMatchObject([{ kind: "change", role: "drums", reduceDensity: true }]);
+  expect(brief.rejected).toEqual([]);
+  expect(brief.guidance).toHaveLength(1);
+  for (const quote of ["No drums", "Remove drums", "Without drums", "Avoid drums", "Remove drums; avoid adding layers"]) {
+    expect(capturedBrief(quote, { roles: [briefRole("absent", "drums", quote)] }, base).roles).toHaveLength(1);
+  }
+});
+
+it("detects change/exclusion conflicts against the same selected section, retaining exact protection", () => {
+  const base = structuredClone(melody);
+  const target = base.sections[0]!;
+  const direction = "No drums. Thin the drums. Keep drums unchanged.";
+  const brief = captureNativeBrief({ ...empty, roles: [briefRole("absent", "drums", "No drums", target.name), briefRole("change", "drums", "Thin the drums"), briefRole("preserve", "drums", "Keep drums unchanged")] }, { direction, document: base, targetSectionId: target.id, baseRevisionId: null, provenance: "scripted" });
+  expect(brief.roles).toMatchObject([{ kind: "preserve" }]);
+  expect(brief.rejected).toHaveLength(2);
 });

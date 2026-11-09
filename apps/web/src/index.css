@@ -536,3 +536,9 @@ button:disabled { cursor: not-allowed; }
   .mobile-change-dock button { min-height: 44px; }
   .native-room:has(.direction-section :focus) .mobile-change-dock { display: none; }
 }
+
+.rail-footer-links, .mobile-topbar-actions { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+.feedback-trigger { color: var(--muted-foreground); }
+.feedback-dialog { max-height: calc(100dvh - 2rem); overflow-y: auto; }
+.feedback-form { display: grid; gap: .75rem; }
+.feedback-form textarea { resize: vertical; min-height: 7rem; max-height: 35dvh; }

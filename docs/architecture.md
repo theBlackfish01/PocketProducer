@@ -1,5 +1,7 @@
 # Architecture — native construction is the current path
 
+November 9: authenticated `POST /api/v1/feedback` stores bounded plain text with a server-resolved username snapshot. Submission UUIDs make identical retries idempotent; conflicting bodies/owners are rejected. There is no public listing endpoint, provider call or tracing of feedback. `app_feedback` is permanent product data: neither checkpoint retention nor reset touches it, and account deletion nulls the owner reference without deleting the submission.
+
 November 4 [request/review reliability follow-up](trace-reliability-followup-2026-11-04.md): shared unpaid playback-help admission, qualitative identity capture, explicit whole-piece revision scope, optional stored critic fact claims and bounded continuation diagnostics extend the existing workflow. There is no new service, table, renderer, automatic synchronization or allowance change.
 
 ## Arrangement scorecard, development nudge and scene building blocks (2026-10-12)

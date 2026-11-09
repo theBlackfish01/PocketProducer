@@ -1,13 +1,11 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { canonicalHash } from "../domain/hash.js";
 import { getPool } from "../db/pool.js";
+import { checkpointReadEvidence, readCheckpointEvidence, type ReadEvidence } from "../db/checkpoint-evidence.js";
 import { boundOpenAiRequest, type InputCalibration } from "../agent/runtime.js";
 import { coded, hasErrorCode } from "../errors.js";
 
-// Only pinned, local read-only guidance survives edits. Never cache mutable
-// music, external resource availability, reviews or user authorization here.
-const reusableReads = new Set(["read_file", "read_native_example", "read_native_recipe", "discover_native_capabilities", "inspect_native_capability"]);
-export interface ReadEvidence { tool: string; arguments: unknown; content: string; truncated: boolean }
+export type { ReadEvidence } from "../db/checkpoint-evidence.js";
 const musicalReads = new Set(["inspect_native_workspace", "inspect_native_part", "inspect_native_motif", "inspect_native_section", "inspect_editable_sound"]);
 
 // Read facts, never model reasoning. Kept only for the exact current document
@@ -230,51 +228,13 @@ export function withNativeFinishingContext(history: BaseMessage[], checklist: Re
 }
 
 export async function loadNativeReadEvidence(jobId: string): Promise<ReadEvidence[]> {
-  // Existing graph checkpoints already persist these results. Restore only a
-  // bounded read index, not model reasoning or mutable score snapshots.
-  const rows = await getPool().query<{ blob: Buffer }>(`SELECT blob FROM (
-    SELECT blob,checkpoint_id,idx FROM checkpoint_writes
-    WHERE thread_id LIKE $1 AND channel='messages' AND type='json'
-    ORDER BY checkpoint_id DESC,idx DESC LIMIT 256
-  ) recent ORDER BY checkpoint_id,idx`, [`${jobId}:%`]);
-  const messages: BaseMessage[] = [];
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) { value.forEach(visit); return; }
-    if (!value || typeof value !== "object") return;
-    const entry = value as Record<string, unknown>;
-    const data = (entry.kwargs ?? entry) as Record<string, unknown>;
-    if (Array.isArray(data.tool_calls)) messages.push(new AIMessage({ content: "", tool_calls: data.tool_calls as NonNullable<AIMessage["tool_calls"]> }));
-    if (typeof data.tool_call_id === "string" && typeof data.content === "string") messages.push(new ToolMessage({ content: data.content, tool_call_id: data.tool_call_id, status: data.status === "error" ? "error" : "success" }));
-  };
-  for (const row of rows.rows) { try { visit(JSON.parse(row.blob.toString("utf8"))); } catch { /* A future serializer may require fresh reads. */ } }
-  return nativeReadEvidence(messages);
+  return readCheckpointEvidence(getPool(), jobId);
 }
 
 export function nativeReadEvidence(messages: BaseMessage[], prior: ReadEvidence[] = []): ReadEvidence[] {
-  const retained = new Map(prior.map((entry) => [canonicalHash([entry.tool, entry.arguments]), entry]));
-  const calls = new Map<string, { name: string; args: unknown }>();
-  for (const message of messages) {
-    if (message instanceof AIMessage) for (const call of message.tool_calls ?? []) {
-      if (call.id && reusableReads.has(call.name)) calls.set(call.id, { name: call.name, args: call.args });
-    }
-    if (!(message instanceof ToolMessage) || message.status === "error" || message.text.startsWith("Error")) continue;
-    const call = calls.get(message.tool_call_id);
-    if (!call) continue;
-    // File permission enforcement still lives in Deep Agents. Only skill reads
-    // are reusable: workspace snapshots must never masquerade as current state.
-    if (call.name === "read_file" && !JSON.stringify(call.args).includes("/skills/")) continue;
-    const key = canonicalHash([call.name, call.args]);
-    retained.delete(key);
-    retained.set(key, { tool: call.name, arguments: call.args, content: message.text.slice(0, 6000), truncated: message.text.length > 6000 });
-  }
-  let size = 0;
-  const result: ReadEvidence[] = [];
-  for (const entry of [...retained.values()].reverse()) {
-    const length = JSON.stringify(entry).length;
-    if (size + length > 24_000 || result.length >= 12) continue;
-    result.unshift(entry); size += length;
-  }
-  return result;
+  return checkpointReadEvidence(messages.map((message) => message instanceof AIMessage
+    ? { tool_calls: message.tool_calls }
+    : message instanceof ToolMessage ? { tool_call_id: message.tool_call_id, content: message.text, status: message.status } : null), prior);
 }
 
 export function nativeFinishingGuidance(turns: number): string {

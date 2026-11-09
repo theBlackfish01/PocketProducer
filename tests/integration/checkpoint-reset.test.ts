@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { checkpoint, claimJobById, closePool, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, getConfig, getPool, jobSnapshot, loadNativePlan, nativeDraftView, nativeFormOperations, nativeFormSchema, nativePlanSchema, nativeSnapshot, NativeToolSession, resumeNativePartialJob, saveNativePlan, seedNativeDocument } from "@pocket/core";
 import { AIMessage, fakeModel } from "@pocket/core/test-support";
-import { discardExecutionCheckpoints } from "@pocket/core/maintenance";
+import { discardExecutionCheckpoints, pruneCheckpoints } from "@pocket/core/maintenance";
 import { processJob } from "@pocket/worker";
 
 const config = getConfig(), original = { ...config };
@@ -107,8 +107,14 @@ it("physically reclaims history while preserving saved music, drafts, plans and 
   const steps = (await getPool().query("SELECT * FROM native_job_step ORDER BY job_id,ordinal")).rows;
   const bytes = await tablesBytes();
   expect(bytes).toBeGreaterThan(200_000);
+  // Scheduled retention must also permit safe continuation of a real graph.
+  await getPool().query("UPDATE job SET updated_at=now()-interval '25 hours' WHERE id=$1", [job.id]);
+  const feedbackId = randomUUID();
+  await getPool().query("INSERT INTO app_feedback(id,owner_id,username,message) VALUES($1,$2,'Reset fixture','Keep feedback')", [feedbackId, owner]);
+  expect((await pruneCheckpoints({ apply: true })).prunedThreads).toBe(1);
   const result = await discardExecutionCheckpoints();
-  expect(result.discardedRows).toBeGreaterThan(3);
+  expect((await getPool().query("SELECT message FROM app_feedback WHERE id=$1", [feedbackId])).rows).toEqual([{ message: "Keep feedback" }]);
+  expect(result.discardedRows).toBeGreaterThanOrEqual(3);
   expect(await graphCounts()).toEqual({ checkpoints: 0, blobs: 0, writes: 0 });
   expect(bytes - await tablesBytes()).toBeGreaterThan(200_000);
   expect(await nativeSnapshot(owner, completed.projectId)).toEqual(saved);

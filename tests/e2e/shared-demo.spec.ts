@@ -11,7 +11,7 @@ test("shows quiet Luna availability and exhausted states without hiding saved se
   await page.goto("/");
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
   await page.getByLabel("Describe your arrangement").fill("A warm sparse melody with a gentle pulse");
-  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible();
+  await expect(page.getByText("GPT-6 Luna", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Producer model" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create arrangement", exact: true })).toBeEnabled();
   await expect(page.locator(".session-rail").getByRole("link", { name: /GitHub/ })).toHaveAttribute("href", "https://github.com/theBlackfish01/PocketProducer");

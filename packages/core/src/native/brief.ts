@@ -143,7 +143,7 @@ Hard items must be explicit and unambiguous:
 - sections: a stated section length ("an 8-bar intro") or bar span ("the chorus at bars 9-16"); bars are 1-based and inclusive, as written.
 When a length applies to a list, reuse the complete quoted clause for each named section. For "three eight-bar sections: Arrival, Lift, and Afterglow", return three sections with bars 8, startBar null, endBar null, each quoting "three eight-bar sections: Arrival, Lift, and Afterglow". Do not calculate start/end positions that the user did not write. A section-name-only quote cannot substantiate a length. If the supporting words cannot fit in the quote, keep the request as guidance.
 - chordProgressions: an explicit ordered sequence of at least three chords, as symbols such as Dm9, Bbmaj7, Fmaj9, Cadd9, Am, C or G7.
-- roles: kind required (include, add, bring in), absent (no, without, remove, avoid), change (simplify, thin, vary or brighten an existing role; set reduceDensity when asking for fewer notes or hits), preserve (keep a role unchanged or exactly as it is). role is drums, bass, harmony (chords, pads), lead (melody) or transitions (existing FX parts to preserve or exclude).
+- roles: kind required (include, add, bring in), absent (explicitly exclude the role; avoiding extra layers is not removing it), change (simplify, thin, vary or brighten an existing role; set reduceDensity when asking for fewer notes or hits), preserve (keep a role unchanged or exactly as it is). role is drums, bass, harmony (chords, pads), lead (melody) or transitions (existing FX parts to preserve or exclude).
 Requests to add or develop transitions, risers, fills or endings belong in guidance: they can use existing instruments and do not require a separate FX part. For example, "Return with a clear ending" is guidance about the ending, never a required transitions role. Explicit keep/remove instructions for existing FX parts remain checks.
 - Recognizable identity is guidance, not exact preservation. "Keep the theme recognizable but vary its rhythm/register" must not create keep/preserve checks. Explicit "keep unchanged" still means exact preservation. For conflicting exact keep and change instructions on the same material, explain the conflict.
 - keep: in a revision, a named part or phrase to keep unchanged, using only ids from the document; theme true for "the theme", "the hook" or "the motif" without a specific phrase.
@@ -276,6 +276,14 @@ const sameRef = (a: BriefSectionRef | null, b: BriefSectionRef | null) => canoni
  * whose quote is not the user's own words, whose numbers are not written there,
  * or whose identities do not exist are rejected (the user can send them as
  * guidance); items that cannot apply become guidance. Invalid shapes throw. */
+// Match removal of the role itself, not adding/layering/extra rhythmic detail.
+// Unrecognized wording remains guidance rather than inventing a hard absence.
+function explicitRoleExclusion(quote: string, role: BriefRole): boolean {
+  const names: Record<BriefRole, string> = { drums: "drums|percussion", bass: "bass", harmony: "harmony|chords?|pads?", lead: "lead|melody", transitions: "transitions?|effects?|fx" };
+  const roles = Object.values(names).join("|");
+  return new RegExp(`\\b(?:no|without|remove|exclude|omit|avoid|drop|eliminate|mute|leave out|do not use|don't use)\\s+(?:(?:the|all|any|existing|current)\\s+)?(?:(?:${roles})(?:\\s*,?\\s*(?:or|and)\\s+))*(?:${names[role]})\\b`, "i").test(quote);
+}
+
 export function captureNativeBrief(raw: unknown, context: BriefContext): NativeBrief {
   const { proposal, problems } = readProposal(raw);
   const brief = emptyNativeBrief(context);
@@ -347,10 +355,16 @@ export function captureNativeBrief(raw: unknown, context: BriefContext): NativeB
     else if (item.chords.some((chord) => !chordPitchClasses(chord).length || !quoted.some((word) => word.startsWith(chord[0]!.toLowerCase())))) reject(item.quote, "Not every chord in this progression could be read");
     else brief.chordProgressions.push(item);
   }
+  const effectiveRef = (ref: BriefSectionRef | null) => ref ?? (context.targetSectionId && document ? section({ sectionId: context.targetSectionId, name: null, position: null }) : null);
+  const sameScope = (a: BriefSectionRef | null, b: BriefSectionRef | null) => {
+    const normalize = (ref: BriefSectionRef | null) => { const value = effectiveRef(ref); return value && "ref" in value ? value.ref : value; };
+    return canonicalHash(normalize(a)) === canonicalHash(normalize(b));
+  };
   for (const item of proposal.roles) {
     const resolved = section(item.section);
     if (!written(item.quote)) reject(item.quote, notWritten);
     else if ("problem" in resolved) reject(item.quote, resolved.problem);
+    else if (item.kind === "absent" && !explicitRoleExclusion(item.quote, item.role)) soften(item.quote, "No explicit role removal was verified; retain this as musical guidance");
     else if (item.kind === "preserve" && qualitativeIdentity(item.quote)) soften(item.quote, "Retain recognizable identity while allowing musical development");
     else if (item.kind === "preserve" && !document) soften(item.quote, "Nothing exists yet to keep unchanged");
     // A transition is a musical function, not proof that a separate FX voice
@@ -359,18 +373,18 @@ export function captureNativeBrief(raw: unknown, context: BriefContext): NativeB
     else if (item.role === "transitions" && (item.kind === "required" || item.kind === "change")) soften(item.quote, "Transitions can use existing parts; a separate FX part is not required");
     else if (!brief.roles.some((other) => other.kind === item.kind && other.role === item.role && sameRef(other.section, resolved.ref))) brief.roles.push({ ...item, section: resolved.ref });
   }
-  // Conflicting whole-piece instructions need a stated interpretation, not a veto.
-  for (const role of briefRoles) {
-    const global = brief.roles.filter((rule) => rule.role === role && !rule.section);
-    if (global.some((rule) => rule.kind === "absent") && global.some((rule) => rule.kind === "required" || rule.kind === "change")) {
-      for (const rule of global.filter((value) => value.kind !== "preserve")) soften(rule.quote, `Conflicting whole-piece ${briefRoleRules[role].label} instructions`);
-      brief.roles = brief.roles.filter((rule) => rule.role !== role || rule.section || rule.kind === "preserve");
-    }
-  }
+  // Contradictions use the effective scope, including the selected section.
+  const conflicting = brief.roles.filter((rule) => rule.kind === "absent" && brief.roles.some((other) => other.role === rule.role && sameScope(other.section, rule.section) && ["required", "change", "preserve"].includes(other.kind)));
+  brief.roles = brief.roles.filter((rule) => {
+    if (!conflicting.some((other) => other.role === rule.role && sameScope(other.section, rule.section))) return true;
+    if (rule.kind === "preserve") return true;
+    reject(rule.quote, `Conflicting ${briefRoleRules[rule.role].label} instructions in the same scope. Clarify whether to keep, change or remove it`);
+    return false;
+  });
   // Only an identical scope is provably contradictory. Keeping one phrase while
   // developing the rest is valid; leave overlapping/ambiguous scopes to the user.
   brief.roles = brief.roles.filter((rule) => {
-    if (rule.kind !== "change" || !brief.roles.some((other) => other.kind === "preserve" && other.role === rule.role && sameRef(other.section, rule.section))) return true;
+    if (rule.kind !== "change" || !brief.roles.some((other) => other.kind === "preserve" && other.role === rule.role && sameScope(other.section, rule.section))) return true;
     reject(rule.quote, `This also asks to keep ${briefRoleRules[rule.role].label} unchanged in the same scope. The exact keep instruction takes priority unless you revise it`);
     return false;
   });

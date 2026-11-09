@@ -1,5 +1,9 @@
 # Live implementation status
 
+## Bounded execution retention and revision follow-up — 2026-11-09
+
+Release candidate in progress, now including an unobtrusive feedback dialog on desktop and phone. Feedback is stored with server-verified identity in permanent storage, outside automatic cleanup; identical retries are idempotent. One-hour settled-success and 24-hour settled-inactive execution retention, bounded continuation discovery cache, scoped revision interpretation and pre-edit loop guidance; redundant prompt model label removed. Active work, unknown liabilities, saved music and accounting remain protected. Pre-release checks pass: 355 unit tests, 211 PostgreSQL integration tests and 19 application browser journeys; TypeScript, ESLint and production build pass. Desktop/phone feedback screenshots inspected. Commit/deployment/live evidence follows when complete.
+
 ## Trace-driven request and review fixes — 2026-11-04
 
 Implemented the [bounded reliability follow-up](trace-reliability-followup-2026-11-04.md) locally. New interpretations keep recognizable musical identity as guidance while retaining exact locks; same-scope change/keep conflicts are surfaced. Corrected a concrete producer prompt defect that told whole-piece revisions to choose one section. Clear playback questions now return shared unpaid help before interpretation/construction, preserving mixed musical requests and owner checks. WAV size/format guidance, busy-session copy and creation-capability explanations are clearer.

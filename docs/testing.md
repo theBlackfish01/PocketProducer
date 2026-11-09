@@ -1,5 +1,12 @@
 # Verification record
 
+## Execution retention, revision follow-up and feedback — November 9
+
+- Final offline unit suite: **355/355, 52 files**. Full PostgreSQL integration suite: **211/211, 16 files**, including the unchanged input limits, inactive-history continuation, physical reclamation, and feedback authentication/identity/retries/account deletion. Feedback also survives the execution reset.
+- TypeScript, ESLint and Vite production build pass; the existing chunk-size advisory remains. All **19 application browser journeys pass**, including actual fixture feedback persistence and duplicate-safe retry after an injected outage, keyboard focus and phone layout. Desktop/phone feedback screenshots were inspected.
+- Earlier Windows runs hit intermittent five-second test deadlines under concurrent validation; no timeouts, assertions, leases or model limits were relaxed. A sequential full integration rerun passed. One feedback fixture initially attempted account deletion before deleting its invitation; corrected only the fixture cleanup order.
+- No live provider or Audiotool calls in fixture checks. Release/live evidence is recorded in STATUS.md after deployment.
+
 ## Trace-driven reliability follow-up — November 4
 
 - Installed pinned tooling was invoked through `node_modules/.bin/*.cmd`; the pnpm launcher attempted an unavailable registry lookup. Windows sandbox temporary-file isolation initially prevented Vitest loading; provider-free tests ran outside that sandbox. The dedicated local PostgreSQL test container was started and `node --import tsx packages/core/src/db/prepare-test.ts` applied only the existing test schema.

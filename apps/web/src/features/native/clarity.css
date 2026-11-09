@@ -93,7 +93,6 @@
   .prompt-helper-actions button, .direction-options summary { min-height: 44px; }
   .account-row { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 }
-.producer-model-label { display: block; margin-top: 12px; color: var(--muted-foreground); font-size: .72rem; }
 .session-rail .hosted-account, .mobile-session-list .hosted-account { margin-top: 12px; justify-content: flex-end; }
 .native-library-actions { display: flex; flex: none; gap: 8px; align-items: center; }
 .native-library-results li > div:first-child { flex: 1; }

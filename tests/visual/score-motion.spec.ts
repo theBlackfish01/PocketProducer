@@ -357,7 +357,7 @@ test("creation availability fails closed and recovers without losing the directi
   await expect(submit).toBeEnabled()
   await expect(input).toHaveValue("More movement, but keep it coherent.")
   await expect(page.getByRole("combobox", { name: "Producer model" })).toHaveCount(0)
-  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible()
+  await expect(page.getByText("GPT-6 Luna", { exact: true })).toHaveCount(0)
   expect(room.writes()).toBe(0)
 })
 

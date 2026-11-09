@@ -2,6 +2,7 @@ import type pg from "pg";
 import { createHash } from "node:crypto";
 import { getConfig } from "../config.js";
 import { getPool } from "./pool.js";
+import { preserveCheckpointEvidence } from "./checkpoint-evidence.js";
 
 const MB = 1_000_000; // Railway's configured volume capacity is decimal MB.
 const intervalMs = 300_000;
@@ -9,20 +10,23 @@ const tables = ["checkpoint_writes", "checkpoint_blobs", "checkpoints"] as const
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const threadFormat = `^${uuid}(:${uuid}(:[a-zA-Z0-9._-]{1,100})?)?$`;
 
-// Deliberately exclude failed/cancelled/paused jobs and unmatched historical
-// threads. A saved revision alone is not proof that all paid work is settled.
-const eligible = `j.kind IN ('native-generation','native-revision') AND j.state='succeeded'
-  AND j.updated_at < now() - make_interval(days => $1)
+// Execution history is disposable only after an inactive attempt is settled.
+// Unknown effects/copies remain fenced, even though their durable records survive.
+const eligible = `j.kind IN ('native-generation','native-revision')
+  AND ((j.state='succeeded' AND j.updated_at < now() - make_interval(hours => $1)
+    AND EXISTS (SELECT 1 FROM native_revision r JOIN native_producer_completion done
+      ON done.job_id=j.id AND done.document_hash=r.document_hash
+      WHERE r.id=j.result_native_revision_id AND r.creator_job_id=j.id
+        AND r.owner_id=j.owner_id AND r.project_id=j.project_id))
+    OR (j.state IN ('needs_attention','failed','cancelled') AND j.updated_at < now() - interval '24 hours'))
   AND j.lease_owner IS NULL AND j.lease_until IS NULL AND j.attempt_id IS NULL
-  AND EXISTS (SELECT 1 FROM native_revision r JOIN native_producer_completion done
-    ON done.job_id=j.id AND done.document_hash=r.document_hash
-    WHERE r.id=j.result_native_revision_id AND r.creator_job_id=j.id
-      AND r.owner_id=j.owner_id AND r.project_id=j.project_id)
   AND NOT EXISTS (SELECT 1 FROM effect e WHERE e.job_id=j.id
-    AND (e.state NOT IN ('succeeded','failed') OR e.cost_status<>'observed'))
+    AND (e.state NOT IN ('succeeded','failed') OR e.cost_status<>'observed')
+    AND NOT (e.step='native-producer-result' AND e.state='dispatched' AND e.reservation_microusd=0 AND e.cost_status='observed'))
   AND NOT EXISTS (SELECT 1 FROM native_sample_upload u WHERE u.project_id=j.project_id AND u.state<>'ready')
   AND NOT EXISTS (SELECT 1 FROM native_revision_sync s WHERE s.project_id=j.project_id
     AND s.state IN ('create_in_flight','apply_in_flight','uncertain'))`;
+const threadRows = `(SELECT thread_id FROM checkpoints UNION SELECT thread_id FROM checkpoint_writes UNION SELECT thread_id FROM checkpoint_blobs)`;
 
 async function hasCheckpoints(client: pg.PoolClient) {
   const result = await client.query<{ present: boolean }>("SELECT to_regclass('public.checkpoints') IS NOT NULL AND to_regclass('public.checkpoint_blobs') IS NOT NULL AND to_regclass('public.checkpoint_writes') IS NOT NULL AS present");
@@ -55,23 +59,27 @@ export async function discardExecutionCheckpoints() {
     const before = await client.query<{ bytes: string; rows: string }>(`SELECT
       (pg_total_relation_size('public.checkpoint_writes') + pg_total_relation_size('public.checkpoint_blobs') + pg_total_relation_size('public.checkpoints'))::text AS bytes,
       ((SELECT count(*) FROM public.checkpoint_writes) + (SELECT count(*) FROM public.checkpoint_blobs) + (SELECT count(*) FROM public.checkpoints))::text AS rows`);
+    // Keep bounded rediscovery hints for resumable jobs before discarding history.
+    const resumable = await client.query<{ id: string }>(`SELECT DISTINCT j.id FROM job j JOIN ${threadRows} cp ON j.id::text=split_part(cp.thread_id,':',1) WHERE j.state<>'succeeded'`);
+    let retainedGuidanceBytes = 0;
+    for (const job of resumable.rows) retainedGuidanceBytes += await preserveCheckpointEvidence(client, job.id);
     // RESTRICT is intentional. Never follow foreign keys into unrelated tables.
     // Unlike DELETE/VACUUM this releases the table files without a large rewrite.
     await client.query("TRUNCATE ONLY public.checkpoint_writes, ONLY public.checkpoint_blobs, ONLY public.checkpoints CONTINUE IDENTITY RESTRICT");
     await client.query("COMMIT");
     committed = true;
-    return { discardedRows: Number(before.rows[0]!.rows), previousTableBytes: Number(before.rows[0]!.bytes) };
+    return { retainedGuidanceBytes, discardedRows: Number(before.rows[0]!.rows), previousTableBytes: Number(before.rows[0]!.bytes) };
   } finally {
     if (!committed) await client.query("ROLLBACK").catch(() => undefined);
     client.release();
   }
 }
 
-export async function pruneCheckpoints(options: { apply?: boolean; retentionDays?: number; limit?: number } = {}) {
-  const retentionDays = options.retentionDays ?? getConfig().CHECKPOINT_RETENTION_DAYS;
+export async function pruneCheckpoints(options: { apply?: boolean; retentionDays?: number; retentionHours?: number; limit?: number } = {}) {
+  const retentionHours = options.retentionHours ?? (options.retentionDays === undefined ? getConfig().CHECKPOINT_RETENTION_HOURS : options.retentionDays * 24);
   const limit = options.limit ?? 10;
-  if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 365 || !Number.isInteger(limit) || limit < 1 || limit > 25) throw new Error("Invalid checkpoint retention bounds");
-  const result = { mode: options.apply ? "apply" : "dry-run", candidateThreads: 0, prunedThreads: 0, deletedRows: 0, checkpointBytes: 0, prunedThreadDigests: [] as string[] };
+  if (!Number.isInteger(retentionHours) || retentionHours < 1 || retentionHours > 8760 || !Number.isInteger(limit) || limit < 1 || limit > 25) throw new Error("Invalid checkpoint retention bounds");
+  const result = { mode: options.apply ? "apply" : "dry-run", retainedGuidanceBytes: 0, candidateThreads: 0, skippedThreads: 0, prunedThreads: 0, deletedRows: 0, checkpointBytes: 0, prunedThreadDigests: [] as string[] };
   const client = await getPool().connect();
   let committed = false;
   try {
@@ -82,20 +90,24 @@ export async function pruneCheckpoints(options: { apply?: boolean; retentionDays
     const lock = await client.query<{ acquired: boolean }>("SELECT pg_try_advisory_xact_lock(hashtext('pocket-checkpoint-retention')) AS acquired");
     if (!lock.rows[0]!.acquired) return result;
     const candidates = await client.query<{ thread_id: string; job_id: string }>(
-      `SELECT DISTINCT cp.thread_id,j.id AS job_id FROM checkpoints cp
-       JOIN job j ON j.id::text=split_part(cp.thread_id,':',1)
-       WHERE ${eligible} AND cp.thread_id ~ $2 ORDER BY cp.thread_id LIMIT $3`, [retentionDays, threadFormat, limit]);
+      `WITH eligible_jobs AS MATERIALIZED (SELECT j.id FROM job j WHERE ${eligible}),
+       thread_ids AS MATERIALIZED ${threadRows}
+       SELECT DISTINCT cp.thread_id,j.id AS job_id FROM thread_ids cp
+       JOIN eligible_jobs j ON j.id::text=split_part(cp.thread_id,':',1)
+       WHERE cp.thread_id ~ $2 ORDER BY cp.thread_id LIMIT $3`, [retentionHours, threadFormat, limit]);
     result.candidateThreads = candidates.rows.length;
     const deadline = Date.now() + 15_000;
     for (const row of candidates.rows) {
       if (Date.now() >= deadline) break;
       // Serialize with domain transitions and recheck after acquiring the job
       // lock. Never invoke PostgresSaver.deleteThread on another connection.
-      const stillEligible = await client.query(`SELECT j.id FROM job j WHERE j.id=$2 AND ${eligible} FOR UPDATE OF j SKIP LOCKED`, [retentionDays, row.job_id]);
-      if (!stillEligible.rowCount) continue;
+      const stillEligible = await client.query(`SELECT j.id,j.state FROM job j WHERE j.id=$2 AND ${eligible} FOR UPDATE OF j SKIP LOCKED`, [retentionHours, row.job_id]);
+      if (!stillEligible.rowCount) { result.skippedThreads++; continue; }
       const bytes = await client.query<{ bytes: string }>(`SELECT COALESCE(sum(pg_column_size(blob)),0)::text AS bytes FROM checkpoint_blobs WHERE thread_id=$1`, [row.thread_id]);
       result.checkpointBytes += Number(bytes.rows[0]!.bytes);
       if (!options.apply) continue;
+      if (stillEligible.rows[0].state !== "succeeded") result.retainedGuidanceBytes += await preserveCheckpointEvidence(client, row.job_id);
+      else await client.query("DELETE FROM native_checkpoint_read_cache WHERE job_id=$1", [row.job_id]);
       for (const table of tables) {
         const deleted = await client.query(`DELETE FROM ${table} WHERE thread_id=$1`, [row.thread_id]);
         result.deletedRows += deleted.rowCount ?? 0;

@@ -12,7 +12,7 @@ test("Luna-only creation migrates old drafts and rejects retired models at the A
   await page.locator(".session-rail").getByRole("button", { name: "New session" }).click();
   const chooser = page.getByRole("combobox", { name: "Producer model" });
   await expect(chooser).toHaveCount(0);
-  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible();
+  await expect(page.getByText("GPT-6 Luna", { exact: true })).toHaveCount(0);
   const projectId = new URL(page.url()).pathname.split("/")[2]!;
   const options = await (await page.request.get("/api/v1/producer-models")).json();
   expect(options.models).toMatchObject([{ id: "gpt-6-luna", label: "GPT-6 Luna" }]);
@@ -42,7 +42,7 @@ test("Luna-only creation migrates old drafts and rejects retired models at the A
   await expect(page.locator(".producer-workspace-header")).toContainText("Version 2", { timeout: 90_000 });
   await page.setViewportSize({ width: 390, height: 844 });
   await producer(page);
-  await expect(page.getByText("GPT-6 Luna", { exact: true })).toBeVisible();
+  await expect(page.getByText("GPT-6 Luna", { exact: true })).toHaveCount(0);
   await expect(chooser).toHaveCount(0);
   await page.screenshot({ path: resolve(evidence, "model-picker-phone.png"), fullPage: true });
 });

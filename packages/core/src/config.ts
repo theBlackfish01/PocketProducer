@@ -45,6 +45,7 @@ const configSchema = z.object({
   FIXTURE_MODE: booleanString.default(false),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(1).default(1),
   CHECKPOINT_RETENTION_ENABLED: booleanString.default(false),
+  CHECKPOINT_RETENTION_HOURS: z.coerce.number().int().min(1).max(8760).default(1),
   CHECKPOINT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(7),
   RUNTIME_METRICS_ENABLED: booleanString.default(false),
   // A conservative database + WAL budget, not an exact filesystem free-space probe.
