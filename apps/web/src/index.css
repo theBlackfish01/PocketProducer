@@ -537,8 +537,11 @@ button:disabled { cursor: not-allowed; }
   .native-room:has(.direction-section :focus) .mobile-change-dock { display: none; }
 }
 
-.rail-footer-links, .mobile-topbar-actions { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
-.feedback-trigger { color: var(--muted-foreground); }
+.mobile-topbar-actions { display: flex; align-items: center; gap: .5rem; flex-shrink: 0; }
+.feedback-trigger { flex-shrink: 0; gap: .45rem; border-color: transparent; color: var(--muted-foreground); font-size: .8rem; }
+.desktop-feedback { flex: none; margin-left: auto; }
+.topline > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1023px) { .desktop-feedback { display: none; } }
 .feedback-dialog { max-height: calc(100dvh - 2rem); overflow-y: auto; }
 .feedback-form { display: grid; gap: .75rem; }
 .feedback-form textarea { resize: vertical; min-height: 7rem; max-height: 35dvh; }

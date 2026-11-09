@@ -165,13 +165,13 @@ export default function App({ onSignOut, listenerName, hostedAudiotool = false }
   </>
 
   return <div className="app-shell">
-    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}<div className="rail-footer-links"><RepositoryLink /><Feedback /></div>{account}{hostedAccount}</aside>
+    <aside className="session-rail" aria-label="Session navigation"><Brand />{navigation}<RepositoryLink />{account}{hostedAccount}</aside>
     <main className="main-area"><div className="main-inner">
       <div className="mobile-topbar"><Brand /><div className="mobile-topbar-actions"><Feedback compact /><Button variant="ghost" size="icon" aria-label="Open sessions" onClick={() => setNavOpen(true)}><Menu /></Button></div></div>
-      <div className="topline"><span>Listening Room <span aria-hidden="true">/</span> <strong>{snapshot?.project.title ?? "Welcome"}</strong></span></div>
+      <div className="topline"><span>Listening Room <span aria-hidden="true">/</span> <strong>{snapshot?.project.title ?? "Welcome"}</strong></span><div className="desktop-feedback"><Feedback /></div></div>
       {error ? <div className="job-status" role="alert"><strong>Something needs attention</strong><p>{error}</p><Button variant="ghost" onClick={() => setError(null)}>Dismiss</Button></div> : null}
       {loading ? <div className="empty-surface" aria-live="polite"><AudioLines className="mx-auto mb-4 size-8" /><p>Opening your listening room…</p></div> : snapshot && nexus ? <NativeRoom key={snapshot.project.id} projectId={snapshot.project.id} assets={snapshot.assets} audiotoolConnected={nexus.session.connected} audiotoolAvailable={Boolean(nexus.oauth)} onConnectAudiotool={() => void connectAudiotool()} onSourcesChanged={() => refreshSources(snapshot.project.id)} onProjectUpdated={() => { void refreshLabels().catch(() => undefined) }} /> : !error ? <WelcomeRoom busy={busy} onCreate={() => void createSession()} /> : null}
     </div></main>
-    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your sessions</SheetDescription></SheetHeader><div className="mobile-session-list p-4">{navigation}<div className="rail-footer-links"><RepositoryLink /><Feedback /></div>{account}{hostedAccount}</div></SheetContent></Sheet>
+    <Sheet open={navOpen} onOpenChange={setNavOpen}><SheetContent side="left" className="w-[88vw] bg-background"><SheetHeader><SheetTitle><Brand /></SheetTitle><SheetDescription>Your sessions</SheetDescription></SheetHeader><div className="mobile-session-list p-4">{navigation}<RepositoryLink />{account}{hostedAccount}</div></SheetContent></Sheet>
   </div>
 }
