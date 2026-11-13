@@ -3,6 +3,13 @@ import { boundOpenAiRequest } from "../agent/runtime.js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as configuration from "../config.js";
 import { NativeConvergenceMonitor, foldTurnContext, nativeFinishingGuidance, nativeReadEvidence, withNativeFinishingContext, compactNativeReadHistory, type TurnNotes } from "./convergence.js";
+
+it("reserves finishing time even on an early expensive turn without weakening acceptance", () => {
+  expect(nativeFinishingGuidance(8, 300_000)).toContain("Five minutes or less");
+  expect(nativeFinishingGuidance(8, 0)).toContain("Never accept incomplete or unreviewed work");
+  expect(nativeFinishingGuidance(8, 300_001)).toBe(nativeFinishingGuidance(8));
+  expect(nativeFinishingGuidance(45, Infinity)).toBe(nativeFinishingGuidance(45));
+});
 import { nativeReviewLimit, nativeRunLimits } from "./profile.js";
 
 describe("bounded native finishing", () => {

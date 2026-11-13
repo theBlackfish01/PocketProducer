@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
-import { ArrowRight, Plus, Sparkles, Undo2 } from "lucide-react"
+import { ArrowRight, Headphones, Plus, Sparkles, Undo2 } from "lucide-react"
 import { Button } from "../../components/ui/button"
 import { Textarea } from "../../components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog"
@@ -17,6 +17,7 @@ interface Props {
   /** Why the last submission could not start, shown beside the submit button. */
   issue?: string | null
   onAddSound?(): void
+  onPlaybackHelp(): void
 }
 
 export function DirectionComposer(props: Props) {
@@ -110,6 +111,7 @@ export function DirectionComposer(props: Props) {
         {undo && props.direction === undo.suggestion ? <Button type="button" variant="ghost" size="sm" aria-label="Undo rewrite" onClick={() => { props.onDirection(undo.original); setUndo(null); setMessage(null) }}><Undo2 size={14} />Undo</Button> : null}
         {props.onAddSound && !props.active ? <Button type="button" variant="ghost" size="sm" onClick={props.onAddSound}><Plus size={15} />{props.sourceIds.length ? `Sounds (${props.sourceIds.length})` : "Add sound"}</Button> : null}
         {!props.active ? <Button type="button" variant="ghost" size="sm" onClick={() => setOptionsOpen(true)}>Options</Button> : null}
+        <Button type="button" variant="ghost" size="sm" onClick={props.onPlaybackHelp}><Headphones size={15} />How to listen</Button>
       </div>
       {!props.active && props.issue ? <p id="direction-issue" className="direction-issue" role="alert">{props.issue}</p> : null}
       {!props.active ? <Button className="direction-submit" type="submit" disabled={pending || !props.canSubmit || modelUnavailable}><Sparkles size={16} />{props.busy ? "Starting…" : props.revision ? "Make this change" : "Create arrangement"}<ArrowRight size={16} /></Button> : null}

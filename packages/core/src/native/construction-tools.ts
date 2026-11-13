@@ -33,7 +33,7 @@ const recipeIds = nativePresetRecipes.map((recipe) => recipe.id) as [string, ...
 const chordProgressionBody = z.object({
   sectionIds: z.array(id).min(1).max(8).describe("Repeats through each section"),
   key: nativeKeySchema.optional().describe("Keeps 7ths/9ths and walking approaches in key, e.g. \"D minor\""),
-  chords: z.array(z.object({ symbol: z.string().min(1).max(16).describe("e.g. Dm9, Bbmaj7, F#m7b5, G7sus4, C/E"), bars: z.number().min(0.25).max(16) }).strict()).min(1).max(16),
+  chords: z.array(z.object({ symbol: z.string().min(1).max(16).describe("e.g. Dm9, Bbmaj7, F#m7b5, G7sus4, C/E"), bars: z.number().min(0.25).max(16) }).strict()).min(1).max(16).describe("Sum of bars is the repeated cycle, not the section length. Rhythmic comp and bass require a cycle <=8 bars and <=96 generated notes each. Repeat a shorter cycle through longer sections. For non-repeating longer harmony use explicit note/motif operations; sustain supports longer comp cycles."),
   // Voiced automatically with smooth voice leading.
   comp: z.object({ partId: id, pattern: z.enum(compPatterns).default("sustain"), register: z.enum(["low", "mid", "high"]).default("mid"), voices: z.number().int().min(3).max(5).default(4),
     style: z.enum(["close", "open", "shell"]).default("close"), extensions: z.enum(["as-written", "sevenths", "ninths"]).default("as-written"), velocity: z.number().min(0.05).max(1).default(0.55) }).strict().optional(),

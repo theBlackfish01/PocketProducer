@@ -94,6 +94,7 @@
   .account-row { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 }
 .session-rail .hosted-account, .mobile-session-list .hosted-account { margin-top: 12px; justify-content: flex-end; }
+.session-rail .hosted-account button, .mobile-session-list .hosted-account button { flex: 1; justify-content: center; }
 .native-library-actions { display: flex; flex: none; gap: 8px; align-items: center; }
 .native-library-results li > div:first-child { flex: 1; }
 @media (max-width: 600px) {

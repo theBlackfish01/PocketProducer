@@ -237,7 +237,8 @@ export function nativeReadEvidence(messages: BaseMessage[], prior: ReadEvidence[
     : message instanceof ToolMessage ? { tool_call_id: message.tool_call_id, content: message.text, status: message.status } : null), prior);
 }
 
-export function nativeFinishingGuidance(turns: number): string {
+export function nativeFinishingGuidance(turns: number, remainingMs?: number): string {
+  if (remainingMs !== undefined && Number.isFinite(remainingMs) && remainingMs <= 300_000) return "Five minutes or less remain in this job. Reserve time for final inspection and review now. Stop optional discovery, new layers and cosmetic refinement. Resolve concrete missing requirements with bounded edits, reuse current-hash observations, then finish_native_arrangement. Never accept incomplete or unreviewed work, change the user's requirements, or extend the deadline implicitly.";
   if (turns >= 45) return "Finish the requested music: address outstanding requirements and high-impact review findings, inspect final sections, review the final hash and mark reviewed. Do not add optional features. Continue past 50 turns only for concrete unmet requirements. Never accept incomplete or unreviewed work.";
   if (turns >= 30) return "Move toward completion. Prefer coherent musical batches, then inspect changed sections. Reuse known guidance. Resolve missing requirements before optional exploration; reserve time for final inspection and focused review.";
   return "Build a distinctive identity and coherent development, not a template. Group related edits into bounded validated batches. Reuse discoveries; inspect changed music. Aim to finish useful, reviewed work before 50 producer turns, without weakening the brief.";
