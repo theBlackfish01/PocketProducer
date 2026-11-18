@@ -21,7 +21,7 @@ export async function registerWeb(app: FastifyInstance) {
   const types: Record<string, string> = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".woff2": "font/woff2", ".json": "application/json", ".webp": "image/webp" };
   app.get("/*", async (request, reply) => {
     const url = request.url.split("?")[0]!;
-    const spa = url === "/" || url === "/auth/audiotool/callback" || /^\/sessions\/[a-f0-9-]{36}(\/start)?$/.test(url);
+    const spa = url === "/insights" || url === "/" || url === "/auth/audiotool/callback" || /^\/sessions\/[a-f0-9-]{36}(\/start)?$/.test(url);
     const path = files.get(spa ? "/index.html" : url);
     if (!path) return reply.code(404).send({ message: "Page not found" });
     return reply.header("Content-Type", types[extname(path)] ?? "application/octet-stream")

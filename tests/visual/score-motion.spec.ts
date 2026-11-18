@@ -49,6 +49,7 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
     after.parts = [...after.parts, ...before.parts.slice(8)]
   }
   let draft = before, step = 1, writes = 0, completed = false, abandoned = false
+  let versionRating: unknown = null
   let sampleFeedback: { sampleName: string; contentHash: string; rating: string; note: string; updatedAt: string } | null = null
   const sampleHash = "a".repeat(64), sampleName = "samples/fixture-short-hit"
   const job = () => ({ id: "visual-job", project_id: projectId, kind: "native-revision", state: abandoned ? "cancelled" : completed ? "succeeded" : options.paused ? "needs_attention" : "running", stage: "constructing", error_code: abandoned ? "NATIVE_ABANDONED" : options.paused ? "NATIVE_PARTIAL" : null })
@@ -73,6 +74,10 @@ async function mockRoom(page: Page, options: { draft?: boolean; large?: boolean;
     else if (path.endsWith("/library/sample-analysis")) json = { sample: { name: sampleName, displayName: "Short hit" }, contentHash: sampleHash, measured: { durationSeconds: 4, leadingSilenceSeconds: 0, suggestedSlices: [{ startSeconds: 0, endSeconds: 0.25, reason: "Measured activity" }], limitations: "Energy-based candidate only." }, provenance: "Fixture decoded WAV" }
     else if (path.endsWith("/library/sample-audio")) { await route.fulfill({ contentType: "audio/wav", body: encodeWav(new Float32Array(32_000).fill(0.2), new Float32Array(32_000).fill(0.2), 8_000) }); return }
     else if (path.endsWith("/assets/fixture/audio")) { await route.fulfill({ contentType: "audio/wav", body: encodeWav(new Float32Array(64_000).fill(0.2), new Float32Array(64_000).fill(0.2), 8_000) }); return }
+    else if (path.endsWith("/rating")) {
+      if (route.request().method() === "PUT") { const data = route.request().postDataJSON(); versionRating = data.vote ? data : null; writes++ }
+      json = { rating: versionRating }
+    }
     else if (path.endsWith("/sound-feedback") && route.request().method() === "POST") { sampleFeedback = { ...(route.request().postDataJSON() as { sampleName: string; contentHash: string; rating: string; note: string }), updatedAt: "2026-09-27T00:00:00Z" }; json = { feedback: sampleFeedback }; writes++ }
     else if (path.endsWith("/sound-feedback")) json = { feedback: sampleFeedback ? [sampleFeedback] : [] }
     else if (path.endsWith("/jobs/visual-job")) json = { ...job(), events: [] }
@@ -133,6 +138,23 @@ test("welcome explains the creative loop and compact session status stays access
   let creates = 0
   await page.route("**/api/v1/projects", async (route) => {
     if (route.request().method() === "POST") { creates++; await route.fulfill({ json: { project: { id: projectId } } }); return }
+test("rates a saved version, adds detail and clears it with the keyboard", async ({page}) => {
+  await mockRoom(page)
+  const rating = page.getByRole("region",{name:"Rate version 2"})
+  const up = rating.getByRole("button",{name:"Thumbs up"})
+  await up.focus()
+  await up.press("Enter")
+  await expect(up).toHaveAttribute("aria-pressed","true")
+  await rating.getByRole("button",{name:"Add details"}).click()
+  await rating.getByLabel("What stood out?").selectOption("Arrangement")
+  await rating.getByLabel("Comment (optional)").fill("Liked the change into the last section.")
+  await rating.getByRole("button",{name:"Save details"}).click()
+  await expect(rating.getByRole("button",{name:"Edit details"})).toBeVisible()
+  await rating.screenshot({path:`${evidence}/saved-version-rating.png`})
+  await up.click()
+  await expect(up).toHaveAttribute("aria-pressed","false")
+})
+
     await route.fulfill({ json: { projects: [
       { id: projectId, title: "Night Drive", workspaceStatus: "working" },
       { id: "paused-room", title: "A long and spacious unfinished arrangement", workspaceStatus: "attention" },

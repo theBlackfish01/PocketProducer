@@ -14,6 +14,7 @@ const credential = /^[A-Za-z0-9_-]{43}$/;
 export const audiotoolSubject = z.string().regex(/^users\/[A-Za-z0-9_-]{1,128}$/);
 const failure = () => Object.assign(new Error("Audiotool sign-in could not be verified. Please try again."), { statusCode: 401 });
 export function safeSignInReturn(value: unknown): string {
+  if (value === "/insights") return value;
   return typeof value === "string" && /^\/sessions\/[a-f0-9-]{36}(\/start)?$/.test(value) ? value : "/";
 }
 export async function beginAudiotoolSignIn(returnPath: unknown, expectedOwnerId?: string) {

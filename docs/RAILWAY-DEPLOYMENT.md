@@ -4,6 +4,14 @@ The default is **open Sign in with Audiotool**. Anyone with an Audiotool account
 
 Commands below use `pnpm`; on Windows, use `corepack pnpm` if `pnpm` is not on PATH. The container already provides the pinned command.
 
+## Private product reporting
+
+Sign in to `/insights` with the Audiotool account named in `INSIGHTS_ADMIN_SUBJECT` (an exact server-verified `users/…` subject). An unset value closes the report to everyone. Use comma-separated `INSIGHTS_INTERNAL_SUBJECTS` and `INSIGHTS_TEST_PROJECTS` for other confirmed test accounts and project UUIDs. The admin is automatically internal. Review these lists before quoting adoption numbers. General feedback and rating text stay inside the authenticated report. CSV contains aggregate metrics only.
+
+The month is the UTC month in which a request started. First-time and returning counts refer to qualifying activity in the available application history. “Other verified accounts” excludes configured internal activity; an account is not proof of a unique person. Completion requires a successful job referencing an immutable version. An identical result can reuse an existing version. The new-version counts and rating denominators count each version once. Verified copies require both success and the verification receipt. Elapsed time includes pauses. Cost covers recorded producer model calls; unresolved calls are shown separately. Ratings reflect the latest vote on each saved version. The ratings denominator includes historical versions. General feedback uses submission month and account group across releases. Historical jobs without captured release information are grouped as unknown.
+
+First-party visitor measurement keeps one 8 KiB bitmap per UTC month and reports a collision-adjusted browser estimate from its first observation. Browsers rotate a random bucket monthly. Cookie blocking, cleared cookies, privacy signals, bots and admission limits affect coverage. No page paths or account identifiers are submitted to the collector. Set `VISITOR_ANALYTICS_ENABLED=false` to disable measuring visits independently. Account metrics, ratings and general feedback remain available. Execution-history cleanup does not target these product records. LangSmith remains private engineering evidence.
+
 ## 1. What is shipped
 
 - `Dockerfile`: pinned Node 22.14.0 / pnpm 11.19.0, frozen dependency install, built React frontend; no `.env`, private files, dumps or traces copied into the image.

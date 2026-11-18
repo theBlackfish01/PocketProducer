@@ -1,9 +1,11 @@
 import { useEffect, useState, type SyntheticEvent } from "react"
+import { Insights } from "./insights"
+import { recordVisitor } from "../lib/visitors"
 import App from "../App"
 import { Brand } from "./brand"
 import { Button } from "./ui/button"
 
-interface Session { mode: "development" | "invite" | "audiotool"; user: { ownerId: string; displayName: string } | null }
+interface Session { visitorAnalytics?: boolean; mode: "development" | "invite" | "audiotool"; user: { ownerId: string; displayName: string } | null }
 async function readSession(signal?: AbortSignal): Promise<Session> {
   const response = await fetch("/api/v1/auth/session", { cache: "no-store", ...(signal ? { signal } : {}) })
   if (!response.ok) throw new Error("Unable to connect. Please try again.")
@@ -14,6 +16,7 @@ async function readSession(signal?: AbortSignal): Promise<Session> {
     if (localStorage.getItem("pocket-hosted-owner") !== session.user.ownerId) { localStorage.clear(); sessionStorage.clear() }
     localStorage.setItem("pocket-hosted-owner", session.user.ownerId)
   }
+  if (session.visitorAnalytics && !signal?.aborted && window.location.pathname !== "/insights") void recordVisitor()
   return session
 }
 export function AuthBoundary() {
@@ -55,6 +58,7 @@ export function AuthBoundary() {
       window.location.assign(body.url)
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to sign in"); setBusy(false) }
   }
+  if (session?.user && window.location.pathname === "/insights") return <Insights />
   if (session?.user) return <>{error ? <div role="alert" className="auth-notice">{error}</div> : null}<App key={session.user.ownerId} {...(session.mode !== "development" ? { onSignOut: () => void signOut(), listenerName: session.user.displayName, hostedAudiotool: session.mode === "audiotool" } : {})} /></>
   const publicEntry = session?.mode === "audiotool"
   return <main className="auth-page"><Brand /><section className="auth-card" aria-labelledby="sign-in-title"><p className="eyebrow">Your listening room</p><h1 id="sign-in-title">Make something yours.</h1><p>{publicEntry ? "Turn an idea into music you can keep shaping in Audiotool." : "Enter your personal access code to start creating."}</p>{error ? <p role="alert">{error}</p> : null}{publicEntry ? <Button disabled={busy} onClick={() => void audiotoolSignIn()}>{busy ? "Opening Audiotool…" : "Sign in with Audiotool"}</Button> : session ? <form onSubmit={(event) => void signIn(event)}><label htmlFor="access-code">Access code</label><input id="access-code" type="password" autoComplete="current-password" autoCapitalize="none" spellCheck={false} value={code} onChange={(event) => setCode(event.target.value)} required maxLength={128} /><Button type="submit" disabled={busy || !code.trim()}>{busy ? "Signing in…" : "Enter listening room"}</Button></form> : error ? <Button onClick={() => window.location.reload()}>Try again</Button> : <p role="status">Connecting…</p>}<p className="auth-hint">{publicEntry ? "Your sessions stay private. Copy to Audiotool when you’re ready." : session ? "Access is by invitation for this preview." : ""}</p></section></main>

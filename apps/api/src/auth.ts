@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { devOwnerId, getConfig, hostedIdentity, endHostedSession, startHostedSession, sessionSeconds, beginAudiotoolSignIn, finishAudiotoolSignIn, throttleHostedWrite, type OAuthFetch } from "@pocket/core/api";
+import { visitorEnabled } from "./insights.js";
 import { z } from "zod";
 
 declare module "fastify" { interface FastifyRequest { ownerId: string } }
@@ -31,6 +32,7 @@ export async function registerAuth(app: FastifyInstance, oauthTransport?: OAuthF
     if (!localOwner && !["GET", "HEAD", "OPTIONS"].includes(request.method) && request.headers.origin !== config.APP_ORIGIN) {
       return reply.code(403).send({ message: "This action must come from Pocket Producer." });
     }
+    if (path === "/api/v1/visits" && request.method === "POST") return;
     if (["/api/v1/auth/session", "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/audiotool/start"].includes(path)) return;
     const identity = localOwner ? { ownerId: localOwner } : await hostedIdentity(token(request));
     if (!identity) return reply.code(401).send({ message: "Sign in to continue." });
@@ -42,6 +44,7 @@ export async function registerAuth(app: FastifyInstance, oauthTransport?: OAuthF
     if (!localOwner && !stopping && !["GET", "HEAD", "OPTIONS"].includes(request.method)) await throttleHostedWrite(identity.ownerId);
   });
   app.get("/api/v1/auth/session", async (request) => ({
+    visitorAnalytics: visitorEnabled(),
     mode: localOwner ? "development" : config.HOSTED_AUTH_MODE,
     user: localOwner ? { ownerId: localOwner, displayName: "Local listener" } : await hostedIdentity(token(request))
   }));

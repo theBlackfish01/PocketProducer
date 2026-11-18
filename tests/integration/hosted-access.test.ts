@@ -10,7 +10,7 @@ const feedbackIds: string[] = [];
 let child: ChildProcess, a: string, b: string, ownerA: string, project: string, asset: string;
 async function start() {
   child = spawn(process.execPath, ["--import", "tsx", "apps/api/src/server.ts"], { windowsHide: true, stdio: "ignore", env: {
-    ...process.env, APP_ENV: "production", HOSTED_AUTH_MODE: "invite", DEV_LOCAL_AUTH: "false", SERVE_WEB: "true", APP_ORIGIN: origin, PORT: "19279",
+    ...process.env, INSIGHTS_ADMIN_SUBJECT: "users/insights-test-admin", VISITOR_ANALYTICS_ENABLED: "true", APP_ENV: "production", HOSTED_AUTH_MODE: "invite", DEV_LOCAL_AUTH: "false", SERVE_WEB: "true", APP_ORIGIN: origin, PORT: "19279",
     AUDIOTOOL_SESSION_KEY: Buffer.alloc(32, 9).toString("base64"), AUDIOTOOL_CLIENT_ID: "", AUDIOTOOL_REDIRECT_URL: `${origin}/auth/audiotool/callback`,
     FIXTURE_MODE: "true", OPENAI_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "", LANGSMITH_API_KEY: "", LANGSMITH_TRACING: "false", AI_GATEWAY_API_KEY: "", VERCEL_AI_GATEWAY_API_KEY: ""
   } });
@@ -121,6 +121,58 @@ it("retains feedback even after its account is deleted", async () => {
     await getPool().query("DELETE FROM app_user WHERE id=$1", [access.ownerId]);
   }
   expect((await getPool().query("SELECT owner_id,username,message FROM app_feedback WHERE id=$1", [id])).rows).toEqual([{ owner_id: null, username: "Feedback retention fixture", message: "Keep this feedback." }]);
+});
+it("isolates version ratings and reports saved music separately from accepted copies", async () => {
+  const pool = getPool(), revision = randomUUID(), job = randomUUID(), copy = randomUUID(), reuse = randomUUID();
+  const path = `/projects/${project}/native/versions/${revision}/rating`;
+  const rate = (cookie: string, vote: string|null, extra = {}) => fetch(base+"/api/v1"+path, { method:"PUT", headers:{Cookie:cookie,Origin:origin,"Content-Type":"application/json"},body:JSON.stringify({vote,reason:null,comment:"",...extra}) });
+  try {
+    await pool.query("INSERT INTO audiotool_identity(subject,owner_id) VALUES('users/insights-test-admin',$1)",[ownerA]);
+    await pool.query(`INSERT INTO job(id,owner_id,project_id,kind,idempotency_key,request_hash,request,state,created_at,release_sha)
+      VALUES($1,$3,$4,'native-generation','rate-gen','hash','{}','succeeded','2001-04-01T00:00Z','abc1234'),
+        ($2,$3,$4,'native-sync','rate-copy','hash','{}','queued','2001-04-01T01:00Z','abc1234')`,[job,copy,ownerA,project]);
+    await pool.query(`INSERT INTO native_revision(id,owner_id,project_id,creator_job_id,ordinal,document,document_hash,change_summary,structural_diff,producer,created_at)
+      VALUES($1,$2,$3,$4,1,'{}','hash','fixture','{}','{}','2001-04-01T00:01Z')`,[revision,ownerA,project,job]);
+    await pool.query("UPDATE job SET result_native_revision_id=$1 WHERE id=$2",[revision,job]);
+    await pool.query(`INSERT INTO job(id,owner_id,project_id,kind,idempotency_key,request_hash,request,state,created_at,release_sha,result_native_revision_id) VALUES($1,$2,$3,'native-revision','reuse','hash','{}','succeeded','2001-04-01T02:00Z','abc1234',$4)`,[reuse,ownerA,project,revision]);
+    expect((await call(path)).status).toBe(401);
+    expect((await call(path,b)).status).toBe(404);
+    expect((await rate(b,"up")).status).toBe(404);
+    expect((await rate(a,"up",{ownerId:ownerA})).status).toBe(422);
+    expect((await rate(a,"up",{comment:"x".repeat(601)})).status).toBe(422);
+    expect((await rate(a,"up")).ok).toBe(true);
+    for(let i=0;i<2;i++) expect((await rate(a,"down",{reason:"Arrangement",comment:"Outro felt long."})).ok).toBe(true);
+    expect(await (await call(path,a)).json()).toMatchObject({rating:{vote:"down",reason:"Arrangement"}});
+    const query="/insights?month=2001-04&cohort=internal&release=abc1234";
+    expect((await call(query)).status).toBe(401);
+    expect((await call(query,b)).status).toBe(403);
+    const report = await (await call(query,a)).json();
+    expect(report.metrics).toMatchObject({active_accounts:1,first_active_accounts:1,completed_generations:1,saved_generations:1,completed_revisions:1,saved_revisions:0,median_seconds:60,copy_requests:1,verified_copies:0,thumbs_down:1,rated_percent:100,site_browser_estimate:null});
+    expect(report.ratings).toHaveLength(1);
+    expect((await (await call(query.replace("internal","other"),a)).json()).metrics.active_accounts).toBe(0);
+    await pool.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,1,'succeeded',$2)",[copy,{synchronization:"verified",nativeRevisionId:revision}]);
+    await pool.query("UPDATE job SET state='succeeded' WHERE id=$1",[copy]);
+    expect((await (await call(query,a)).json()).metrics.verified_copies).toBe(1);
+    expect(await (await call(query+"&format=csv",a)).text()).toContain("verified_copies");
+    expect((await rate(a,null)).ok).toBe(true);
+    expect(await (await call(path,a)).json()).toEqual({rating:null});
+  } finally {
+    await pool.query("DELETE FROM version_rating WHERE revision_id=$1",[revision]);
+    await pool.query("UPDATE job SET result_native_revision_id=NULL WHERE id=ANY($1::uuid[])",[[job,reuse]]);
+    await pool.query("DELETE FROM native_revision WHERE id=$1",[revision]);
+    await pool.query("DELETE FROM job WHERE id=ANY($1::uuid[])",[[job,copy,reuse]]);
+    await pool.query("DELETE FROM audiotool_identity WHERE owner_id=$1",[ownerA]);
+  }
+});
+it("deduplicates anonymous visits and rejects foreign origins and additional identifiers", async () => {
+  const data = {month:new Date().toISOString().slice(0,7),bucket:321};
+  expect((await call("/visits",undefined,data,"https://foreign.example")).status).toBe(403);
+  expect((await call("/visits",undefined,{...data,ownerId:ownerA})).status).toBe(400);
+  expect((await call("/visits",undefined,data)).status).toBe(204);
+  const bits = async () => (await getPool().query("SELECT bit_count(buckets) AS count FROM visitor_month WHERE month=$1",[data.month+"-01"])).rows[0].count;
+  const before=await bits();
+  expect((await call("/visits",undefined,data)).status).toBe(204);
+  expect(await bits()).toBe(before);
 });
 it("logout revokes the session and closes its existing stream", async () => {
   const controller=new AbortController();

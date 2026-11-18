@@ -141,9 +141,10 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     }
     const hash = canonicalHash({ version: "native-command-v1", ...input, request: requestWithLimits });
     const inserted = await client.query<{ id: string }>(
-      `INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,state,deadline_at)
-       VALUES($1,$2,$3,$4,$5,$6,'queued',now()+make_interval(secs=>$7)) RETURNING id`,
-      [input.ownerId, input.projectId, input.kind, input.idempotencyKey, hash, requestWithLimits, jobNativeRunLimits(requestWithLimits)?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS]
+      `INSERT INTO job(owner_id,project_id,kind,idempotency_key,request_hash,request,state,deadline_at,release_sha)
+       VALUES($1,$2,$3,$4,$5,$6,'queued',now()+make_interval(secs=>$7),$8) RETURNING id`,
+      [input.ownerId, input.projectId, input.kind, input.idempotencyKey, hash, requestWithLimits, jobNativeRunLimits(requestWithLimits)?.deadlineSeconds ?? getConfig().MAX_JOB_SECONDS,
+        /^[a-f0-9]{7,64}$/.test(process.env.RAILWAY_GIT_COMMIT_SHA ?? "") ? process.env.RAILWAY_GIT_COMMIT_SHA : null]
     );
     const id = inserted.rows[0]!.id;
     await client.query("INSERT INTO job_event(job_id,sequence,event_type,payload) VALUES($1,1,'accepted',$2)", [id, { message: "Native construction request accepted", expectedNativeHeadId: current }]);

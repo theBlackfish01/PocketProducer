@@ -6,6 +6,8 @@ import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { z } from "zod";
+import { registerRatings } from "./ratings.js";
+import { registerInsights } from "./insights.js";
 import { registerFeedback } from "./feedback.js";
 import { registerAuth } from "./auth.js";
 import { registerWeb } from "./web.js";
@@ -28,6 +30,8 @@ await app.register(multipart, { limits: { fileSize: config.MAX_UPLOAD_BYTES, fil
 const idSchema = z.uuid();
 await registerAuth(app, oauthTransport);
 registerFeedback(app);
+registerRatings(app);
+registerInsights(app);
 app.addHook("preHandler", async (request) => {
   if (request.method === "POST" && /^\/api\/v1\/projects\/[^/]+\/(prompt-assistance|native\/(interpretations|constructions|revisions|synchronizations|requests\/[^/]+\/continue))$/.test(request.url.split("?")[0]!)) await ensureDatabaseHeadroom();
 });

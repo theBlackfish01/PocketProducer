@@ -57,7 +57,7 @@ export const issueOf = (cause: unknown) => ({ code: cause instanceof ApiError ? 
 
 const genericCodes = new Set(["INVALID_REQUEST", "INTERNAL_ERROR"])
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const retryableRead = !init?.method || init.method === "GET"
