@@ -1,5 +1,12 @@
 # Live implementation status
 
+## Version ratings and usage reports — 2026-11-18
+
+Saved native versions support an optional owner-only rating and comment. The private `/insights` report counts accepted music, verified copies, active accounts, current ratings and observed producer spend directly from durable records. Visitor coverage starts with measurement. New jobs capture the requesting release when Railway supplies a Git SHA. See the deployment runbook for access, filters and definitions. The session drawer now scrolls its history independently at tablet widths as well as on phones. Producer instructions and tool descriptions were shortened to restore the existing input-size test margin.
+
+
+Offline validation covers 356 unit and 213 integration tests, including cross-owner reads and writes, changed/cleared ratings, copy receipts, duplicate-version accounting and monthly visitor deduplication. The 20 end-to-end, two hosted, and 38 visual journeys passed. The report, feedback controls and intermediate-width drawer were inspected with browser fixtures. Release health and permission settings must be checked against the live deployment.
+
 ## Focused usability and finishing guidance — 2026-11-14
 
 Prepared a small follow-up from the November 13 trace audit: listening help moves into the prompt toolbar and opens the existing dialog, preserving unpaid playback-question handling and typed drafts; sign-out fills its footer row. Producer guidance now considers five minutes remaining, explains conditional progression limits and short discovery fields, encourages current-hash edit/inspection reuse and honest unsupported-tempo handling. Symbolic review no longer treats close different-voice percussion onsets or interval flags alone as musical defects. No model/budget/deadline limits, canonical operations, retention, saved-version or review acceptance rules changed. Longer-progression compilation and new musical transformations remain deferred rather than introduced in this minimal pass.

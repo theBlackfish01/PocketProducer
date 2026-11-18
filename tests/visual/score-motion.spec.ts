@@ -129,15 +129,15 @@ test("desktop session rail stays viewport-height while the room and recent sessi
   await page.getByRole("dialog").getByRole("button", { name: "Session 39", exact: true }).scrollIntoViewIfNeeded()
   await expect(page.getByRole("dialog").getByRole("button", { name: "Session 39", exact: true })).toBeInViewport()
   await page.screenshot({ path: `${evidence}/sidebar-mobile-navigation.png` })
+  await page.setViewportSize({ width: 872, height: 680 })
+  await page.getByRole("dialog").getByRole("button", { name: "Session 39", exact: true }).scrollIntoViewIfNeeded()
+  await expect(page.getByRole("dialog").locator(".account-row")).toBeInViewport()
+  await expect(page.getByRole("dialog").getByRole("button", { name: "Session 39", exact: true })).toBeInViewport()
+  await page.screenshot({ path: `${evidence}/sidebar-tablet-navigation.png` })
   await page.keyboard.press("Escape")
   await expect(open).toBeFocused()
 })
 
-test("welcome explains the creative loop and compact session status stays accessible", async ({ page }) => {
-  const room = await mockRoom(page)
-  let creates = 0
-  await page.route("**/api/v1/projects", async (route) => {
-    if (route.request().method() === "POST") { creates++; await route.fulfill({ json: { project: { id: projectId } } }); return }
 test("rates a saved version, adds detail and clears it with the keyboard", async ({page}) => {
   await mockRoom(page)
   const rating = page.getByRole("region",{name:"Rate version 2"})
@@ -155,6 +155,11 @@ test("rates a saved version, adds detail and clears it with the keyboard", async
   await expect(up).toHaveAttribute("aria-pressed","false")
 })
 
+test("welcome explains the creative loop and compact session status stays accessible", async ({ page }) => {
+  const room = await mockRoom(page)
+  let creates = 0
+  await page.route("**/api/v1/projects", async (route) => {
+    if (route.request().method() === "POST") { creates++; await route.fulfill({ json: { project: { id: projectId } } }); return }
     await route.fulfill({ json: { projects: [
       { id: projectId, title: "Night Drive", workspaceStatus: "working" },
       { id: "paused-room", title: "A long and spacious unfinished arrangement", workspaceStatus: "attention" },
@@ -1140,17 +1145,19 @@ test("playback help keeps the direction and makes no paid request on desktop or 
   await input.fill("how can i hear it")
   await page.getByRole("button", { name: "Make this change", exact: true }).click()
   await expect(page.getByText(/To listen, finish the arrangement/)).toBeVisible()
+  await page.screenshot({ path: `${evidence}/playback-help-desktop.png`, fullPage: true })
+  await page.keyboard.press("Escape")
   await expect(input).toHaveValue("how can i hear it")
   expect(room.writes()).toBe(0)
-  await page.screenshot({ path: `${evidence}/playback-help-desktop.png`, fullPage: true })
   await page.setViewportSize({ width: 390, height: 844 })
   await input.fill("Make the bass warmer. How can I hear it?")
   await expect(page.getByText(/To listen, finish the arrangement/)).toHaveCount(0)
-  await page.getByRole("button", { name: "How do I listen?", exact: true }).click()
+  await page.getByRole("button", { name: "How to listen", exact: true }).click()
   await expect(page.getByText(/To listen, finish the arrangement/)).toBeVisible()
-  await expect(input).toHaveValue("Make the bass warmer. How can I hear it?")
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.screenshot({ path: `${evidence}/playback-help-phone.png`, fullPage: true })
+  await page.keyboard.press("Escape")
+  await expect(input).toHaveValue("Make the bass warmer. How can I hear it?")
   expect(room.writes()).toBe(0)
 })
 

@@ -85,13 +85,18 @@
   .topline { display: none; }
   .arrangement-section > .section-heading { flex-direction: column; align-items: stretch; gap: 12px; }
   .arrangement-actions { display: flex; justify-content: space-between; }
-  .mobile-session-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .mobile-session-list .rail-list { flex: 1; min-height: 0; overflow-y: auto; }
   .score-scroll .score-heading-row, .score-scroll .score-lane { grid-template-columns: 135px minmax(0, 1fr); }
   .score-scroll .score-part-label strong { font-size: .76rem; }
   .direction-scope select { max-width: 185px; min-height: 44px; }
   .prompt-helper-actions button, .direction-options summary { min-height: 44px; }
   .account-row { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+}
+.mobile-session-list { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mobile-session-list .rail-list { flex: 1; min-height: 0; overflow-y: auto; align-content: start; overscroll-behavior: contain; }
+@media (max-height: 540px) {
+  .session-drawer { overflow-y: auto; }
+  .session-drawer .mobile-session-list { flex: none; }
+  .session-drawer .rail-list { flex: none; max-height: 45dvh; }
 }
 .session-rail .hosted-account, .mobile-session-list .hosted-account { margin-top: 12px; justify-content: flex-end; }
 .session-rail .hosted-account button, .mobile-session-list .hosted-account button { flex: 1; justify-content: center; }
