@@ -10,7 +10,7 @@ const feedbackIds: string[] = [];
 let child: ChildProcess, a: string, b: string, ownerA: string, project: string, asset: string;
 async function start() {
   child = spawn(process.execPath, ["--import", "tsx", "apps/api/src/server.ts"], { windowsHide: true, stdio: "ignore", env: {
-    ...process.env, INSIGHTS_ADMIN_SUBJECT: "users/insights-test-admin", VISITOR_ANALYTICS_ENABLED: "true", APP_ENV: "production", HOSTED_AUTH_MODE: "invite", DEV_LOCAL_AUTH: "false", SERVE_WEB: "true", APP_ORIGIN: origin, PORT: "19279",
+    ...process.env, INSIGHTS_ADMIN_SUBJECT: "users/insights-test-admin", INSIGHTS_ADDITIONAL_ADMIN_SUBJECTS: " users/insights-test-qa, ", VISITOR_ANALYTICS_ENABLED: "true", APP_ENV: "production", HOSTED_AUTH_MODE: "invite", DEV_LOCAL_AUTH: "false", SERVE_WEB: "true", APP_ORIGIN: origin, PORT: "19279",
     AUDIOTOOL_SESSION_KEY: Buffer.alloc(32, 9).toString("base64"), AUDIOTOOL_CLIENT_ID: "", AUDIOTOOL_REDIRECT_URL: `${origin}/auth/audiotool/callback`,
     FIXTURE_MODE: "true", OPENAI_API_KEY: "", GEMINI_API_KEY: "", GOOGLE_API_KEY: "", LANGSMITH_API_KEY: "", LANGSMITH_TRACING: "false", AI_GATEWAY_API_KEY: "", VERCEL_AI_GATEWAY_API_KEY: ""
   } });
@@ -154,6 +154,13 @@ it("isolates version ratings and reports saved music separately from accepted co
     await pool.query("UPDATE job SET state='succeeded' WHERE id=$1",[copy]);
     expect((await (await call(query,a)).json()).metrics.verified_copies).toBe(1);
     expect(await (await call(query+"&format=csv",a)).text()).toContain("verified_copies");
+    await pool.query("UPDATE audiotool_identity SET subject='users/insights-test-qa-lookalike' WHERE owner_id=$1",[ownerA]);
+    expect((await call(query,a)).status).toBe(403);
+    expect((await call(query+"&format=csv",a)).status).toBe(403);
+    await pool.query("UPDATE audiotool_identity SET subject='users/insights-test-qa' WHERE owner_id=$1",[ownerA]);
+    expect((await (await call(query,a)).json()).metrics.active_accounts).toBe(1);
+    expect((await (await call(query.replace("internal","other"),a)).json()).metrics.active_accounts).toBe(0);
+    expect((await call(query+"&format=csv",a)).status).toBe(200);
     expect((await rate(a,null)).ok).toBe(true);
     expect(await (await call(path,a)).json()).toEqual({rating:null});
   } finally {

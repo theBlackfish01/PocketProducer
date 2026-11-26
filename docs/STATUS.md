@@ -1,5 +1,9 @@
 # Live implementation status
 
+## Additional insights administrators — 2026-11-26
+
+The private report and CSV support additional verified Audiotool accounts through `INSIGHTS_ADDITIONAL_ADMIN_SUBJECTS`. The primary admin setting remains valid. Every dashboard admin is classified as internal for usage and feedback reports.
+
 ## Version ratings and usage reports — 2026-11-18
 
 Saved native versions support an optional owner-only rating and comment. The private `/insights` report counts accepted music, verified copies, active accounts, current ratings and observed producer spend directly from durable records. Visitor coverage starts with measurement. New jobs capture the requesting release when Railway supplies a Git SHA. See the deployment runbook for access, filters and definitions. The session drawer now scrolls its history independently at tablet widths as well as on phones. Producer instructions and tool descriptions were shortened to restore the existing input-size test margin.

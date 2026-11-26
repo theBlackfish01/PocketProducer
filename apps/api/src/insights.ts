@@ -12,10 +12,16 @@ const reportQuery = z.object({
 }).strict();
 
 export const visitorEnabled = () => getConfig().APP_ENV === "production" && process.env.VISITOR_ANALYTICS_ENABLED !== "false";
+const configured = (value?: string) => (value ?? "").split(",").map(s => s.trim()).filter(Boolean);
+const adminSubjects = () => [
+  process.env.INSIGHTS_ADMIN_SUBJECT?.trim() ?? "",
+  ...configured(process.env.INSIGHTS_ADDITIONAL_ADMIN_SUBJECTS)
+].filter(Boolean);
+
 export async function insightsAccess(ownerId: string) {
-  const subject = process.env.INSIGHTS_ADMIN_SUBJECT;
-  if (!subject) return false;
-  return Boolean((await getPool().query("SELECT 1 FROM audiotool_identity WHERE owner_id=$1 AND subject=$2", [ownerId, subject])).rowCount);
+  const subjects = adminSubjects();
+  if (!subjects.length) return false;
+  return Boolean((await getPool().query("SELECT 1 FROM audiotool_identity WHERE owner_id=$1 AND subject=ANY($2::text[])", [ownerId, subjects])).rowCount);
 }
 
 // Attribute outcomes to the UTC month the request started. Use ledger facts and
@@ -56,8 +62,6 @@ SELECT count(DISTINCT owner_id)::int AS active_accounts, count(DISTINCT project_
  (SELECT round(coalesce(sum(e.actual_cost_microusd) FILTER (WHERE e.cost_status='observed'),0)/1000000.0,4)::float8 FROM effect e JOIN scoped j ON j.id=e.job_id WHERE e.step='producer-model-call') AS recorded_model_usd,
  (SELECT count(*)::int FROM effect e JOIN scoped j ON j.id=e.job_id WHERE e.step='producer-model-call' AND (e.cost_status='unknown' OR e.state IN ('dispatched','uncertain'))) AS unresolved_model_calls
  FROM facts f`;
-const configured = (value?: string) => (value ?? "").split(",").map(s => s.trim()).filter(Boolean);
-
 export function registerInsights(app: FastifyInstance) {
   // Bound anonymous write traffic per replica. A later visit can retry a missed observation.
   let windowStarted = 0, admitted = 0;
@@ -76,8 +80,7 @@ export function registerInsights(app: FastifyInstance) {
   app.get("/api/v1/insights", async (request, reply) => {
     if (!await insightsAccess(request.ownerId)) return reply.code(403).send({ message: "This report is private." });
     const { month, cohort, release, format } = reportQuery.parse(request.query);
-    const internal = configured(process.env.INSIGHTS_INTERNAL_SUBJECTS);
-    if (process.env.INSIGHTS_ADMIN_SUBJECT) internal.push(process.env.INSIGHTS_ADMIN_SUBJECT);
+    const internal = [...configured(process.env.INSIGHTS_INTERNAL_SUBJECTS), ...adminSubjects()];
     const args = [month+"-01T00:00:00Z",cohort,release ?? null,internal,configured(process.env.INSIGHTS_TEST_PROJECTS)];
     const pool = getPool();
     const [counts, visitors, ratings, messages, releases, issues] = await Promise.all([
