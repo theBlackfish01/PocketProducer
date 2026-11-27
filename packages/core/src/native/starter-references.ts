@@ -1,9 +1,9 @@
 import { sceneOperations } from "./construction-tools.js";
 import { applyNativeOperations } from "./model.js";
-import { seedNativeDocument } from "./producer.js";
+import { seedNativeDocument } from "./seed.js";
 import type { Starter } from "./starters.js";
 
-// The reference melodies live here, outside the runtime tool and its prompt.
+// Original reference melodies. The producer can load their notes without copying them into its prompt.
 // Positions and lengths are in quarter notes, including the waltz.
 type Event = [beat: number, length: number, pitch: number, velocity: number];
 type Statement = { id: string; name: string; bars: number; at: number[]; events: Event[]; parent?: string; part?: string };
@@ -73,6 +73,65 @@ export const starterReferences: Reference[] = [
       { id: "zenith", parent: "stair", name: "Zenith", bars: 2, at: [12], events: [[.5, .66, 76, .65], [1.75, .78, 79, .69], [3, 1.48, 81, .76], [5, .63, 77, .62]] },
       { id: "settle", parent: "stair", name: "Paper sky", bars: 2, at: [18], events: [[.5, .67, 72, .64], [1.75, .82, 71, .58], [3, 2.6, 76, .64]] }
     ]
+  },
+  {
+    id: "synthwave-v1", title: "Violet Overpass", bpm: 104, beats: 4,
+    direction: "A night drive in F-sharp minor. A low eighth-note motor keeps running under a broad lead. Let it coast during the break, then answer the opening higher with a little arpeggio between its phrases.",
+    chords: ["F#m9", "Dmaj7", "Aadd9", "E6"], landing: "F#m9",
+    sections: [
+      ["On-ramp", 2, "open", "Bring the call in before the bass motor catches."],
+      ["Cruise", 6, "pocket", "Let the low eighths carry two alternating phrases."],
+      ["Underpass", 4, "break", "Open a long gap beneath a descending echo."],
+      ["Passing lights", 6, "lift", "Take the lead higher and answer its held notes with short plucks."],
+      ["Daybreak", 2, "close", "Bring the answering voice back to F-sharp and hold the ninth underneath."]
+    ],
+    countervoice: { name: "Dash lights", recipe: "pluck-arp" },
+    statements: [
+      { id: "headlight", name: "Headlight call", bars: 2, at: [0, 4, 12], events: [[.5,.38,69,.70],[1,.65,73,.77],[2,1.4,76,.80],[3.75,.22,73,.57],[4.5,1.2,69,.73],[6,1.4,66,.65]] },
+      { id: "merge", parent: "headlight", name: "Merge left", bars: 2, at: [2, 6], events: [[.5,.38,69,.72],[1,.72,73,.75],[2,1.25,76,.77],[3.5,.36,78,.67],[4.75,.62,76,.70],[5.75,1.6,71,.68]] },
+      { id: "coast", parent: "headlight", name: "Coasting", bars: 2, at: [10], events: [[1,1.8,76,.49],[4.5,1.4,71,.49],[6.5,.75,68,.42]] },
+      { id: "passing", parent: "headlight", name: "Passing lights", bars: 2, at: [14, 16], events: [[.5,.38,81,.72],[1,.68,85,.78],[2,1.45,83,.77],[4.25,.4,80,.64],[5,.70,78,.66],[6,1.65,76,.71]] },
+      { id: "dash", part: "answer", name: "Dashboard flicker", bars: 2, at: [12, 14, 16], events: [[3.5,.15,61,.55],[3.75,.16,66,.50],[4,.2,69,.59],[7.5,.16,64,.56],[7.75,.16,68,.49]] },
+      { id: "home", parent: "headlight", name: "Home stretch", bars: 2, at: [18], events: [[.5,.4,73,.65],[1.25,.6,71,.60],[2.5,1.1,69,.56],[4,2.8,66,.65]] }
+    ]
+  },
+  {
+    id: "bossa-nova-v1", title: "Patio Radio", bpm: 112, beats: 4,
+    direction: "A small bossa in D. Keep the plucked chords nimble against the bass on one and three. Let the lead start just before the bar turns, leave a little silence, and answer the question lower.",
+    chords: ["Dmaj9", "Bm7", "Em9", "A13"], landing: "D6/9",
+    sections: [
+      ["Open window", 2, "open", "Let the lead hang across the bar line."],
+      ["Conversation", 4, "pocket", "Trade an upward question with a falling answer."],
+      ["Breeze", 2, "break", "Give the bass a rest while one brief phrase floats above."],
+      ["Across the patio", 6, "lift", "Move the melody up, then bring its answer back down over the offbeats."],
+      ["Sign-off", 2, "close", "Anticipate the last chord, then let the tonic settle."]
+    ],
+    statements: [
+      { id: "question", name: "Open question", bars: 2, at: [0, 4, 8], events: [[.75,.43,66,.66],[1.5,.45,69,.69],[2.25,.84,71,.72],[3.75,.86,73,.75],[5.25,.45,71,.61],[6,.84,69,.66]] },
+      { id: "reply", parent: "question", name: "A lower reply", bars: 2, at: [2, 10], events: [[.75,.44,67,.67],[1.5,.50,71,.69],[2.5,.92,74,.74],[3.75,.9,73,.69],[5.25,.40,69,.63],[6,1.12,66,.64]] },
+      { id: "breeze", parent: "question", name: "Across the sill", bars: 2, at: [6], events: [[2.25,1.1,71,.52],[3.75,1.25,69,.55],[6.25,.46,64,.45]] },
+      { id: "upstairs", parent: "question", name: "Upstairs reply", bars: 2, at: [12], events: [[.75,.43,74,.66],[1.5,.45,78,.72],[2.25,.84,76,.74],[3.75,.92,73,.68],[5,.45,71,.63],[5.75,.55,69,.60],[6.75,.65,66,.64]] },
+      { id: "goodnight", parent: "question", name: "Last word", bars: 2, at: [14], events: [[.75,.66,67,.61],[2,.64,69,.63],[3.5,.42,66,.52],[3.95,2.75,62,.64]] }
+    ]
+  },
+  {
+    id: "tidal-ambient-v1", title: "Tide Almanac", bpm: 66, beats: 4,
+    direction: "A drumless coastal miniature in D. Let each chord arrive a note at a time, with a barely moving bass. A high bell gives two short signals and one long one, then leaves a whole stretch of water empty.",
+    chords: ["Dadd9", "Asus4", "Bm7", "Gmaj7"], landing: "Dadd9",
+    sections: [
+      ["Low water", 2, "open", "Introduce three bell tones over a slowly opening chord."],
+      ["Incoming", 4, "pocket", "Let the bell climb while the bass moves once per bar."],
+      ["Slack tide", 4, "break", "Drop the bass, leave two bars of space, then hold one high signal."],
+      ["High water", 4, "lift", "Broaden the answer and let it descend through the chord."],
+      ["Soundings", 2, "close", "Return to the opening register and let the final D fade."]
+    ],
+    statements: [
+      { id: "beacon", name: "Two short, one long", bars: 2, at: [0, 4], events: [[.75,.42,76,.59],[1.75,.51,78,.48],[3.5,2.5,81,.65],[6.75,.62,76,.43]] },
+      { id: "current", parent: "beacon", name: "Incoming current", bars: 2, at: [2], events: [[.75,.48,74,.58],[1.75,.60,78,.54],[3.5,2.4,83,.62],[6.5,.87,81,.47]] },
+      { id: "far", parent: "beacon", name: "Distant signal", bars: 2, at: [8], events: [[2.5,3.25,81,.43]] },
+      { id: "crest", parent: "beacon", name: "Crest and answer", bars: 2, at: [10, 12], events: [[.75,.52,83,.65],[1.75,.67,81,.54],[3.25,1.6,78,.63],[5,.78,76,.50],[6.5,1,74,.57]] },
+      { id: "ebb", parent: "beacon", name: "Last sounding", bars: 2, at: [14], events: [[.75,.66,78,.54],[2,.70,76,.47],[4,3.1,74,.56]] }
+    ]
   }
 ];
 
@@ -100,4 +159,10 @@ export function referenceScene(ref: Reference, includeMelody = true) {
 export function buildReference(ref: Reference, includeMelody = true) {
   const seed = seedNativeDocument(ref.direction);
   return applyNativeOperations(seed, sceneOperations(referenceScene(ref, includeMelody), seed));
+}
+
+export function getTemplateReference(id: Starter["id"]) {
+  const reference = starterReferences.find(item => item.id === id);
+  if (!reference) throw new Error("Unknown arrangement template");
+  return reference;
 }

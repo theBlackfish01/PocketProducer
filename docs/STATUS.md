@@ -1,5 +1,11 @@
 # Live implementation status
 
+## Selectable arrangement library — 2026-11-27
+
+New sessions can audition and choose six complete editable scores. Violet Overpass (synthwave), Patio Radio (bossa nova), and Tide Almanac (drumless ambient) join Mercury Arcade, Last Table, and The Paper Observatory. The recordings use reference instruments and cover the full form. Choosing a score alone saves it as written, while adding a direction lets the producer edit it. The selected score uses the existing durable step and recovery path. Preview, selection and removal leave the user's prompt intact. See the [template contract and recording instructions](native-text-to-music.md#choosing-and-hearing-a-template).
+
+Local verification passed 375 unit tests, 217 integration tests, 23 browser journeys, 38 visual checks, and three hosted-mode tests. The built server served and sought all six recordings, and a repeat render produced byte-identical MP3s. Browser tests covered template-only creation and a custom direction with an uploaded sound. Screenshots are in `.local/evidence/templates/`. This pass used local fixture and scripted workers.
+
 ## Producer review and scoped recovery — 2026-11-27
 
 The local producer goes straight from objective completion to musical review. A part-count target no longer sends a complete score back for another turn. Detailed work asks for development of the actual returning figure, and a scoped revision can restore a previous step-kit pattern in selected bars. The validator also removes unsupported claims from the editor's headline.

@@ -5,6 +5,8 @@ import { Textarea } from "../../components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog"
 import { api, type ProducerModelOption } from "../../lib/api"
 import { RepositoryLink } from "../../components/repository-link"
+import type { ArrangementTemplate, ArrangementTemplateId } from "@pocket/core/templates"
+import { TemplatePicker } from "./template-picker"
 
 interface Props {
   projectId: string; headId: string | null; direction: string; onDirection(value: string): void
@@ -18,6 +20,8 @@ interface Props {
   issue?: string | null
   onAddSound?(): void
   onPlaybackHelp(): void
+  selectedTemplate: ArrangementTemplate | undefined
+  onTemplate(id: ArrangementTemplateId | null): void
 }
 
 export function DirectionComposer(props: Props) {
@@ -50,7 +54,7 @@ export function DirectionComposer(props: Props) {
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [draftOpen, setDraftOpen] = useState(false)
   const [announcement, setAnnouncement] = useState("")
-  const scope = JSON.stringify([props.projectId, props.headId, props.sectionId, props.partId, props.protectedPartIds, props.sourceIds])
+  const scope = JSON.stringify([props.projectId, props.headId, props.sectionId, props.partId, props.protectedPartIds, props.sourceIds, ...(props.selectedTemplate ? [props.selectedTemplate.id] : [])])
   const undoKey = `pocket-producer:prompt-edit:${props.projectId}`
   const [undo, setUndo] = useState<{ original: string; suggestion: string } | null>(() => {
     try {
@@ -100,10 +104,11 @@ export function DirectionComposer(props: Props) {
     {props.active ? <Button type="button" variant="ghost" aria-expanded={draftOpen} aria-controls="next-direction-form" onClick={() => setDraftOpen((value) => !value)}>{draftOpen ? "Close draft" : props.direction.trim() ? "Edit next change" : "Draft next change"}</Button> : null}
     <form id="next-direction-form" hidden={props.active && !draftOpen} className="composer native-composer" onSubmit={(event) => { event.preventDefault(); if (!props.active && !pending && props.canSubmit && !modelUnavailable) props.onSubmit(effectiveModel) }}>
       {props.revision ? <div className="direction-scope"><label>Change scope <select aria-label="Change scope" value={props.sectionId ?? ""} onChange={(event) => props.onSection(event.target.value || null)} disabled={props.busy}><option value="">Whole piece</option>{props.sections.map((section, index) => <option key={section.id} value={section.id} title={section.name}>{String(index + 1).padStart(2, "0")} · {section.name.length > 28 ? `${section.name.slice(0, 27)}…` : section.name}</option>)}</select></label>{props.partName ? <Button type="button" variant="ghost" size="sm" onClick={props.clearPart} aria-label={`Clear change target ${props.partName}`}>{props.partName} ×</Button> : null}</div> : null}
+      {!props.revision && !props.active ? <TemplatePicker selected={props.selectedTemplate} onChange={props.onTemplate} disabled={props.busy || pending} /> : null}
       <label htmlFor="native-direction" className="sr-only">Describe your arrangement</label>
       <Textarea id="native-direction" value={props.direction} maxLength={32_768} onChange={(event) => {
         controller.current?.abort(); controller.current = null; setPending(false); setMessage(null); props.onDirection(event.target.value)
-      }} placeholder={props.revision ? "A little more movement here. Keep the bass and melody…" : "A mood, a rhythm, a place. What does your music feel like?"} disabled={props.busy} />
+      }} placeholder={props.revision ? "A little more movement here. Keep the bass and melody…" : props.selectedTemplate ? "What would you change? Leave this blank to start with the template as arranged." : "A mood, a rhythm, a place. What does your music feel like?"} disabled={props.busy} />
       {props.protectedNames.length ? <p className="direction-kept">Keep unchanged: {props.protectedNames.join(", ")}</p> : null}
       <div className="direction-footer"><div className="prompt-helper-actions">
         {!props.active && !helperUnavailable && (props.direction.trim() || !props.revision) ? <Button type="button" variant="ghost" size="sm" aria-label={pending ? undefined : props.direction.trim() ? "Rewrite prompt" : "Inspire me"} onClick={() => void assist()} disabled={props.busy || pending}><Sparkles size={15} />{pending ? props.direction.trim() ? "Rewriting…" : "Finding an idea…" : props.direction.trim() ? "Rewrite" : "Inspire me"}</Button> : null}

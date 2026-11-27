@@ -1,3 +1,4 @@
+import { findArrangementTemplate, usesTemplateAsWritten } from "@pocket/core/templates";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -109,13 +110,14 @@ async function nativeConstruction(job: JobRecord, signal: AbortSignal, offlineIn
   const protectedBase = protectionChange && Array.isArray(protectionChange.expectedPartIds) && Array.isArray(protectionChange.desiredPartIds)
     ? setNativeProtections(base, protectionChange.expectedPartIds as string[], protectionChange.desiredPartIds as string[])
     : protectedPartIds.length ? applyNativeOperations(base, [{ kind: "protect", partIds: protectedPartIds, motifIds: [] }]) : base;
-  const libraryConnection = !offlineInput && !config.FIXTURE_MODE && config.AUDIOTOOL_CLIENT_ID ? await optionalNativeLibraryConnection(job.ownerId, config.AUDIOTOOL_CLIENT_ID) : null;
+  const selected = Array.isArray(job.request.sourceAssetIds) ? job.request.sourceAssetIds.filter((value): value is string => typeof value === "string") : [];
+  const templateOnly = job.kind === "native-generation" && usesTemplateAsWritten(findArrangementTemplate(job.request.templateId), direction, selected.length);
+  const libraryConnection = !templateOnly && !offlineInput && !config.FIXTURE_MODE && config.AUDIOTOOL_CLIENT_ID ? await optionalNativeLibraryConnection(job.ownerId, config.AUDIOTOOL_CLIENT_ID) : null;
   const library = offlineInput?.library ?? (libraryConnection ? createNativeLibrary(libraryConnection.client) : null);
   const runLimits = jobNativeRunLimits(job.request);
   const activity = await readProjectActivity(job.ownerId, job.projectId, { limit: 1 });
-  await appendAttemptEvent(job, "capabilities", { model: offlineInput ? "scripted" : runLimits?.model ?? config.OPENAI_MODEL, profile: runLimits?.profile ?? "standard", library: offlineInput ? "injected-test-client" : libraryConnection ? "connected" : config.FIXTURE_MODE ? "fixture-disabled" : config.AUDIOTOOL_CLIENT_ID ? "consent-unavailable" : "not-configured", sampleBytes: offlineInput ? null : Boolean(libraryConnection), presetAndKitLookup: offlineInput ? null : Boolean(libraryConnection), sourceAnalysis: offlineInput ? Boolean(offlineInput.scriptedGeminiClient) : providerAvailability(config).gemini, nativeMixListening: false, jobCeilingUsd: runLimits?.maxJobCostUsd ?? null, siteRemainingUsd: activity.allowance.remainingUsd });
+  await appendAttemptEvent(job, "capabilities", { model: offlineInput ? "scripted" : runLimits?.model ?? config.OPENAI_MODEL, profile: runLimits?.profile ?? "standard", library: templateOnly ? "not-needed" : offlineInput ? "injected-test-client" : libraryConnection ? "connected" : config.FIXTURE_MODE ? "fixture-disabled" : config.AUDIOTOOL_CLIENT_ID ? "consent-unavailable" : "not-configured", sampleBytes: offlineInput ? null : Boolean(libraryConnection), presetAndKitLookup: offlineInput ? null : Boolean(libraryConnection), sourceAnalysis: offlineInput ? Boolean(offlineInput.scriptedGeminiClient) : providerAvailability(config).gemini, nativeMixListening: false, jobCeilingUsd: runLimits?.maxJobCostUsd ?? null, siteRemainingUsd: activity.allowance.remainingUsd });
   const session = new NativeToolSession(job, protectedBase, true, library);
-  const selected = Array.isArray(job.request.sourceAssetIds) ? job.request.sourceAssetIds.filter((value): value is string => typeof value === "string") : [];
   const assets = selected.length ? await getPool().query<{ id: string; name: string; content_hash: string; duration_seconds: number }>("SELECT id,name,content_hash,duration_seconds FROM asset WHERE owner_id=$1 AND project_id=$2 AND kind='source' AND readiness='ready' AND id=ANY($3::uuid[])", [job.ownerId, job.projectId, selected]) : { rows: [] };
   if (assets.rows.length !== selected.length) throw new Error("A selected source is no longer available");
   const sources: NativeSource[] = await Promise.all(assets.rows.map(async (row) => {

@@ -1,8 +1,10 @@
+import { findArrangementTemplate, type ArrangementTemplateId } from "@pocket/core/templates"
 import type { Asset, NativeSnapshot } from "../../lib/api"
 
 export interface NativeDraft {
   headId: string | null
   direction: string
+  templateId?: ArrangementTemplateId | null
   targetPartId: string | null
   targetSectionId: string | null
   protectedPartIds: string[]
@@ -37,6 +39,7 @@ export function reconcileNativeDraft(raw: unknown, snapshot: NativeSnapshot, ass
   const requestedProtections = Array.isArray(saved.protectedPartIds) ? saved.protectedPartIds.filter((value): value is string => typeof value === "string") : []
   return { draft: {
     headId: snapshot.currentRevisionId,
+    templateId: snapshot.currentRevisionId || headChanged ? null : findArrangementTemplate(saved.templateId)?.id ?? null,
     direction: typeof saved.direction === "string" && saved.direction.length <= 32_768 ? saved.direction : fallback.direction,
     targetPartId: requestedPartId && partIds.has(requestedPartId) ? requestedPartId : null,
     targetSectionId: requestedSectionId && sectionIds.has(requestedSectionId) ? requestedSectionId : null,

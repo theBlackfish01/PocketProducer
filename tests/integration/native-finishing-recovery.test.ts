@@ -1,3 +1,4 @@
+import { findArrangementTemplate, templateStartingDirection } from "@pocket/core/templates";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { getConfig } from "@pocket/core";
@@ -10,6 +11,8 @@ import { listProjects, requireProject, abandonNativePartialJob, interpretNativeD
 import { completeProviderEffect, failProviderEffect, reconcileNativeStepConflict } from "@pocket/core";
 import { materializedNotes, nativeDocumentSchema, nativeMusicHash, nativePresetRecipes } from "@pocket/core";
 import { nativeReviewResponseFormat } from "@pocket/core/test-support";
+import { buildReference, starterReferences } from "@pocket/core/test-support";
+import { loadNativeSteps } from "@pocket/core";
 
 let owner = "";
 const config = getConfig(), originalConfig = { ...config };
@@ -51,6 +54,51 @@ async function prepared(profile: "standard" | "extended" = "standard", model = "
   await session.apply("initial", nativeFormOperations(nativeFormSchema.parse(form), []));
   return { job, session };
 }
+
+it("saves the selected score unchanged without invoking a model when no customization was requested", async () => {
+  const project = await createProject(owner, "Template as written");
+  const selected = findArrangementTemplate("tidal-ambient-v1")!;
+  const direction = templateStartingDirection(selected);
+  const model = fakeModel(), reviewer = fakeModel();
+  const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", expectedHeadId: null,
+    idempotencyKey: randomUUID(), request: { direction, templateId: selected.id, model: "gpt-6-luna" } });
+  await dispatchOutbox();
+  await processJob((await claimJobById(made.id, "template-as-written"))!, { scriptedModel: model, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, made.id)).toMatchObject({ state: "succeeded" });
+  const saved = (await nativeSnapshot(owner, project.id)).current!.document;
+  expect(nativeMusicHash(saved)).toBe(nativeMusicHash(buildReference(starterReferences.find(ref => ref.id === selected.id)!)));
+  expect([model.callCount, reviewer.callCount]).toEqual([0, 0]);
+});
+
+it("binds the brief to the chosen template and edits its real score through the worker", async () => {
+  const project = await createProject(owner, "Chosen template");
+  const templateId = "bossa-nova-v1";
+  const reference = buildReference(starterReferences.find(ref => ref.id === templateId)!);
+  const direction = "Keep the bass and bring the lead down a little.";
+  const checked = await interpretNativeDirection(owner, project.id, randomUUID(), { direction, templateId, expectedHeadId: null }, scriptedBrief({}));
+  const input = { ownerId: owner, projectId: project.id, kind: "native-generation" as const, idempotencyKey: randomUUID(), expectedHeadId: null,
+    request: { direction, model: "gpt-6-luna", templateId, interpretationId: checked.interpretationId } };
+  await expect(createNativeJob({ ...input, request: { ...input.request, templateId: "synthwave-v1" } })).rejects.toThrow(/check your direction/i);
+  const job = await createNativeJob(input);
+  expect(await createNativeJob(input)).toEqual({ id: job.id, duplicate: true });
+  await dispatchOutbox();
+  const claimed = (await claimJobById(job.id, "template-test"))!;
+  const editPlan = { ...plan, intent: direction, hardConstraints: ["Keep the original bass"], sections: reference.sections.map(s => ({ name: s.name, purpose: s.intent })) };
+  const producer = fakeModel().respondWithTools([{ name: "record_native_plan", args: editPlan }])
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "softer-lead", operations: [{ kind: "setMix", partId: "lead", gain: 0.29 }] } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  await processJob(claimed, { scriptedModel: producer, scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null) });
+  expect(await jobSnapshot(owner, job.id)).toMatchObject({ state: "succeeded" });
+  const current = (await nativeSnapshot(owner, project.id)).current!.document;
+  expect(current.title).toBe(reference.title);
+  expect(current.parts.find(p => p.id === "lead")!.gain).toBe(0.29);
+  expect(current.parts.filter(p => p.id !== "lead")).toEqual(reference.parts.filter(p => p.id !== "lead"));
+  expect(current.motifs).toEqual(reference.motifs);
+  expect((await loadNativeSteps(job.id)).map(s => s.key)).toEqual(["template-" + templateId, "softer-lead"]);
+  const replay = new NativeToolSession(claimed, seedNativeDocument(direction), true, createNativeLibrary(null));
+  await replay.replay();
+  expect(nativeMusicHash(replay.document)).toBe(nativeMusicHash(current));
+});
 
 it("returns first actionable findings before explicit best-effort acceptance, without another review", async () => {
   const { job } = await prepared("standard", "gpt-6-luna");

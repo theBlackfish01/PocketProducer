@@ -1,3 +1,6 @@
+import { open } from "node:fs/promises";
+import { resolve } from "node:path";
+import { REPOSITORY_ROOT } from "../config.js";
 import { describe, expect, it } from "vitest";
 import { validateNativeOffline } from "./adapter.js";
 import { compileRecipe, sceneOperations } from "./construction-tools.js";
@@ -5,6 +8,7 @@ import { applyNativeOperations, barTicks, materializedNotes, nativeMusicHash } f
 import { seedNativeDocument } from "./producer.js";
 import { buildReference, referenceScene, starterReferences } from "./starter-references.js";
 import { checkReviewedKitReplacement, editPassage } from "./passage-edits.js";
+import { arrangementTemplates } from "./template-catalog.js";
 import { starterSuggestions } from "./starters.js";
 import { symbolicNativeReview, validateNativeReview } from "./critique.js";
 
@@ -12,11 +16,34 @@ describe("original arrangement starters", () => {
   const v1Hashes = {
     "french-house-v1":"93660058b8ca2b30792c455790c7c936d86ff974f1d45770245f095b8ba1dd8b",
     "broken-beat-v1":"1794fadc6384727fee3c931c558f08a7c1167190987453fcb1712d4edbe4ab17",
-    "chamber-waltz-v1":"29cd8931f3b5a77fd97f822820abfc433e151a93a94568641aafe1f3cffdf9b4"
+    "chamber-waltz-v1":"29cd8931f3b5a77fd97f822820abfc433e151a93a94568641aafe1f3cffdf9b4",
+    "synthwave-v1":"b5cbde4d3474e9ad2c3297525676f60c6f0d28837def10fb37a767bb25ac4cf7",
+    "bossa-nova-v1":"cab96665deec13c0419f7f96df7e60621a22e167d84251b9898c5d2af438e216",
+    "tidal-ambient-v1":"7b372a278e8bc65c62f5512d265829691e99ad4d2503924826fc58936c9b823e"
   };
+  const recordingHashes = {
+    "french-house-v1": "e06b3a4b7ab4ba48468bfe56cd3601bc33e187d6d74ec77b058c16a5860f5f71",
+    "broken-beat-v1": "2b520bd485d2ba4bd881b4417cce8b5240266f8ad99e8346b5d3ea3f5dd66f26",
+    "chamber-waltz-v1": "6d563a220b10bb19c9504c55836e345fdf53d259c84d7e393b4119aa5b02d89c",
+    "synthwave-v1": "ee0c147f86b313747b0c99c72d2ab906fdcb361cc9a60b5ebe7aca4a56494e99",
+    "bossa-nova-v1": "b66ddaf274d4152f25b4302aac0c55077b7e5b677604580ef4b80583f4372468",
+    "tidal-ambient-v1": "fd6e45d315d01e6e35333fb0bb2b30a22563c70f5d691367f915c212398d5fae"
+  };
+  it("publishes one editable score per template", () => {
+    expect(arrangementTemplates.map(t => t.id).sort()).toEqual(starterReferences.map(r => r.id).sort());
+  });
   for (const ref of starterReferences) it(`maps ${ref.title} to editable Nexus notes, automation and its requested drum palette`, async () => {
     const score = buildReference(ref);
     expect(score).toEqual(buildReference(ref));
+    expect(nativeMusicHash(score)).toBe(recordingHashes[ref.id]);
+    const file = await open(resolve(REPOSITORY_ROOT, "apps/web/public/templates", ref.id + ".mp3"), "r");
+    try {
+      const tag = Buffer.alloc(1024);
+      await file.read(tag, 0, tag.length, 0);
+      expect(tag.subarray(0, 3).toString()).toBe("ID3");
+      expect(tag.includes(Buffer.from("Pocket Producer reference " + recordingHashes[ref.id]))).toBe(true);
+    } finally { await file.close(); }
+    expect(arrangementTemplates.find(t => t.id === ref.id)).toMatchObject({ title: score.title, bpm: score.tempoBpm, beats: score.meter.numerator, bars: score.bars });
     expect(score.meter).toEqual({ numerator: ref.beats, denominator: 4 });
     expect(score.tempoBpm).toBe(ref.bpm);
     expect(score.sourceAssetIds).toEqual([]);
@@ -35,8 +62,9 @@ describe("original arrangement starters", () => {
     const sdk = await validateNativeOffline(score);
     expect(sdk.readback.noteEntities).toBeGreaterThan(50);
     expect(sdk.readback.automationEvents).toBe(ref.id === "broken-beat-v1" ? 21 : 6);
-    expect(sdk.readback.drumMachines).toBe(ref.beats === 3 ? 0 : 1);
-    if (ref.beats === 4) {
+    const hasKit = ref.id !== "chamber-waltz-v1" && ref.id !== "tidal-ambient-v1";
+    expect(sdk.readback.drumMachines).toBe(hasKit ? 1 : 0);
+    if (hasKit) {
       const hits = materializedNotes(score, "drums");
       expect(hits.every(n => n.startTick % 240 === 0 && n.velocity === 1 && n.durationTicks === 240 && n.startTick < landing)).toBe(true);
       expect(sdk.readback.patternRegions).toBeGreaterThan(0);

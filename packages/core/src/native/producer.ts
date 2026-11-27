@@ -2,6 +2,8 @@ import { readFile, readdir } from "node:fs/promises";
 import { assertNativeModelCompletion } from "./model-completion.js";
 import { checkReviewedKitReplacement, editPassage, passageEdit } from "./passage-edits.js";
 import { starterSuggestions } from "./starters.js";
+import { getTemplateReference, referenceScene } from "./starter-references.js";
+import { findArrangementTemplate, templateStartingDirection, usesTemplateAsWritten } from "./template-catalog.js";
 export { assertNativeModelCompletion } from "./model-completion.js";
 import { resolve } from "node:path";
 import { tool } from "@langchain/core/tools";
@@ -75,23 +77,7 @@ const toolFailure = (error: unknown): string => {
 // Database (SQLSTATE) and system errors carry a string code; domain errors that
 // the model can correct are typed classes and are handled before this check.
 const infrastructureError = (error: unknown) => error instanceof Error && !(error instanceof NativeLibraryError) && !(error instanceof CodedError) && typeof (error as { code?: unknown }).code === "string";
-const shortTitle = (direction: string) => {
-  const clean = direction.trim();
-  if (clean.length <= 42) return clean || "New construction";
-  const words = clean.slice(0, 43).split(/\s+/);
-  words.pop();
-  return `${words.join(" ")}…`;
-};
-
-export function seedNativeDocument(direction: string): NativeDocument {
-  return nativeDocumentSchema.parse({
-    schemaVersion: 2, ppq: 960, mixSemantics: "channel-gain-v1", title: shortTitle(direction), direction, currentObjective: shortTitle(direction),
-    assumptions: ["Structural construction only; no new audio has been rendered or heard."], tempoBpm: 96, meter: { numerator: 4, denominator: 4 }, bars: 4,
-    sections: [{ id: "sketch", name: "Sketch", startBar: 0, endBar: 4, intent: "Starting point" }],
-    parts: [{ id: "starting-voice", name: "Starting voice", role: "melody", device: { type: "heisenberg", parameters: {} }, gain: 0.7, pan: 0, notes: [], placements: [], sourceRegions: [], effects: [], automation: [] }],
-    motifs: [], protectedPartIds: [], protectedMotifIds: [], sourceAssetIds: [], audio: { state: "deferred", revisionId: null, assetHash: null }
-  });
-}
+export { seedNativeDocument } from "./seed.js";
 
 function automationBaseline(part: NativeDocument["parts"][number], target: string): number | null {
   const [kind, effectId, parameter, ...rest] = target.split(".");
@@ -165,7 +151,7 @@ function containsChordProgression(document: NativeDocument, symbols: string[]): 
  * items are hard requirements; the direction text itself is never parsed here. */
 export function nativeCompletionIssues(document: NativeDocument, brief: NativeBrief, mode: "generation" | "revision", selectedSourceIds: string[] = [], base?: NativeDocument, targetSectionId?: string | null): string[] {
   const issues: string[] = [];
-  const reference = mode === "revision" ? base ?? document : document;
+  const reference = base && nativeHasMaterial(base) ? base : document;
   if (mode === "generation" && brief.totalBars && document.bars !== brief.totalBars.value) issues.push(`Requested ${brief.totalBars.value} bars in total, but the draft has ${document.bars}`);
   if (brief.tempoBpm && document.tempoBpm !== brief.tempoBpm.value) issues.push(`Requested ${brief.tempoBpm.value} BPM, but the draft is ${document.tempoBpm} BPM`);
   if (brief.meter && (document.meter.numerator !== brief.meter.numerator || document.meter.denominator !== brief.meter.denominator)) issues.push(`Requested ${brief.meter.numerator}/${brief.meter.denominator} meter was not constructed`);
@@ -201,7 +187,7 @@ export function nativeCompletionIssues(document: NativeDocument, brief: NativeBr
     if (rule.kind === "absent" && present) issues.push(`Excluded ${rule.label} has constructed material in ${section.name}`);
     if (rule.kind !== "absent" && !present) issues.push(`Requested ${rule.label} has no constructed material in ${section.name}`);
   }
-  if (mode === "revision" && base) {
+  if (base && (mode === "revision" || nativeHasMaterial(base))) {
     const resolution = nativeBriefPreservation(brief, base, targetSectionId);
     issues.push(...resolution.unresolved);
     for (const part of resolution.namedParts) {
@@ -436,6 +422,20 @@ type NativeBlueprint = z.infer<typeof blueprintSchema>;
 // Deterministic offline fixture only: plain keyword presence, no live interpretation.
 const mentions = (text: string, words: string[]) => words.some((word) => text.includes(word));
 
+function fixtureSourceOperations(sources: NativeSource[], sections: NativeDocument["sections"], bTicks: number): NativeOperation[] {
+  const operations: NativeOperation[] = [];
+  if (sources.length) {
+    const sourcePart = makePart("owned-source", "Owned source intervals", "source", "audio", 0);
+    operations.push(op({ kind: "addPart", part: sourcePart }));
+    for (const [index, source] of sources.entries()) {
+      const section = sections[1 + index % 3]!;
+      const interval = Math.min(2, source.durationSeconds);
+      operations.push(op({ kind: "placeSource", partId: sourcePart.id, region: { id: `owned-region-${index}`, assetId: source.assetId, assetHash: source.assetHash, startTick: section.startBar * bTicks + Math.floor(index / 3) * bTicks, durationTicks: bTicks, sourceStartSeconds: 0, sourceDurationSeconds: interval, gain: 0.5, rights: source.rights } }));
+    }
+  }
+  return operations;
+}
+
 export async function fixtureConstruct(session: NativeToolSession, direction: string, sources: NativeSource[], blueprint?: NativeBlueprint): Promise<string> {
   if (blueprint) blueprintSchema.parse(blueprint);
   const lower = direction.toLowerCase();
@@ -476,15 +476,7 @@ export async function fixtureConstruct(session: NativeToolSession, direction: st
     if (index >= 2 && index <= 5) operations.push(op({ kind: "addEffect", partId: part.id, effect: { id: `${part.id}-space`, type: spacious ? "stompboxReverb" : "stompboxDelay", parameters: {} } }));
     if (index === 2 || index === 4) operations.push(op({ kind: "addAutomation", partId: part.id, automation: { id: `${part.id}-gain-arc`, target: "gain", points: [{ tick: 0, value: 0.35 }, { tick: boundaries[2]! * bTicks, value: 0.65 }, { tick: boundaries[4]! * bTicks, value: 0.85 }, { tick: bars * bTicks, value: 0.3 }] } }));
   }
-  if (sources.length) {
-    const sourcePart = makePart("owned-source", "Owned source intervals", "source", "audio", 0);
-    operations.push(op({ kind: "addPart", part: sourcePart }));
-    for (const [index, source] of sources.entries()) {
-      const section = sections[1 + index % 3]!;
-      const interval = Math.min(2, source.durationSeconds);
-      operations.push(op({ kind: "placeSource", partId: sourcePart.id, region: { id: `owned-region-${index}`, assetId: source.assetId, assetHash: source.assetHash, startTick: section.startBar * bTicks + Math.floor(index / 3) * bTicks, durationTicks: bTicks, sourceStartSeconds: 0, sourceDurationSeconds: interval, gain: 0.5, rights: source.rights } }));
-    }
-  }
+  operations.push(...fixtureSourceOperations(sources, sections, bTicks));
   await session.apply(blueprint ? "native-blueprint" : "fixture-construct", operations);
   return `Constructed ${bars} bars across ${sections.length} sections and ${session.document.parts.length} editable native parts. Audio preview is deferred.`;
 }
@@ -532,8 +524,29 @@ export async function produceNative(input: { session: NativeToolSession; directi
   const modelName = run?.model ?? config.OPENAI_MODEL;
   const outputTokens = run?.maxOutputTokens ?? config.NATIVE_MODEL_OUTPUT_TOKENS;
   await input.session.replay();
+  const selected = input.mode === "generation" ? findArrangementTemplate(input.session.job.request.templateId) : undefined;
+  let comparisonBase = input.mode === "revision" ? input.session.initialDocument : undefined;
+  if (selected) {
+    const operations = sceneOperations(referenceScene(getTemplateReference(selected.id)), input.session.initialDocument);
+    // This is an ordinary confirmed step. Draft inspection, cancellation and cold replay share its receipt.
+    await input.session.apply("template-" + selected.id, operations);
+    if (usesTemplateAsWritten(selected, input.direction, input.sources.length)) {
+      return { summary: "Started from " + selected.title + ".", provider: "template-library", model: selected.id,
+        costUsd: 0, usage: { inputTokens: 0, outputTokens: 0 }, steps: input.session.applied };
+    }
+    comparisonBase = applyNativeOperations(input.session.initialDocument, operations);
+  }
   if (input.forceFixture || (!input.scriptedModel && config.FIXTURE_MODE)) {
-    const summary = input.mode === "generation" ? await fixtureConstruct(input.session, input.direction, input.sources) : await fixtureRevise(input.session, input.direction, input.targetPartId, input.targetSectionId);
+    let summary: string;
+    if (selected) {
+      const document = input.session.document;
+      const sourceOps = fixtureSourceOperations(input.sources, document.sections, barTicks(document));
+      if (sourceOps.length) await input.session.apply("template-fixture-sources", sourceOps);
+      summary = input.direction === templateStartingDirection(selected) || input.session.applied.some(step => step.key.startsWith("fixture-revise-"))
+        ? "Started from " + selected.title + "." : await fixtureRevise(input.session, input.direction, "lead");
+    } else {
+      summary = input.mode === "generation" ? await fixtureConstruct(input.session, input.direction, input.sources) : await fixtureRevise(input.session, input.direction, input.targetPartId, input.targetSectionId);
+    }
     return { summary, provider: "deterministic-fixture", model: "fixture", costUsd: 0, usage: { inputTokens: 0, outputTokens: 0 }, steps: input.session.applied };
   }
   const originalModel = jobNativeRunLimits({ _nativeRun: input.session.job.request._nativeRun })?.model ?? modelName;
@@ -658,7 +671,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
     if (!input.scriptedModel) await captureMissingJobBrief(input.session.job);
     const brief = jobNativeBrief(input.session.job.request);
     // The checks the server will apply, and the user's softer wording, as data.
-    const briefChecks = { hard: nativeBriefChecks(brief, input.mode === "revision" ? input.session.initialDocument : null), guidance: brief.guidance.map((item) => item.quote) };
+    const briefChecks = { hard: nativeBriefChecks(brief, comparisonBase ?? null), guidance: brief.guidance.map((item) => item.quote) };
     const soundFeedback = await listNativeSoundFeedback(input.session.job.ownerId, input.session.job.projectId);
     const failedToolCalls = new Map<string, number>();
     const convergence = new NativeConvergenceMonitor();
@@ -702,7 +715,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
     const completionChecklist = async () => {
       const saved = await loadNativePlan(input.session.job.id);
       const hash = canonicalHash(input.session.document);
-      const missing = nativeCompletionIssues(input.session.document, brief, input.mode, input.sources.map((source) => source.assetId), input.session.initialDocument, input.targetSectionId ?? null);
+      const missing = nativeCompletionIssues(input.session.document, brief, input.mode, input.sources.map((source) => source.assetId), comparisonBase, input.targetSectionId ?? null);
       if (!saved) missing.push("Record the durable musical plan");
       else missing.push(...nativePlanEvidenceIssues(saved.plan, input.session.document));
       const objectiveMissing = [...new Set(missing)];
@@ -755,7 +768,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
       if (!canModelReview) {
         const symbolic = symbolicNativeReview(input.session.document, saved.plan);
         review = { documentHash: hash, verdict: "Symbolic inspection only; no acoustic conclusion.", findings: symbolic.emptySections.slice(0, 3).map((sectionId) => ({ priority: "medium", sectionId, partId: null, observation: "No note onset or clip begins in this section.", suggestedChange: "Check whether silence is intentional against the original brief." })), noChangeReason: "No model opinion was established for this document.", modelUsed: false };
-      } else review = await focusedNativeReview({ job: input.session.job, direction: input.direction, document: input.session.document, ...(input.mode === "revision" ? { previousVersion: input.session.initialDocument } : {}), plan: saved.plan, previousReviews: saved.reviewHistory, attempt: saved.reviewCount, ...(recoverFormat ? { recovery: { diagnostic: lastReview.diagnostic ?? { code: "historical_unusable" as const, paths: [], finishReason: null } } } : {}), ...(input.scriptedReviewer ? { scriptedReviewer: input.scriptedReviewer } : {}), ...(input.signal ? { signal: input.signal } : {}) });
+      } else review = await focusedNativeReview({ job: input.session.job, direction: input.direction, document: input.session.document, ...(comparisonBase ? { previousVersion: comparisonBase } : {}), plan: saved.plan, previousReviews: saved.reviewHistory, attempt: saved.reviewCount, ...(recoverFormat ? { recovery: { diagnostic: lastReview.diagnostic ?? { code: "historical_unusable" as const, paths: [], finishReason: null } } } : {}), ...(input.scriptedReviewer ? { scriptedReviewer: input.scriptedReviewer } : {}), ...(input.signal ? { signal: input.signal } : {}) });
       review = { ...review, musicHash: nativeMusicHash(input.session.document) };
       await saveNativeReview(input.session.job, review, canModelReview);
       return review;
@@ -1018,7 +1031,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
       checkpointer: await checkpoint(), skills: ["/skills/"],
       permissions: [{ operations: ["read"], paths: ["/skills/**", "/workspace/**"] }, { operations: ["write"], paths: ["/**"], mode: "deny" }, { operations: ["read"], paths: ["/**"], mode: "deny" }],
       systemPrompt: `You are Pocket Producer's native music producer. Text alone is a complete creative input; sources are optional. Record a concise durable plan: form, sounds, explicit constraints and development. Distinguish user requirements from your interpretations. Retain chosen resources, decisions, failures and remaining work in record_native_creative_state; this is bookkeeping, not music.
-For new music, use compose_native_scene. A matching optional starter supplies a pocket and palette. Choose the chords, arc, landing and original hook; use lead:false for bass-led music. Compose freely for other briefs or exact instrument lists. Free scenes replace the seed with replaceSeed:true. Develop section contrast, phrase returns and a coordinated ending. Section names short; details in intent. Chord cycles <=16 bars; rhythmic comp/bass <=8 bars and 96 notes. Respect local revision scope. Theme edits vary or hand off a hook. Sound/batch edit_native_passage can thin, land, or reuse an existing step-kit pattern in selected bars. Menus replace each other; return to scene to compose.
+${selected ? "The user selected an existing arrangement. Its full editable score is already loaded. Use it as the starting point. Apply the requested changes to its existing parts, or finish the selected arrangement as written when no changes were asked for." : "For new music, use compose_native_scene. A matching optional starter supplies a pocket and palette. Choose the chords, arc, landing and original hook; use lead:false for bass-led music. Compose freely for other briefs or exact instrument lists. Free scenes replace the seed with replaceSeed:true."} Develop section contrast, phrase returns and a coordinated ending. Section names short; details in intent. Chord cycles <=16 bars; rhythmic comp/bass <=8 bars and 96 notes. Respect local revision scope. Theme edits vary or hand off a hook. Sound/batch edit_native_passage can thin, land, or reuse an existing step-kit pattern in selected bars. Menus replace each other; return to scene to compose.
 Start with the full form and a few core patterns. Use compact [startTick,durationTicks,pitch,velocity] events and repeated placements. Add roles and patch detail in later scenes; avoid long note-object lists. Reuse retained skill excerpts after compaction.
 ${input.mode === "revision" ? "Make the requested change within its scope." : richnessDepth === "detailed" ? "Develop the main idea across sections. For a requested answer, write a distinct return phrase or responding voice. Shape the transition and ending. Add supporting voices or timbral movement where they serve the brief." : "Give the piece a recognizable musical idea and a deliberate ending. If the first scene already delivers the brief, finish it. Otherwise develop the part or passage that needs it."}
 Check promised motif changes in timing, contour or tone against current section evidence. Configure defining voices with explicit settings or an inspected recipe; a deliberate default is valid. These are musical goals, not completion gates.
@@ -1049,7 +1062,7 @@ Root motif familyId equals its own id (or omit it); derived motifs reference the
     const preloaded = `Craft: write harmony as chord symbols. In free scenes use chordProgression (scene harmony or a batch operation), with a key such as "D minor" and an ending chord for the last bar. Vary phrases in key (key + diatonicSteps), not by semitones unless modulating. For free-scene drums, write a scene groove (style, density, fill) on a kit, and add space for shared reverb. Give other grooves feel (swing about 0.55–0.62, light humanize). Start sounds from a recipe, then adjust; give different roles different patches. Change something between sections (pattern, register, density, a fill before a change) rather than looping one cell. The checklist's musicality notes are score facts: fix clear clashes over the bass and accidental out-of-key notes; weigh the rest against the brief.\n\n\nSkill summaries (enough to start; read a full skill only for a detail it covers):\n${skills.join("\n")}\n\nLocal sound recipes (name one as a scene part's recipe, or read_native_recipe with ids for exact settings):\n${recipes}\n\n${drumAdvice}${targetMaterial && Object.keys(targetMaterial).length ? `\n\nTargeted material before your edit (inspected for you on the base version): ${bounded(targetMaterial)}` : ""}`;
     const starterGuidance = new HumanMessage({ id: `native-starter-guidance:${input.session.job.attemptId ?? input.session.job.id}`, content: preloaded });
     const candidates = input.mode === "generation" && !input.session.applied.length ? starterSuggestions(input.direction, brief) : [];
-    const recommendation = candidates.length ? "Optional first-scene starters: " + candidates.join(" or ") +
+    const recommendation = selected ? "The user selected " + selected.title + ". Its full editable score is already in the project. Adapt its parts and phrases to their direction. With no requested changes, retain the arrangement." : candidates.length ? "Optional first-scene starters: " + candidates.join(" or ") +
       '. With starter, omit parts/harmony/grooves for its supplied voices. Put your hook in patterns + placements on lead. For a bass-led hook use bassLine:"authored" in starter and place it on bass; lead:false omits lead. Otherwise build freely.' : "";
     const initialRequest = input.mode === "generation"
       ? `Construct an original editable piece from this direction: ${input.direction}. Available owned sources: ${JSON.stringify(input.sources)}. ${recommendation}`
@@ -1085,7 +1098,7 @@ Root motif familyId equals its own id (or omit it); derived motifs reference the
           if (!recoverable && !settled) throw coded("NATIVE_INCOMPLETE:REVIEW_EXHAUSTED: No valid final review and no remaining review recovery. The draft and findings remain saved.");
         }
       }
-      completionIssues = nativeCompletionIssues(input.session.document, brief, input.mode, input.sources.map((source) => source.assetId), input.session.initialDocument, typeof input.session.job.request.targetSectionId === "string" ? input.session.job.request.targetSectionId : null);
+      completionIssues = nativeCompletionIssues(input.session.document, brief, input.mode, input.sources.map((source) => source.assetId), comparisonBase, input.targetSectionId ?? null);
       if (!input.scriptedModel || input.scriptedReviewer) completionIssues = (await completionChecklist()).missing;
       if (!completionIssues.length) break;
       const incompleteState = canonicalHash({ document: input.session.document, missing: completionIssues });

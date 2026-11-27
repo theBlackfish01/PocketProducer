@@ -3,7 +3,7 @@ export function isPlaybackHelp(direction: string): boolean {
   return /^(?:please\s+)?(?:how (?:can|do) i (?:hear|listen to|play|open) (?:it|this|the (?:song|music|arrangement|project))|where (?:can|do) i (?:hear|play|listen to) (?:it|this)|how do i open (?:it in )?audiotool)[?!.\s]*$/i.test(direction.trim());
 }
 
-export const playbackHelp = "To listen, finish the arrangement, then use Copy to Audiotool. When the copy is confirmed, choose Open in Audiotool and press Play there. Pocket Producer previews individual source sounds, not the whole arrangement.";
+export const playbackHelp = "To listen, finish the arrangement, then use Copy to Audiotool. When the copy is confirmed, choose Open in Audiotool and press Play there. In Pocket Producer you can preview individual sounds or listen to the original templates in a new session.";
 
 export function requireMusicalDirection(direction: unknown): void {
   if (typeof direction === "string" && isPlaybackHelp(direction)) throw Object.assign(new Error(playbackHelp), { statusCode: 422, code: "PLAYBACK_HELP" });

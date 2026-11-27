@@ -1,4 +1,5 @@
 import { requireMusicalDirection } from "../native/request-help.js";
+import { arrangementTemplates } from "../native/template-catalog.js";
 import OpenAI from "openai";
 import { z } from "zod";
 import { getConfig } from "../config.js";
@@ -19,6 +20,7 @@ const scopeId = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 export const nativeInterpretationSchema = z.object({
   direction: z.string().trim().min(3).max(32_768),
   expectedHeadId: z.uuid().nullable(),
+  templateId: z.enum(arrangementTemplates.map(template => template.id)).optional(),
   targetSectionId: scopeId.nullable().default(null),
   targetPartId: scopeId.nullable().default(null)
 }).strict();
@@ -53,12 +55,18 @@ async function captureDirectionBrief(ownerId: string, projectId: string, key: st
   const project = await requireProject(ownerId, projectId);
   requireMusicalDirection(input.direction);
   if (project.currentRevisionId !== input.expectedHeadId) throw issue("HEAD_CHANGED", "The selected version changed. Review your direction before sending.", 409);
-  const document = input.expectedHeadId ? (await getNativeRevision(ownerId, projectId, input.expectedHeadId)).document : null;
+  if (input.templateId && input.expectedHeadId) throw plain("A template can only start a new arrangement.", 422);
+  let document = input.expectedHeadId ? (await getNativeRevision(ownerId, projectId, input.expectedHeadId)).document : null;
+  if (input.templateId) {
+    const { buildReference, getTemplateReference } = await import("../native/starter-references.js");
+    document = buildReference(getTemplateReference(input.templateId));
+  }
   const section = document?.sections.find((item) => item.id === input.targetSectionId);
   const part = document?.parts.find((item) => item.id === input.targetPartId);
   if (input.targetSectionId && !section || input.targetPartId && !part) throw plain("The change scope is no longer available.");
   const context = JSON.stringify({
-    mode: document ? "revision" : "generation", direction: input.direction,
+    mode: input.expectedHeadId ? "revision" : "generation", direction: input.direction,
+    ...(input.templateId ? { startingArrangement: document!.title } : {}),
     scope: { section: section ? { id: section.id, name: section.name } : null, part: part ? { id: part.id, name: part.name } : null },
     document: document ? {
       sections: document.sections.map((item) => ({ id: item.id, name: item.name, bars: `${item.startBar + 1}-${item.endBar}` })),
@@ -116,7 +124,7 @@ export async function captureMissingJobBrief(job: JobRecord): Promise<void> {
   const request = job.request;
   const scope = (value: unknown) => typeof value === "string" ? value : null;
   try {
-    const { brief } = await captureDirectionBrief(job.ownerId, job.projectId, jobCheckKey(job.id), { direction: request.direction, expectedHeadId: scope(request.expectedNativeHeadId), targetSectionId: scope(request.targetSectionId), targetPartId: scope(request.targetPartId) });
+    const { brief } = await captureDirectionBrief(job.ownerId, job.projectId, jobCheckKey(job.id), { direction: request.direction, ...(request.templateId ? { templateId: request.templateId } : {}), expectedHeadId: scope(request.expectedNativeHeadId), targetSectionId: scope(request.targetSectionId), targetPartId: scope(request.targetPartId) });
     await attachNativeJobBrief(job, brief);
   } catch (error) {
     if (error instanceof JobControlError) throw error;

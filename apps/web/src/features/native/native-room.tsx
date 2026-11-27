@@ -1,3 +1,4 @@
+import { findArrangementTemplate, templateStartingDirection, usesTemplateAsWritten, type ArrangementTemplateId } from "@pocket/core/templates"
 import { isPlaybackHelp, playbackHelp } from "@pocket/core/request-help"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowRight, AudioLines, Check, GitCompareArrows, History, LockKeyhole, Music2, MoreHorizontal, ExternalLink, RotateCcw, Search } from "lucide-react"
@@ -62,6 +63,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const [submitIssue, setSubmitIssue] = useState<{ code: string | null } | null>(null)
   useEffect(() => { if (submitIssue) window.requestAnimationFrame(() => document.getElementById("direction-issue")?.scrollIntoView({ block: "nearest", behavior: "smooth" })) }, [submitIssue])
   const [direction, setDirection] = useState(defaultNativeDirection())
+  const [templateId, setTemplateId] = useState<ArrangementTemplateId | null>(null)
   const [profile, setProfile] = useState<"standard" | "extended">("standard")
   const [producerModel, setProducerModel] = useState("gpt-6-luna")
   const [targetPartId, setTargetPartId] = useState<string | null>(null)
@@ -150,14 +152,14 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   useEffect(() => {
     let active = true
     roomActiveRef.current = true
-    setPanel(null); setExtendOpen(false); setAbandonOpen(false)
+    setPanel(null); setTemplateId(null); setExtendOpen(false); setAbandonOpen(false)
     libraryAudioRef.current?.pause(); pendingCompare.current = null; setDraftProjectId(null); setShowPlaybackHelp(false); setLoading(true); setBusy(false); setSnapshot(null); setJob(null); setTentative(null); setTentativeError(null); setError(null); setTargetPartId(null); setTargetSectionId(null); setProtectedPartIds([]); setSourceIds([]); setRoleFilter("all"); setPartLimit(8); setCompareOpen(false); setComparePair(null); setInspectedPartId(null); setViewSectionId(null); setSoundsOpen(false); setPartsOpen(false); setComparePartId(null); setReplay(0); setShowUnchanged(false); setSampleAnalysis(null); setSampleAuditioned(false); setSampleFeedback(null); setLibraryResults([]); setLibraryError(null)
     void api.nativeSnapshot(projectId).then((value) => {
       if (!active) return
       let stored: unknown = null
       try { stored = JSON.parse(localStorage.getItem(nativeDraftKey(projectId)) ?? "null") } catch { /* A malformed browser draft has no authority. */ }
       const restored = reconcileNativeDraft(stored, value, assetsRef.current)
-      setWorkspaceView(value.current ? "arrangement" : "producer"); setSnapshot(value); setDirection(restored.draft.direction); setProfile(restored.draft.profile ?? "standard"); setProducerModel(restored.draft.model ?? "gpt-6-luna"); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.draft.direction.trim() ? restored.notices : []); setDraftProjectId(projectId)
+      setWorkspaceView(value.current ? "arrangement" : "producer"); setSnapshot(value); setDirection(restored.draft.direction); setTemplateId(restored.draft.templateId ?? null); setProfile(restored.draft.profile ?? "standard"); setProducerModel(restored.draft.model ?? "gpt-6-luna"); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.draft.direction.trim() ? restored.notices : []); setDraftProjectId(projectId)
       setLoading(false)
       try {
         const raw = localStorage.getItem(receiptKey)
@@ -188,8 +190,8 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
 
   useEffect(() => {
     if (draftProjectId !== projectId) return
-    localStorage.setItem(nativeDraftKey(projectId), JSON.stringify({ headId: snapshot?.currentRevisionId ?? null, direction, profile, model: producerModel, targetPartId, targetSectionId, protectedPartIds, sourceIds }))
-  }, [draftProjectId, projectId, snapshot?.currentRevisionId, direction, profile, producerModel, targetPartId, targetSectionId, protectedPartIds, sourceIds])
+    localStorage.setItem(nativeDraftKey(projectId), JSON.stringify({ headId: snapshot?.currentRevisionId ?? null, direction, templateId, profile, model: producerModel, targetPartId, targetSectionId, protectedPartIds, sourceIds }))
+  }, [draftProjectId, projectId, snapshot?.currentRevisionId, direction, templateId, profile, producerModel, targetPartId, targetSectionId, protectedPartIds, sourceIds])
 
   useEffect(() => {
     let active = true
@@ -219,7 +221,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       }
       pendingCompare.current = null
       const reconciled = reconcileNativeDraft({ headId: snapshot?.currentRevisionId ?? null, direction: directionRef.current, targetPartId, targetSectionId, protectedPartIds, sourceIds, profile }, fresh, assetsRef.current)
-      setDirection(reconciled.draft.direction); setTargetPartId(reconciled.draft.targetPartId); setTargetSectionId(reconciled.draft.targetSectionId); setProtectedPartIds(reconciled.draft.protectedPartIds); setSourceIds(reconciled.draft.sourceIds); setDraftNotices(directionRef.current.trim() ? reconciled.notices : [])
+      setDirection(reconciled.draft.direction); setTemplateId(reconciled.draft.templateId ?? null); setTargetPartId(reconciled.draft.targetPartId); setTargetSectionId(reconciled.draft.targetSectionId); setProtectedPartIds(reconciled.draft.protectedPartIds); setSourceIds(reconciled.draft.sourceIds); setDraftNotices(directionRef.current.trim() ? reconciled.notices : [])
       setShowDraft(false); localStorage.removeItem(receiptKey); onProjectUpdated()
     }).catch(() => { if (active) setSnapshotError("The latest saved arrangement could not be loaded. Your direction is still here.") })
     return () => { active = false; controller.abort() }
@@ -376,12 +378,14 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
         : syncState === "applying" ? "Preparing the editable Audiotool copy…"
           : audiotoolAvailable ? `Version ${current?.ordinal ?? ""} is ready to copy.` : "Audiotool connection is not set up."
 
+  const selectedTemplate = current ? undefined : findArrangementTemplate(templateId)
+  const submittedDirection = direction.trim() || (selectedTemplate ? templateStartingDirection(selectedTemplate) : "")
   const submit = async (freshAttempt = false, submittedModel = producerModel, confirmed?: { interpretationId: string | null }) => {
-    if (!direction.trim() || busy || activeJob || activity.state?.actions.canSubmit === false || activity.state?.headId !== snapshot?.currentRevisionId || draftNotices.length) return
+    if (submittedDirection.length < 3 || busy || activeJob || activity.state?.actions.canSubmit === false || activity.state?.headId !== snapshot?.currentRevisionId || draftNotices.length) return
     if (isPlaybackHelp(direction)) { setShowPlaybackHelp(true); return }
     const head = snapshot?.currentRevisionId ?? null
     const operation: Receipt["operation"] = head ? "native-revision" : "native-generation"
-    const signature = JSON.stringify({ operation, head, direction: direction.trim(), profile, model: submittedModel, targetPartId, targetSectionId, protectedPartIds: [...protectedPartIds].sort(), sourceIds: [...sourceIds].sort() })
+    const signature = JSON.stringify({ operation, head, direction: submittedDirection, ...(selectedTemplate ? { templateId: selectedTemplate.id } : {}), profile, model: submittedModel, targetPartId, targetSectionId, protectedPartIds: [...protectedPartIds].sort(), sourceIds: [...sourceIds].sort() })
     const storageKey = `pocket-producer:native-command:${projectId}:${signature}`
     const key = freshAttempt ? crypto.randomUUID() : localStorage.getItem(storageKey) ?? crypto.randomUUID()
     localStorage.setItem(storageKey, key)
@@ -390,7 +394,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       if (!stillInProject()) return
       if (head) pendingCompare.current = { projectId, jobId: accepted.id, baseId: head, sectionId: targetSectionId }
       localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, jobId: accepted.id })); localStorage.removeItem(`${storageKey}:brief`)
-      setJob(accepted); setDirection(""); directionRef.current = ""; setWorkspaceView("producer"); setDraftNotices([]); setError(null); setSubmitIssue(null)
+      setJob(accepted); setDirection(""); setTemplateId(null); directionRef.current = ""; setWorkspaceView("producer"); setDraftNotices([]); setError(null); setSubmitIssue(null)
       // The accepted request keeps its own scope; the next change starts from the whole piece.
       setTargetPartId(null); setTargetSectionId(null); setSourceIds([])
       navigateSession(projectId, "arrange", true)
@@ -413,12 +417,12 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       // The direction's explicit requirements are read once, at submit, and
       // captured for the job. Unmatched words never become a silent lock.
       let interpretationId = confirmed?.interpretationId ?? null
-      if (!confirmed) {
+      if (!confirmed && !usesTemplateAsWritten(selectedTemplate, submittedDirection, sourceIds.length)) {
         const briefKey = `${storageKey}:brief`
         const checkKey = (freshAttempt ? null : localStorage.getItem(briefKey)) ?? crypto.randomUUID()
         localStorage.setItem(briefKey, checkKey)
         let checked: NativeInterpretation
-        try { checked = await api.interpretNative(projectId, { direction: direction.trim(), expectedHeadId: head, targetSectionId: head ? targetSectionId : null, targetPartId: head ? targetPartId : null }, checkKey) }
+        try { checked = await api.interpretNative(projectId, { direction: submittedDirection, ...(selectedTemplate ? { templateId: selectedTemplate.id } : {}), expectedHeadId: head, targetSectionId: head ? targetSectionId : null, targetPartId: head ? targetPartId : null }, checkKey) }
         catch (cause) {
           // A check that may have finished or is still settling replays at no cost
           // under the same key; any other outcome starts a fresh check next time.
@@ -435,7 +439,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       localStorage.setItem(receiptKey, JSON.stringify(receipt))
       const savedProtections = current?.document.protectedPartIds ?? []
       const protectionChanged = JSON.stringify([...savedProtections].sort()) !== JSON.stringify([...protectedPartIds].sort())
-      const result = head ? await api.reviseNative(projectId, { direction: direction.trim(), profile, model: submittedModel, baseNativeRevisionId: head, expectedNativeHeadId: head, ...(targetPartId ? { targetPartId } : {}), ...(targetSectionId ? { targetSectionId } : {}), ...(protectionChanged ? { protectionChange: { expectedPartIds: savedProtections, desiredPartIds: protectedPartIds } } : {}), sourceAssetIds: sourceIds, ...(interpretationId ? { interpretationId } : {}) }, key) : await api.constructNative(projectId, direction.trim(), sourceIds, key, profile, submittedModel, interpretationId ?? undefined)
+      const result = head ? await api.reviseNative(projectId, { direction: direction.trim(), profile, model: submittedModel, baseNativeRevisionId: head, expectedNativeHeadId: head, ...(targetPartId ? { targetPartId } : {}), ...(targetSectionId ? { targetSectionId } : {}), ...(protectionChanged ? { protectionChange: { expectedPartIds: savedProtections, desiredPartIds: protectedPartIds } } : {}), sourceAssetIds: sourceIds, ...(interpretationId ? { interpretationId } : {}) }, key) : await api.constructNative(projectId, submittedDirection, sourceIds, key, profile, submittedModel, interpretationId ?? undefined, selectedTemplate?.id)
       if (!stillInProject()) return
       await acceptRequest(await api.job(result.jobId))
     } catch (cause) {
@@ -481,7 +485,7 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
       const fresh = await api.nativeSnapshot(projectId)
       if (!stillInProject()) return
       const restored = reconcileNativeDraft({ headId: snapshot.currentRevisionId, direction, targetPartId, targetSectionId, protectedPartIds, sourceIds }, fresh, assets)
-      setSnapshot(fresh); setDirection(restored.draft.direction); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.draft.direction.trim() ? restored.notices : []); setCompareOpen(false)
+      setSnapshot(fresh); setDirection(restored.draft.direction); setTemplateId(restored.draft.templateId ?? null); setTargetPartId(restored.draft.targetPartId); setTargetSectionId(restored.draft.targetSectionId); setProtectedPartIds(restored.draft.protectedPartIds); setSourceIds(restored.draft.sourceIds); setDraftNotices(restored.draft.direction.trim() ? restored.notices : []); setCompareOpen(false)
     } catch (cause) { if (stillInProject()) { setError(issueOf(cause)); const fresh = await api.nativeSnapshot(projectId); if (stillInProject()) setSnapshot(fresh) } }
     finally { if (stillInProject()) setBusy(false) }
   }
@@ -585,8 +589,8 @@ export function NativeRoom({ projectId, assets, audiotoolConnected, audiotoolAva
   const ToolHeader = panel ? DialogHeader : SheetHeader;
   const ToolTitle = panel ? DialogTitle : SheetTitle;
   const ToolDescription = panel ? DialogDescription : SheetDescription;
-  const composer = <><DirectionComposer projectId={projectId} headId={current?.id ?? null} direction={direction} onDirection={(value) => { setDirection(value); setShowPlaybackHelp(false); setSubmitIssue(null) }} revision={Boolean(current)} active={Boolean(activeJob) || job?.state === "needs_attention"} busy={busy}
-    canSubmit={!busy && !activeJob && activity.state?.headId === snapshot?.currentRevisionId && Boolean(activity.state?.actions.canSubmit) && draftNotices.length === 0 && direction.trim().length >= 3}
+  const composer = <><DirectionComposer selectedTemplate={selectedTemplate} onTemplate={(id) => { setTemplateId(id); setSubmitIssue(null) }} projectId={projectId} headId={current?.id ?? null} direction={direction} onDirection={(value) => { setDirection(value); setShowPlaybackHelp(false); setSubmitIssue(null) }} revision={Boolean(current)} active={Boolean(activeJob) || job?.state === "needs_attention"} busy={busy}
+    canSubmit={!busy && !activeJob && activity.state?.headId === snapshot?.currentRevisionId && Boolean(activity.state?.actions.canSubmit) && draftNotices.length === 0 && submittedDirection.length >= 3}
     onSubmit={(model) => { setProducerModel(model); void submit(false, model) }} onAddSound={() => setSoundsOpen(true)} onPlaybackHelp={() => setShowPlaybackHelp(true)} sectionId={targetSectionId} partId={targetPartId} protectedPartIds={protectedPartIds} sourceIds={sourceIds}
     sections={current?.document.sections ?? []} onSection={setTargetSectionId} partName={selectedPart?.name} clearPart={() => setTargetPartId(null)}
     protectedNames={[...new Set(protectedPartIds.map(partName))]} profile={profile} onProfile={setProfile} issue={submitIssue ? friendlyIssue(submitIssue.code, "Your direction is unchanged. Check it and try again.") : null}>

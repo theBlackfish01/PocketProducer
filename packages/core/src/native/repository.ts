@@ -1,4 +1,5 @@
 import { requireMusicalDirection } from "./request-help.js";
+import { findArrangementTemplate, usesTemplateAsWritten } from "./template-catalog.js";
 import { randomUUID } from "node:crypto";
 import { nativeOutputRecoveryBlocked } from "./model-completion.js";
 import type pg from "pg";
@@ -56,6 +57,9 @@ async function head(client: pg.PoolClient, ownerId: string, projectId: string, l
 }
 
 export async function createNativeJob(input: { ownerId: string; projectId: string; kind: "native-generation" | "native-revision" | "native-sync"; idempotencyKey: string; request: Record<string, unknown>; expectedHeadId: string | null; defaultModel?: string }): Promise<{ id: string; duplicate: boolean }> {
+  const selectedTemplate = findArrangementTemplate(input.request.templateId);
+  if (input.request.templateId !== undefined && (input.kind !== "native-generation" || !selectedTemplate))
+    throw Object.assign(new Error("Choose an available template for a new arrangement."), { statusCode: 422 });
   // The public route supplies its current default separately from request data,
   // so omitted-model idempotency receipts and historical internal callers survive.
   let requestWithLimits = input.kind === "native-sync" ? input.request : { ...input.request, _nativeRun: nativeRunLimits(nativeProfileSchema.parse(input.request.profile ?? "standard"), input.request.model === undefined ? input.defaultModel : producerModelSchema.parse(input.request.model)) };
@@ -108,7 +112,7 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     if (input.kind !== "native-generation" && !current) throw Object.assign(new Error("Construct a native project first"), { statusCode: 409 });
     let brief: NativeBrief | null = null;
     if (input.kind !== "native-sync") {
-      const expected = { direction: typeof input.request.direction === "string" ? input.request.direction : "", baseRevisionId: current, targetSectionId: typeof input.request.targetSectionId === "string" ? input.request.targetSectionId : null };
+      const expected = { direction: typeof input.request.direction === "string" ? input.request.direction : "", baseRevisionId: current, targetSectionId: typeof input.request.targetSectionId === "string" ? input.request.targetSectionId : null, templateId: input.request.templateId ?? null };
       // Without a checked interpretation the request is sent as guidance only; that
       // choice is recorded explicitly, never mistaken for an older uncaptured job.
       brief = typeof input.request.interpretationId === "string" ? await capturedNativeBrief(client, input.ownerId, input.projectId, input.request.interpretationId, expected) : emptyNativeBrief({ ...expected, provenance: "none" });
@@ -155,7 +159,7 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
     const kept = base?.parts.filter((part) => desired.includes(part.id)) ?? [];
     const worded = brief && base ? nativeBriefPreservation(brief, base, typeof input.request.targetSectionId === "string" ? input.request.targetSectionId : null) : null;
     const wordedNames = worded ? [...worded.namedParts.map((part) => part.name), ...(worded.theme ? [`${worded.theme.label} theme phrase`] : [])].filter((name) => !kept.some((part) => part.name === name)) : [];
-    const scope = [base?.sections.find((section) => section.id === input.request.targetSectionId)?.name ?? "Whole piece", base?.parts.find((part) => part.id === input.request.targetPartId)?.name, kept.length ? `Asked to keep ${kept.map((part) => part.name).join(", ")}` : null, wordedNames.length ? `Keeping as written: ${[...new Set(wordedNames)].join(", ")}` : null, brief?.provenance === "none" ? "Sent without enforced checks" : null].filter(Boolean).join(" · ").slice(0, 1_200);
+    const scope = [base?.sections.find((section) => section.id === input.request.targetSectionId)?.name ?? "Whole piece", selectedTemplate ? "Template: " + selectedTemplate.title : null, base?.parts.find((part) => part.id === input.request.targetPartId)?.name, kept.length ? `Asked to keep ${kept.map((part) => part.name).join(", ")}` : null, wordedNames.length ? `Keeping as written: ${[...new Set(wordedNames)].join(", ")}` : null, brief?.provenance === "none" && !usesTemplateAsWritten(selectedTemplate, input.request.direction, assetIds.length) ? "Sent without enforced checks" : null].filter(Boolean).join(" · ").slice(0, 1_200);
     if (input.kind !== "native-sync") await appendPublicActivity(client, { ...input, jobId: id }, `request:${id}`, {
       version: 1, kind: "request", text: typeof input.request.direction === "string" ? input.request.direction.slice(0, 32_768) : "", baseRevisionId: current,
       profile: nativeProfileSchema.parse(input.request.profile ?? "standard"), sourceIds: assetIds as string[], keptPartIds: kept.map((part) => part.id), scope,
@@ -171,8 +175,8 @@ export async function createNativeJob(input: { ownerId: string; projectId: strin
 
 /** A brief interpretation captured for this exact direction, selected version and
  * scope. A changed direction or version needs a fresh check before sending. */
-async function capturedNativeBrief(client: pg.PoolClient, ownerId: string, projectId: string, interpretationId: string, expected: { direction: string; baseRevisionId: string | null; targetSectionId: string | null }): Promise<NativeBrief> {
-  const row = await client.query<{ output: unknown }>("SELECT e.output FROM prompt_assistance p JOIN effect e ON e.prompt_assistance_id=p.id WHERE p.id=$1 AND p.owner_id=$2 AND p.project_id=$3 AND e.step='native-brief' AND e.state='succeeded'", [interpretationId, ownerId, projectId]);
+async function capturedNativeBrief(client: pg.PoolClient, ownerId: string, projectId: string, interpretationId: string, expected: { direction: string; baseRevisionId: string | null; targetSectionId: string | null; templateId: unknown }): Promise<NativeBrief> {
+  const row = await client.query<{ output: unknown }>("SELECT e.output FROM prompt_assistance p JOIN effect e ON e.prompt_assistance_id=p.id WHERE p.id=$1 AND p.owner_id=$2 AND p.project_id=$3 AND e.step='native-brief' AND e.state='succeeded' AND (p.request->>'templateId') IS NOT DISTINCT FROM $4::text", [interpretationId, ownerId, projectId, expected.templateId]);
   if (!row.rows[0]) throw issue("INTERPRETATION_STALE", "Check your direction again before sending.", 409);
   const brief = nativeBriefSchema.parse(row.rows[0].output);
   if (brief.directionHash !== canonicalHash(expected.direction) || brief.baseRevisionId !== expected.baseRevisionId || brief.targetSectionId !== expected.targetSectionId) throw issue("INTERPRETATION_STALE", "Your direction or version changed after it was checked. Check it again before sending.", 409);

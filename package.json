@@ -38,6 +38,7 @@
     "budget:status": "tsx scripts/check-provider-budget.ts",
     "eval:native": "tsx scripts/evaluate-native-quality.ts",
     "eval:sound-craft": "tsx scripts/export-sound-craft-benchmark.ts",
+    "eval:template-previews": "tsx scripts/render-template-previews.ts",
     "eval:starters": "tsx scripts/export-starter-references.ts",
     "verify:sample-wavs": "tsx scripts/verify-sample-wavs.ts",
     "spike:nexus-native": "tsx packages/core/src/nexus/native-spike.ts",

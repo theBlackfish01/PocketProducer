@@ -3,6 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import { resolve, join, extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { REPOSITORY_ROOT } from "@pocket/core/config";
+import { byteRange } from "@pocket/core/api";
 
 /** Serve only files inventoried in the built frontend. Never expose the repository. */
 export async function registerWeb(app: FastifyInstance) {
@@ -24,9 +25,17 @@ export async function registerWeb(app: FastifyInstance) {
     const spa = url === "/insights" || url === "/" || url === "/auth/audiotool/callback" || /^\/sessions\/[a-f0-9-]{36}(\/start)?$/.test(url);
     const path = files.get(spa ? "/index.html" : url);
     if (!path) return reply.code(404).send({ message: "Page not found" });
-    return reply.header("Content-Type", types[extname(path)] ?? "application/octet-stream")
-      .header("Content-Length", (await stat(path)).size)
-      .header("Cache-Control", url.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache")
-      .send(createReadStream(path));
+    const size = (await stat(path)).size;
+    if (extname(path) === ".mp3") {
+      reply.type("audio/mpeg").header("Accept-Ranges", "bytes").header("Cache-Control", "public, max-age=86400");
+      const range = byteRange(request.headers.range, size);
+      if (range === "invalid") return reply.code(416).header("Content-Range", "bytes */" + String(size)).send();
+      if (range) return reply.code(206).header("Content-Range", `bytes ${range.start}-${range.end}/${size}`)
+        .header("Content-Length", range.end - range.start + 1).send(createReadStream(path, range));
+    } else {
+      reply.header("Content-Type", types[extname(path)] ?? "application/octet-stream")
+        .header("Cache-Control", url.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
+    }
+    return reply.header("Content-Length", size).send(createReadStream(path));
   });
 }

@@ -4,15 +4,23 @@
 
 The per-turn scorecard describes the music already written. A complete piece can proceed directly to the focused review. For a requested developed answer the editor compares the opening and returning phrases. The producer can fix a consequential finding with a scoped edit or explicitly retain a suggestion. A section edit can restore whole repetitions of an existing Beatbox8 groove while preserving the surrounding material. See the [matched generation and recovery experiments](producer-review-experiment-2026-11-27.md).
 
+### Choosing and hearing a template
+
+New sessions offer six original arrangements beside the prompt. Each has a complete, on-demand stereo MP3 preview of its score, played with reference instruments. The browser loads a single track at a time. The recordings are versioned static assets. Edited projects continue to use the existing explicit Audiotool copy and listening flow.
+
+A selection travels with its versioned ID through direction interpretation and job creation. The worker writes that full score as the first recoverable step. With no customization or source it saves the exact arrangement through normal SDK validation, with zero model calls. A custom direction or selected source uses the existing producer and review on the loaded score. A prompt on its own still starts a fresh composition.
+
+The catalog is in `packages/core/src/native/template-catalog.ts`. Its references are authored in `starter-references.ts`. To rebuild the six recordings, run `pnpm eval:template-previews` with FFmpeg on the path (or set `TEMPLATE_FFMPEG` to the binary). Each MP3 embeds its score's music hash. Tests compare that hash and the editable Nexus structure to the pinned reference. A musical change to a published template requires a new version ID.
+
 ### Original arrangement starters
 
 For a bass-led piece, `starter.bassLine: "authored"` keeps the bass device and mix and leaves its notes to the producer. It can place a bass motif in the first scene alongside the supplied drums and chords. The default v1 bass performances remain available. See the [live starter evaluation](starter-evaluation-2026-11-27.md) for contrasts, failures and the limits of the listening evidence.
 
 A generation can opt into one versioned foundation on its first scene. The producer suggests up to two matches using the direction and captured ensemble/meter constraints. A free build remains available. The caller chooses the progression, form, section energy, pocket, landing and hook. The scene expands locally into ordinary v2 operations under the existing mutation lock. Replaying its step key compares the operations against the original predecessor. Revisions edit the accepted score. There is no dependency on a shared Audiotool project, preset lookup, new provider call or database migration.
 
-The three reference scores are *Mercury Arcade* (24-bar French house), *Last Table* (20-bar broken beat), and *The Paper Observatory* (20-bar chamber waltz). Each has an original hook, an answering phrase, a break, a return and a coordinated ending. The matching starters omit those lead statements. Beatbox8 uses boolean steps. In *Last Table*, the pitched parts supply off-grid timing and the kit channel has an independent accent curve.
+The library includes *Mercury Arcade* (24-bar French house), *Last Table* (20-bar broken beat), *The Paper Observatory* (20-bar chamber waltz), *Violet Overpass* (20-bar synthwave), *Patio Radio* (16-bar bossa nova), and *Tide Almanac* (16-bar drumless ambient). Each has an original hook, an answering phrase, a break, a return and a coordinated ending. The matching foundations omit the lead statements. Beatbox8 uses boolean steps. In *Last Table*, the pitched parts supply off-grid timing and the kit channel has an independent accent curve.
 
-Run `pnpm eval:starters` to write all six canonical scores and their offline Nexus readback manifest into `.local/benchmarks/starter-references-v1/`. The exporter is provider-free. These are Pocket Producer scores for the normal native mapper. A Studio URL is evidence only after creating and reopening the corresponding private copy. Listening comparisons should separately record the exact score, Studio project, brief and whether a listener preferred its groove, hook and ending.
+Run `pnpm eval:starters` to write the six full scores, their six foundations and the offline Nexus readback manifest into `.local/benchmarks/starter-references-v1/`. The exporter is provider-free. These are Pocket Producer scores for the normal native mapper. A Studio URL is evidence only after creating and reopening the corresponding private copy. Listening comparisons should separately record the exact score, Studio project, brief and whether a listener preferred its groove, hook and ending.
 
 The sound menu includes `edit_native_passage` for thinning a section or landing selected parts in its final bar. Hook answers use the existing motif variation tool. Both preserve ordinary version, part, scope and replay checks. A shared full drum machine or outgoing tie that cannot be edited exactly returns a correctable result.
 
