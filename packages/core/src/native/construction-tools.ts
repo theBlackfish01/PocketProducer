@@ -3,8 +3,9 @@ import { canonicalHash } from "../domain/hash.js";
 import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, NATIVE_PPQ, nativeDocumentSchema, nativeOperationSchema, nativeParameterRanges, automatableDeviceFields, automatableEffectFields, type NativeDocument, type NativeOperation } from "./model.js";
 import { NativeCorrectableError, NativeUnknownIdError } from "./errors.js";
 import { bassHits, bassPatterns, bassRegisters, bassRootLine, compHits, compPatterns, feelChangesMaterial, feelFor, nativeFeelSchema, nativeKeySchema, parseChordSymbol, scaleOf, voiceProgression, voicingRegisters, type ChordSpan, type CycleGrid, type NativeChord, type NativeFeel, type PatternHit, type VoicingOptions } from "./harmony.js";
-import { gmDrumKits, nativePresetRecipes, readNativeRecipe } from "./resources.js";
+import { gmDrumKits, matchingLocalRecipe, nativePresetRecipes, readNativeRecipe } from "./resources.js";
 import { compileDrumGroove, drumGrooveBody } from "./groove-tools.js";
+import { arrangeStarter, starterSchema } from "./starters.js";
 
 const stepKey = z.string().regex(/^[a-z0-9-]{1,96}$/);
 const id = nativeDocumentSchema.shape.parts.element.shape.id;
@@ -165,9 +166,19 @@ export function compileRecipe(raw: z.infer<typeof applyRecipeSchema>, document: 
   if (!part) throw new NativeUnknownIdError("part", op.partId);
   const recipe = readNativeRecipe(op.recipeId);
   const effects = recipeEffects(recipe.id);
+  // V1 starters use positional effect IDs. Keep those IDs (and any automation
+  // targeting them) when editing an intact factory chain. Custom effects stay additive.
+  const factorySlots = part.effects.length > 0 && part.effects.every((fx, i) => fx.id === `fx-${i + 1}`) &&
+    matchingLocalRecipe(part) !== undefined;
   return z.array(nativeOperationSchema).parse([
     { kind: "setDevice", partId: part.id, device: { type: recipe.device.type, parameters: { ...recipe.device.parameters } } },
-    ...effects.map((effect) => ({ kind: part.effects.some((existing) => existing.id === effect.id) ? "replaceEffect" : "addEffect", partId: part.id, effect }))
+    ...effects.map((effect, i) => {
+      const slot = part.effects[i];
+      const reusable = slot?.id === `fx-${i + 1}` && slot.type === effect.type &&
+        (factorySlots || canonicalHash(slot.parameters) === canonicalHash(effect.parameters));
+      const existing = part.effects.find(fx => fx.id === effect.id) ?? (reusable ? slot : undefined);
+      return { kind: existing ? "replaceEffect" : "addEffect", partId: part.id, effect: { ...effect, id: existing?.id ?? effect.id } };
+    })
   ]);
 }
 const recipeEffects = (recipeId: string) => readNativeRecipe(recipeId).effects.map((effect, index) => ({ id: `${recipeId}-${index + 1}`, type: effect.type, parameters: { ...effect.parameters } }));
@@ -190,11 +201,8 @@ export const nativeBatchSchema = z.object({ stepKey, operations: z.array(z.discr
 type OperationSchema = typeof nativeOperationSchema.options[number];
 const operation = <K extends NativeOperation["kind"]>(kind: K) => nativeOperationSchema.options.find((option) => option.shape.kind.value === kind)! as Extract<OperationSchema, { shape: { kind: z.ZodLiteral<K> } }>;
 
-// Exact canonical ticks throughout. No beat conversion or implicit repeats, and
-// nothing picks a genre, progression or pattern: a part's recipe and a harmony
-// entry are the model's explicit choices, compiled into explicit settings and
-// notes before the step is stored. An initial scene can replace the seed; later
-// scenes append only the explicitly named parts/motifs/placements/harmony.
+// All placements use canonical ticks. An explicitly selected first-scene
+// starter expands into the same operations as a free scene before persistence.
 const partSchema = nativeDocumentSchema.shape.parts.element;
 const scenePart = partSchema.omit({ device: true, effects: true }).extend({
   device: partSchema.shape.device.optional(), effects: partSchema.shape.effects.optional(),
@@ -207,22 +215,39 @@ const spaces = { room: { id: "shared-room", name: "Shared room", roomSize: 0.45,
 const sendByRole: Record<string, number> = { lead: 0.2, melody: 0.2, harmony: 0.16, texture: 0.26, fx: 0.3, percussion: 0.06, source: 0.1 };
 export const nativeSceneSchema = z.object({
   stepKey, replaceSeed: z.boolean().default(false),
+  starter: starterSchema.optional(),
   title: z.string().min(1).max(120).optional(),
   meter: nativeDocumentSchema.shape.meter.optional(),
   structure: operation("setStructure").omit({ kind: true }).optional(),
-  parts: z.array(scenePart).max(12).default([]).describe("Each part needs a recipe, kit, instrument or device. Beatbox8 is boolean: pitches 36/38/42/46, startTick a multiple of 240, durationTicks 240, velocity 1."),
-  motifs: z.array(nativeDocumentSchema.shape.motifs.element).max(24).default([]).describe("Root motif: omit familyId or use its own id. A derived motif references its actual parent and that parent's family."),
-  patterns: z.array(compactPattern).max(24).default([]).describe("Compact motifs: events are [startTick,durationTicks,MIDI pitch,velocity]. Root familyId equals id or is omitted; derived patterns reference a real parent/family. Beatbox8 example: [0,240,36,1]. A few patterns per call, not the whole piece."),
+  parts: z.array(scenePart).max(12).default([]).describe("Name a recipe, kit, instrument or device. Beatbox8: 36/38/42/46, tick % 240 = 0, duration 240, velocity 1."),
+  motifs: z.array(nativeDocumentSchema.shape.motifs.element).max(24).default([]).describe("Root familyId omitted or own id. Derived motifs reference parent and its family."),
+  patterns: z.array(compactPattern).max(24).default([]).describe("[startTick,durationTicks,pitch,velocity]. Root familyId omitted or own id. Derived patterns reference parent and its family."),
   placements: z.array(z.object({ partId: id, placement: nativeDocumentSchema.shape.parts.element.shape.placements.unwrap().element })).max(48).default([]),
-  harmony: z.array(chordProgressionBody).max(6).default([]).describe("Chord progressions from symbols, voiced automatically, with an optional bass line"),
-  grooves: z.array(drumGrooveBody).max(4).default([]).describe("Drum grooves by style, with a fill closing each section"),
-  space: z.enum(["room", "hall"]).optional().describe("Shared reverb with a send per part"),
+  harmony: z.array(chordProgressionBody).max(6).default([]).describe("Voice chord symbols with optional bass."),
+  grooves: z.array(drumGrooveBody).max(4).default([]).describe("Kit grooves with section fills."),
+  space: z.enum(["room", "hall"]).optional().describe("Shared reverb by role."),
   inspect: inspectionScope.optional()
 });
 /** Scene arguments as operations. `document` is the current draft: it supplies
  * the meter for feel and the starting point for harmony and recipe checks. */
 export function sceneOperations(raw: unknown, document?: NativeDocument): NativeOperation[] {
-  const args = nativeSceneSchema.parse(raw);
+  let args = nativeSceneSchema.parse(raw);
+  if (args.starter) {
+    if (!document || document.parts.length !== 1 || document.parts[0]?.id !== "starting-voice" ||
+      document.parts[0].notes.length || document.parts[0].placements.length || document.parts[0].sourceRegions.length ||
+      document.parts[0].libraryRegions?.length || document.parts[0].automation.length || document.parts[0].effects.length || document.motifs.length ||
+      document.protectedPartIds.length || document.protectedMotifIds.length)
+      throw invalid("Starters require a fresh generation", "Edit the current draft using its existing parts.");
+    if (!args.structure) throw invalid("A starter needs structure", "Supply the requested bars and named sections, with one arc entry per section.");
+    const starter = arrangeStarter(args.starter, args.structure, args.meter);
+    const supplied = new Set(starter.parts.map(p => p.id));
+    const conflicts = args.parts.map(p => p.id).filter(id => supplied.has(id));
+    if (conflicts.length) throw invalid(`The starter already supplies ${conflicts.join(", ")}`,
+      "Keep your hook motifs, patterns and placements. Omit duplicate parts and backing harmony/grooves, or omit starter to write that backing yourself.");
+    args = { ...args, replaceSeed: true, meter: starter.meter,
+      structure: { ...args.structure, tempoBpm: starter.tempo }, space: args.space ?? starter.space,
+      parts: [...starter.parts, ...args.parts], motifs: [...starter.motifs, ...args.motifs] };
+  }
   const ops: unknown[] = [];
   if (args.title) ops.push({ kind: "setTitle", title: args.title });
   if (args.meter) ops.push({ kind: "setMeter", meter: args.meter });

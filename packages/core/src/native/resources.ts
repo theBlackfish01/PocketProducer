@@ -1,5 +1,6 @@
 import { decodeWav, measureDecodedWav } from "../audio/wav.js";
 import { canonicalHash } from "../domain/hash.js";
+import type { NativePart } from "./model.js";
 
 export interface NativeSourceSegment { startSeconds: number; endSeconds: number; rms: number; nonSilentRatio: number }
 export interface NativeSourceProfile { durationSeconds: number; peak: number; rms: number; nonSilentRatio: number; segments: NativeSourceSegment[]; leadingSilenceSeconds: number; suggestedSlices: Array<{ startSeconds: number; endSeconds: number; reason: string }>; limitations: string }
@@ -92,6 +93,18 @@ const recipeGuidance: Record<(typeof nativePresetRecipes)[number]["id"], { regis
 
 function recipeEvidence(recipe: (typeof nativePresetRecipes)[number]) {
   return { version: NATIVE_RECIPE_VERSION, configurationHash: canonicalHash({ version: NATIVE_RECIPE_VERSION, device: recipe.device, effects: recipe.effects }), usageTerms: "Original Pocket Producer parameter settings; Audiotool device/use terms still apply", auditionStatus: "unheard" as const, guidance: recipeGuidance[recipe.id] };
+}
+
+const localRecipeByPatch = new Map(nativePresetRecipes.map(recipe => [
+  canonicalHash([recipe.device.type, recipe.device.parameters, recipe.effects]), recipe.id
+]));
+
+/** Exact base patch and serial chain, independent of effect IDs or subsequent automation. */
+export function matchingLocalRecipe(part: Pick<NativePart, "device" | "effects">) {
+  if (part.device.preset) return undefined;
+  return localRecipeByPatch.get(canonicalHash([
+    part.device.type, part.device.parameters, part.effects.map(({ type, parameters }) => ({ type, parameters }))
+  ]));
 }
 
 export function readNativeRecipe(id: string) {

@@ -20,6 +20,7 @@ export { AccountedOpenAICalls, boundOpenAiRequest } from "./agent/runtime.js";
 export { sharedUsageBlock } from "./providers/limits.js";
 export { focusedNativeReview, nativeFormatRecoveryAvailable, nativeReviewResponseFormat } from "./native/review-model.js";
 export { createOfflineDocument } from "@audiotool/nexus/node";
+export { buildReference, starterReferences } from "./native/starter-references.js";
 
 type BriefProposal = z.input<typeof nativeBriefProposalSchema>;
 /** A section reference by written name (new piece) or name in the selected version. */

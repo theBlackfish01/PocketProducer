@@ -575,6 +575,51 @@ it("fits the full batch menu, a thin piece's scorecard and an oversized exchange
   expect(rows.every((bounds) => bounds.envelope + bounds.messages + bounds.framing <= 96000)).toBe(true);
 }, 30_000);
 
+it("builds a starter and a new hook in one step, replays it and finishes after a rejected second starter", async () => {
+  const job = await create("standard", "gpt-6-luna");
+  await saveNativePlan(job, plan);
+  const scene = {stepKey:"foundation", title:"Quiet study", structure:{bars:4,sections:[{id:"whole",name:"Whole",startBar:0,endBar:4}]},
+    starter:{id:"chamber-waltz-v1",arc:["pocket"],chords:["Cm","Ab"],landing:"Cm",lead:true},
+    patterns:[{id:"question",name:"Question",partId:"lead",lengthTicks:2880,events:[[480,1200,75,.64],[2160,480,72,.57]]}],
+    placements:[{partId:"lead",placement:{id:"q",motifId:"question",startTick:0,repeats:2,transpose:0}}],
+    inspect:{sectionIds:["whole"]}};
+  const model = fakeModel().respondWithTools([{name:"compose_native_scene",args:scene}])
+    .respondWithTools([{name:"compose_native_scene",args:scene}])
+    .respondWithTools([{name:"compose_native_scene",args:{...scene,stepKey:"restart"}}])
+    .respondWithTools([{name:"finish_native_arrangement",args:{}}])
+    .respond(new AIMessage("Finished"));
+  await processJob(job,{scriptedModel:model,scriptedReviewer:fakeModel().respond(good()),library:createNativeLibrary(null)});
+  const snapshot = await jobSnapshot(owner,job.id);
+  expect(snapshot.state,snapshot.error_message ?? "").toBe("succeeded");
+  expect(JSON.stringify(model.calls[2]?.messages)).toContain("replayed");
+  expect(JSON.stringify(model.calls[3]?.messages)).toContain("first generation step");
+  expect((await nativeDraftView(owner,job.projectId,job.id)).stepCount).toBe(1);
+  const result = await nativeSnapshot(owner,job.projectId);
+  expect(result.versions).toHaveLength(1);
+  expect(result.current?.document.motifs.map(m => m.id)).toEqual(["question"]);
+  expect(result.current?.document.meter.numerator).toBe(3);
+  const head = result.current!;
+  const revision = await createNativeJob({ ownerId:owner, projectId:job.projectId, kind:"native-revision", idempotencyKey:randomUUID(), expectedHeadId:head.id,
+    request:{direction:"Let the final lead note settle on G. Keep the bass.",model:"gpt-6-luna",baseNativeRevisionId:head.id,expectedNativeHeadId:head.id,protectedPartIds:["bass"]} });
+  await dispatchOutbox();
+  const revise = fakeModel()
+    .respondWithTools([{name:"record_native_plan",args:plan}])
+    .respondWithTools([{name:"select_native_tools",args:{focus:"scene"}}])
+    .respondWithTools([{name:"compose_native_scene",args:scene}])
+    .respondWithTools([{name:"select_native_tools",args:{focus:"sound"}}])
+    .respondWithTools([{name:"edit_native_passage",args:{stepKey:"landing",sectionId:"whole",edit:{kind:"land",voices:[{partId:"lead",pitches:[67]}]}}}])
+    .respondWithTools([{name:"finish_native_arrangement",args:{}}])
+    .respond(new AIMessage("Finished"));
+  await processJob((await claimJobById(revision.id,"starter-revision"))!,{scriptedModel:revise,scriptedReviewer:fakeModel().respond(good()),library:createNativeLibrary(null)});
+  expect(await jobSnapshot(owner,revision.id)).toMatchObject({state:"succeeded"});
+  const revised = await nativeSnapshot(owner,job.projectId);
+  expect(revised.versions).toHaveLength(2);
+  expect(revised.versions.find(v => v.id === head.id)?.documentHash).toBe(head.documentHash);
+  expect(revised.current?.document.parts.find(p => p.id === "bass")).toEqual(head.document.parts.find(p => p.id === "bass"));
+  expect(revised.current?.document.parts.find(p => p.id === "lead")?.notes.at(-1)?.pitch).toBe(67);
+  expect(JSON.stringify(revise.calls[3]?.messages)).toContain("first generation step");
+}, 30_000);
+
 it("constructs, develops, shapes and inspects through compound tools with replay-safe receipts", async () => {
   const job = await create();
   const scene = { stepKey: "scene", replaceSeed: true, title: "Tick scene", structure: { bars: 4, sections: [{ id: "whole", name: "Whole", startBar: 0, endBar: 4 }] },
@@ -778,15 +823,18 @@ it("keeps incremental scenes and recent inspection context after music, with foc
   const state = await jobSnapshot(owner, job.id);
   expect(state.state, state.error_message ?? "").toBe("succeeded");
   const names = (index: number) => menus[index];
+  expect(names(2)).toContain('"search_gm_sounds"');
   expect(names(2)).toContain('"compose_native_scene"');
   expect(names(2)).not.toContain('"apply_native_batch"');
   expect(JSON.stringify(model.calls[2]!.messages)).toContain("recent-inspection:");
   expect(names(4)).toContain('"configure_native_sound"');
+  expect(names(4)).toContain('"edit_native_passage"');
+  expect(names(2)).not.toContain('"edit_native_passage"');
   expect(names(4)).not.toContain('"compose_native_scene"');
   expect(names(7)).toContain('"apply_native_batch"');
   expect(names(7)).not.toContain('"configure_native_sound"');
   expect(names(9)).toContain('"compose_native_scene"');
-  expect(model.calls[4]!.messages.map((message) => message.text).join("\n")).toContain('"activeToolMenu":{"focus":"sound","constructionTools":["configure_native_sound"]');
+  expect(model.calls[4]!.messages.map((message) => message.text).join("\n")).toContain('"activeToolMenu":{"focus":"sound","constructionTools":["configure_native_sound","edit_native_passage"]');
   expect(model.calls[10]!.messages.map((message) => message.text).join("\n")).toContain('"alreadyActive":true');
   const envelopes = (await getPool().query("SELECT output->'inputReservationBytes'->>'envelope' AS bytes FROM effect WHERE job_id=$1 AND step='producer-model-call' ORDER BY created_at", [job.id])).rows;
   expect(Number(envelopes[2]?.bytes)).toBeLessThan(50_000);

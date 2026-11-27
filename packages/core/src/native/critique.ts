@@ -5,6 +5,7 @@ import type { NativePlan } from "./plan.js";
 import { automationValueAt } from "./section.js";
 import { analyzeNativeMusicality, musicalityReviewEvidence } from "./musicality.js";
 import { nameChord, parseChordSymbol } from "./harmony.js";
+import { matchingLocalRecipe } from "./resources.js";
 
 // A ramp may cross an entire section without a control point inside it. Give
 // the editor local boundary values and the enclosing keyframes, not unrelated
@@ -104,6 +105,7 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
   const soundEvidence = document.parts.map((part) => ({
     id: part.id, role: part.role, device: part.device.type,
     presetHash: part.device.preset?.contentHash ?? null,
+    matchedLocalParameterRecipe: matchingLocalRecipe(part),
     patchParameters: Object.fromEntries(Object.entries(part.device.parameters).sort(([a], [b]) => a.localeCompare(b))),
     channelGain: part.gain, groupId: part.groupId ?? null,
     sends: (part.sends ?? []).map((send) => ({ busId: send.busId, gain: send.gain })),

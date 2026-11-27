@@ -1,5 +1,17 @@
 # Text-to-native-music construction pass
 
+### Original arrangement starters
+
+For a bass-led piece, `starter.bassLine: "authored"` keeps the bass device and mix and leaves its notes to the producer. It can place a bass motif in the first scene alongside the supplied drums and chords. The default v1 bass performances remain available. See the [live starter evaluation](starter-evaluation-2026-11-27.md) for contrasts, failures and the limits of the listening evidence.
+
+A generation can opt into one versioned foundation on its first scene. The producer suggests up to two matches using the direction and captured ensemble/meter constraints. A free build remains available. The caller chooses the progression, form, section energy, pocket, landing and hook. The scene expands locally into ordinary v2 operations under the existing mutation lock. Replaying its step key compares the operations against the original predecessor. Revisions edit the accepted score. There is no dependency on a shared Audiotool project, preset lookup, new provider call or database migration.
+
+The three reference scores are *Mercury Arcade* (24-bar French house), *Last Table* (20-bar broken beat), and *The Paper Observatory* (20-bar chamber waltz). Each has an original hook, an answering phrase, a break, a return and a coordinated ending. The matching starters omit those lead statements. Beatbox8 uses boolean steps. In *Last Table*, the pitched parts supply off-grid timing and the kit channel has an independent accent curve.
+
+Run `pnpm eval:starters` to write all six canonical scores and their offline Nexus readback manifest into `.local/benchmarks/starter-references-v1/`. The exporter is provider-free. These are Pocket Producer scores for the normal native mapper. A Studio URL is evidence only after creating and reopening the corresponding private copy. Listening comparisons should separately record the exact score, Studio project, brief and whether a listener preferred its groove, hook and ending.
+
+The sound menu includes `edit_native_passage` for thinning a section or landing selected parts in its final bar. Hook answers use the existing motif variation tool. Both preserve ordinary version, part, scope and replay checks. A shared full drum machine or outgoing tie that cannot be edited exactly returns a correctable result.
+
 November 4: [trace-driven reliability follow-up](trace-reliability-followup-2026-11-04.md) distinguishes recognizable identity from exact preservation, corrects whole-piece revision scope, routes playback questions to unpaid help, checks bounded critic facts, and carries pause diagnostics into explicit continuation. Historical locks, review receipts, budgets and native operation replay remain intact.
 
 September 28 export visibility repair: new copies use `nexus-native-v9`. When a note-based part contains both repeated phrases and individual notes, its individual-note clip has a separate adjacent timeline lane connected to the same instrument. Notes, loops, instrument/channel count, routing and automation are unchanged. Single-kind parts, audio sources and Beatbox8 retain their prior layout. The copy checkpoint captures its mapper before external creation; interrupted pre-v9 copies retain the v8 layout, and verified copies are rechecked against their originally confirmed structural hash without relabeling their mapper. Existing Studio projects are not rewritten. This is offline construction/readback evidence, not newly heard playback evidence.

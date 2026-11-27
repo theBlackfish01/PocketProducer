@@ -1,5 +1,15 @@
 # Live implementation status
 
+## Original editable starters — 2026-11-27
+
+Three optional v1 starters are available to the local producer on a fresh generation. Each takes the requested chord cycle, section lengths and energy, final chord and an optional lead. Luna supplies the hook. The sound menu adds two scoped edits for thinning a passage and coordinating a landing. Revisions use the saved score and the existing protected-part and immutable-version checks.
+
+`pnpm eval:starters` builds the three original reference works and their melody-free foundations, with a pinned Nexus structural readback for all six. The references are **Mercury Arcade** (24-bar French house), **Last Table** (20-bar broken beat) and **The Paper Observatory** (20-bar chamber waltz). The worker fixture covers creating a starter and a hook in one call, replay, revision, and preservation of the bass and original version.
+
+Live Luna generation is working with the refreshed key. The [November 27 starter evaluation](starter-evaluation-2026-11-27.md) covers 12 completed generations, two protected revisions, 14 imported traces and $0.368622 of settled model spend. Every saved score passed offline Nexus readback. Starters now allow the producer to write the bass hook, avoid duplicating factory effects during patch changes and expose exact local patch matches to the symbolic reviewer. The three original v1 foundations retain their pinned hashes.
+
+Studio listening qualification is still open. The local Audiotool redirect connected the QA account, but private project creation previously required that account to accept the current terms. This evaluation ran in an isolated local worker and database. The template changes are awaiting release.
+
 ## Additional insights administrators — 2026-11-26
 
 The private report and CSV support additional verified Audiotool accounts through `INSIGHTS_ADDITIONAL_ADMIN_SUBJECTS`. The primary admin setting remains valid. Every dashboard admin is classified as internal for usage and feedback reports.
