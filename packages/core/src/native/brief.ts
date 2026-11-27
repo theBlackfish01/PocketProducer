@@ -34,7 +34,7 @@ const itemSchemas = {
   sections: z.object({ section: sectionRefSchema, bars: z.int().min(1).max(128).nullable(), startBar: z.int().min(1).max(128).nullable(), endBar: z.int().min(1).max(128).nullable(), quote }).strict(),
   chordProgressions: z.object({ chords: z.array(z.string().max(12)).min(3).max(16), quote }).strict(),
   roles: z.object({ kind: z.enum(["required", "absent", "change", "preserve"]), role: z.enum(briefRoles), section: sectionRefSchema.nullable(), reduceDensity: z.boolean(), quote,
-    melodyInstrument: z.string().trim().min(1).max(80).nullish().catch(null) }).strict(),
+    melodyInstrument: z.string().trim().min(1).max(80).nullish().catch(null), separateLead: z.boolean().optional() }).strict(),
   keep: z.object({ partId: z.string().max(64).nullable(), motifId: z.string().max(64).nullable(), theme: z.boolean(), section: sectionRefSchema.nullable(), quote }).strict(),
   construction: z.object({ kind: z.enum(briefConstructionKinds), quote }).strict(),
   guidance: z.object({ quote, reason: z.string().trim().max(200) }).strict()
@@ -130,7 +130,9 @@ export const nativeBriefJsonSchema = object({
   meter: nullable(object({ numerator: integer, denominator: { type: "integer", enum: [4, 8] }, quote: text })),
   sections: array(object({ section: sectionJson, bars: nullable(integer), startBar: nullable(integer), endBar: nullable(integer), quote: text })),
   chordProgressions: array(object({ chords: array(text), quote: text })),
-  roles: array(object({ kind: { type: "string", enum: ["required", "absent", "change", "preserve"] }, role: { type: "string", enum: [...briefRoles] }, section: nullable(sectionJson), reduceDensity: { type: "boolean" }, quote: text, melodyInstrument: nullable(text) })),
+  roles: array(object({ kind: { type: "string", enum: ["required", "absent", "change", "preserve"] }, role: { type: "string", enum: [...briefRoles] }, section: nullable(sectionJson), reduceDensity: { type: "boolean" }, quote: text,
+    melodyInstrument: { ...nullable(text), description: "For a required hook or melody in a new piece, copy the instrument words from this quote. 'Introduce a short piano hook' gives 'piano', even when it is called electric piano elsewhere. Null if unnamed or for other roles." },
+    separateLead: { type: "boolean", description: "True only when this quote explicitly requests a distinct lead part, even if its instrument is named. 'A separate synth lead' is true. 'A short piano hook' is false." } })),
   keep: array(object({ partId: nullable(text), motifId: nullable(text), theme: { type: "boolean" }, section: nullable(sectionJson), quote: text })),
   construction: array(object({ kind: { type: "string", enum: [...briefConstructionKinds] }, quote: text })),
   guidance: array(object({ quote: text, reason: text }))
@@ -145,7 +147,7 @@ Hard items must be explicit and unambiguous:
 When a length applies to a list, reuse the complete quoted clause for each named section. For "three eight-bar sections: Arrival, Lift, and Afterglow", return three sections with bars 8, startBar null, endBar null, each quoting "three eight-bar sections: Arrival, Lift, and Afterglow". Do not calculate start/end positions that the user did not write. A section-name-only quote cannot substantiate a length. If the supporting words cannot fit in the quote, keep the request as guidance.
 - chordProgressions: an explicit ordered sequence of at least three chords, as symbols such as Dm9, Bbmaj7, Fmaj9, Cadd9, Am, C or G7.
 - roles: kind required (include, add, bring in), absent (explicitly exclude the role; avoiding extra layers is not removing it), change (simplify, thin, vary or brighten an existing role; set reduceDensity when asking for fewer notes or hits), preserve (keep a role unchanged or exactly as it is). role is drums, bass, harmony (chords, pads), lead (melody) or transitions (existing FX parts to preserve or exclude).
-For a new piece, if a named instrument is to play a hook or melody, include that phrase in the required lead role's quote and copy the instrument name into melodyInstrument ("short piano hook" → "piano"). Use null for a separate or unspecified lead, or any other role. Capture an explicitly separate lead as its own required role even if another instrument also plays a hook.
+For a new piece, capture both who plays a hook and whether it requires its own part. "Introduce a short piano hook in bars 1–4" gives role lead, melodyInstrument "piano", separateLead false. "Add a separate synth lead" gives role lead, melodyInstrument "synth", separateLead true. If both are requested, return two roles. For other roles use null and false.
 Requests to add or develop transitions, risers, fills or endings belong in guidance: they can use existing instruments and do not require a separate FX part. For example, "Return with a clear ending" is guidance about the ending, never a required transitions role. Explicit keep/remove instructions for existing FX parts remain checks.
 - Recognizable identity is guidance, not exact preservation. "Keep the theme recognizable but vary its rhythm/register" must not create keep/preserve checks. Explicit "keep unchanged" still means exact preservation. For conflicting exact keep and change instructions on the same material, explain the conflict.
 - keep: in a revision, a named part or phrase to keep unchanged, using only ids from the document; theme true for "the theme", "the hook" or "the motif" without a specific phrase.
@@ -374,8 +376,17 @@ export function captureNativeBrief(raw: unknown, context: BriefContext): NativeB
     // Exclusions/protections and already-stored captures remain unchanged.
     else if (item.role === "transitions" && (item.kind === "required" || item.kind === "change")) soften(item.quote, "Transitions can use existing parts; a separate FX part is not required");
     else {
-      const { melodyInstrument, ...role } = item;
-      const instrument = !context.baseRevisionId && role.kind === "required" && role.role === "lead" && melodyInstrument && containsWords(role.quote, melodyInstrument) ? melodyInstrument : undefined;
+      const { melodyInstrument, separateLead, ...role } = item;
+      let instrument: string | undefined;
+      if (!context.baseRevisionId && role.kind === "required" && role.role === "lead" && !separateLead && melodyInstrument) {
+        if (containsWords(role.quote, melodyInstrument)) instrument = melodyInstrument;
+        // The model can supply the full instrument from the direction when the
+        // quoted hook uses its shorter name ("electric piano" / "piano").
+        else if (written(melodyInstrument)) {
+          const noun = words(melodyInstrument).at(-1);
+          if (noun && /^\p{L}+$/u.test(noun) && containsWords(role.quote, noun)) instrument = melodyInstrument;
+        }
+      }
       if (!brief.roles.some((other) => other.kind === role.kind && other.role === role.role && sameRef(other.section, resolved.ref) && other.melodyInstrument === instrument)) {
         brief.roles.push({ ...role, section: resolved.ref, ...(instrument ? { melodyInstrument: instrument } : {}) });
       }

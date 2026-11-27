@@ -4,7 +4,7 @@
 
 The per-turn scorecard describes the music already written. A complete piece can proceed directly to the focused review. For a requested developed answer the editor compares the opening and returning phrases. The producer can fix a consequential finding with a scoped edit or explicitly retain a suggestion. A section edit can restore whole repetitions of an existing Beatbox8 groove while preserving the surrounding material. See the [matched generation and recovery experiments](producer-review-experiment-2026-11-27.md).
 
-When a new brief assigns the melody to a named instrument, the interpreter can quote that instrument in the lead requirement. The completion check can then recognize a pitched line on the matching part or preset, including a placed phrase played over chords. It checks the played notes within the requested section. A brief asking for a separate lead still requires an active lead or melody part. Older captures retain their original role checks.
+For a new piece, the interpreter records which instrument the user assigned the hook and whether they asked for a separate lead part. A piano can play both chords and the hook. The completion check looks for a pitched line on the named part or preset within the requested section, including a placed phrase played over chords. An explicitly separate lead requires an active lead or melody part, even when it uses the same instrument as the chords. Older captures retain their original role checks.
 
 ### Choosing and hearing a template
 

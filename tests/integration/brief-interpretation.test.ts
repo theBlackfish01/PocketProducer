@@ -61,10 +61,10 @@ it("captures validated checks on the job, replays a key without a second call an
 
 it("saves a piano hook on the original harmony part through interpretation and the worker", async () => {
   const projectId = await room();
-  const direction = "Play a short piano hook.";
+  const direction = "Use electric piano. Introduce a short piano hook in bars 1–4.";
   const checked = await interpretNativeDirection(ownerId, projectId, randomUUID(), { direction, expectedHeadId: null },
-    scriptedBrief({ roles: [{ ...briefRole("required", "lead", "a short piano hook"), melodyInstrument: "piano" }] }));
-  expect(checked.checks).toEqual(["Include lead or melody (may be played by piano)"]);
+    scriptedBrief({ roles: [{ ...briefRole("required", "lead", "Introduce a short piano hook in bars 1–4"), melodyInstrument: "electric piano", separateLead: false }] }));
+  expect(checked.checks).toEqual(["Include lead or melody (may be played by electric piano)"]);
   const job = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: randomUUID(), expectedHeadId: null, request: { direction, interpretationId: checked.interpretationId } });
   await dispatchOutbox();
   const producer = fakeModel().respondWithTools([{ name: "compose_native_form", args: {

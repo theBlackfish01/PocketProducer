@@ -4,7 +4,9 @@
 
 Replaying the two saved Pebble Clock scene edits reproduced the false missing-melody result on an electric piano with 64 notes. New generation briefs can identify the instrument assigned to the hook. The same two-part score then passes the completion check with its original 64 piano and 16 bass notes. Separate lead requests retain their own check. Regression coverage includes section boundaries, repeated placements, block chords, and a scripted generation through the brief interpreter, database and worker.
 
-The replay matched the original production document hash. Local verification passed 378 unit tests, 218 PostgreSQL integration tests, lint, TypeScript and the production build.
+The replay matched the original production document hash. A live Luna check caught an ambiguity in the first fix. The interpreter now captures the instrument and the request for a separate lead independently. Two fresh readings of the original prompt accepted the original score. Separate synth and separate electric-piano lead requests both flagged the missing part on that same score. These checks used the real interpreter with the saved score, without creating new projects.
+
+Local verification passed lint, TypeScript, the production build, 379 unit tests, 218 database integration tests, and all three hosted-mode browser tests.
 
 ## Selectable arrangement library — 2026-11-27
 

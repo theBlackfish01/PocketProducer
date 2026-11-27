@@ -64,6 +64,19 @@ describe("a requested melody on a shared instrument", () => {
       expect(nativeCompletionIssues(applyNativeOperations(score, [{ kind: "addPart", part: part("synth", "melody") }]), brief, "generation")).toEqual([]);
     }
   });
+
+  it("grounds a longer instrument name and keeps a named but separate lead independent", () => {
+    const direction = "Use electric piano and bass. Introduce a short piano hook in bars 1–4. Add a separate electric piano lead.";
+    const shared = { ...briefRole("required", "lead", "Introduce a short piano hook in bars 1–4"), melodyInstrument: "electric piano", separateLead: false };
+    const separate = { ...briefRole("required", "lead", "Add a separate electric piano lead"), melodyInstrument: "electric piano", separateLead: true };
+    const captured = (roles: Array<typeof shared>) => capturedBrief(direction, { roles });
+    const score = performance(1);
+    expect(nativeCompletionIssues(score, captured([shared]), "generation")).toEqual([]);
+    const both = captured([shared, separate]);
+    expect(nativeBriefChecks(both)).toEqual(["Include lead or melody (may be played by electric piano)", "Include lead or melody"]);
+    expect(nativeCompletionIssues(score, both, "generation")).toContain("Requested lead or melody has no constructed material");
+    expect(nativeCompletionIssues(score, captured([{ ...shared, melodyInstrument: "acoustic piano" }]), "generation")).toContain("Requested lead or melody has no constructed material");
+  });
 });
 
 describe("captured brief validation", () => {
