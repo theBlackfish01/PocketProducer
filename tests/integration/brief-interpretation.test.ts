@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { cancelJob, captureMissingJobBrief, claimJobById, createNativeJob, createProject, dispatchOutbox, getPool, jobSnapshot, interpretNativeDirection, nativeSnapshot, readProjectActivity, type BriefGenerator } from "@pocket/core";
-import { briefKeep, briefRole, scriptedBrief } from "@pocket/core/test-support";
+import { cancelJob, captureMissingJobBrief, claimJobById, createNativeJob, createNativeLibrary, createProject, dispatchOutbox, getPool, jobSnapshot, interpretNativeDirection, nativeSnapshot, readProjectActivity, type BriefGenerator } from "@pocket/core";
+import { AIMessage, briefKeep, briefRole, fakeModel, scriptedBrief } from "@pocket/core/test-support";
 import { processJob } from "@pocket/worker";
 
 let ownerId = "", otherId = "";
@@ -58,6 +58,25 @@ it("captures validated checks on the job, replays a key without a second call an
   const stored = (await getPool().query<{ request: { _brief: { tempoBpm: { value: number }; roles: unknown[]; provenance: string } } }>("SELECT request FROM job WHERE id=$1", [made.id])).rows[0]!.request;
   expect(stored._brief).toMatchObject({ provenance: "scripted", tempoBpm: { value: 90 }, roles: [{ kind: "absent", role: "drums" }] });
 });
+
+it("saves a piano hook on the original harmony part through interpretation and the worker", async () => {
+  const projectId = await room();
+  const direction = "Play a short piano hook.";
+  const checked = await interpretNativeDirection(ownerId, projectId, randomUUID(), { direction, expectedHeadId: null },
+    scriptedBrief({ roles: [{ ...briefRole("required", "lead", "a short piano hook"), melodyInstrument: "piano" }] }));
+  expect(checked.checks).toEqual(["Include lead or melody (may be played by piano)"]);
+  const job = await createNativeJob({ ownerId, projectId, kind: "native-generation", idempotencyKey: randomUUID(), expectedHeadId: null, request: { direction, interpretationId: checked.interpretationId } });
+  await dispatchOutbox();
+  const producer = fakeModel().respondWithTools([{ name: "compose_native_form", args: {
+    title: "Piano hook", tempoBpm: 90, meter: { numerator: 4, denominator: 4 }, sections: [{ id: "whole", name: "Whole", bars: 4 }],
+    parts: [{ id: "epiano", name: "Electric Piano", role: "harmony", device: { type: "heisenberg", parameters: {} }, gain: 0.7, pan: 0, motifs: [], placements: [],
+      freeNotes: [62, 65, 69].map((pitch, beat) => ({ beat, durationBeats: 0.5, pitch, velocity: 0.7 })) }]
+  } }]).respond(new AIMessage("Finished."));
+  await processJob((await claimJobById(job.id, "piano-hook"))!, { scriptedModel: producer, library: createNativeLibrary(null) });
+  const result = await jobSnapshot(ownerId, job.id);
+  expect(result, result.error_message).toMatchObject({ state: "succeeded" });
+  expect((await nativeSnapshot(ownerId, projectId)).current?.document.parts).toMatchObject([{ id: "epiano", role: "harmony", notes: [{ pitch: 62 }, { pitch: 65 }, { pitch: 69 }] }]);
+}, 30_000);
 
 it("stores and replays a mistaken clear-ending role as guidance without adding an FX requirement", async () => {
   const projectId = await room();

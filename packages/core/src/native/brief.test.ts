@@ -8,6 +8,64 @@ const part = (id: string, role: "melody" | "bass" | "percussion" | "harmony") =>
 const melody = applyNativeOperations(seedNativeDocument("A melody"), [{ kind: "removePart", partId: "starting-voice" }, { kind: "addPart", part: part("lead", "melody") }]);
 const empty = { totalBars: null, tempoBpm: null, meter: null, sections: [], chordProgressions: [], roles: [], keep: [], construction: [], guidance: [] };
 
+describe("a requested melody on a shared instrument", () => {
+  const direction = "Introduce a short piano hook. Add a separate lead in Answer.";
+  const shared = { ...briefRole("required", "lead", "a short piano hook"), melodyInstrument: "piano" };
+  const strict = briefRole("required", "lead", "a separate lead");
+  const event = (id: string, startTick: number, pitch: number) => ({ id, startTick, pitch, durationTicks: 480, velocity: 0.7 });
+  const chords = [0, 960].flatMap((tick, index) => [60, 64, 67].map(pitch => event(`c-${tick}-${pitch}`, tick, pitch + index * 2)));
+  const hook = [event("a", 0, 74), event("b", 960, 79)];
+  const backing = applyNativeOperations(seedNativeDocument(direction), [
+    { kind: "removePart", partId: "starting-voice" },
+    { kind: "setStructure", bars: 4, sections: [
+      { id: "opening", name: "Opening", intent: "", startBar: 0, endBar: 1 },
+      { id: "answer", name: "Answer", intent: "", startBar: 1, endBar: 4 }
+    ] },
+    { kind: "addPart", part: { ...part("epiano", "harmony"), name: "Electric Piano", notes: chords } },
+    { kind: "defineMotif", motif: { id: "figure", name: "Upper figure", partId: "epiano", lengthTicks: 3840, notes: hook } }
+  ]);
+  const performance = (repeats: number) => applyNativeOperations(backing, [
+    { kind: "placeMotif", partId: "epiano", placement: { id: "statement", motifId: "figure", startTick: 0, repeats, transpose: 0 } }
+  ]);
+  const check = (section: string | null = null) => capturedBrief(direction, { roles: [{ ...shared, section: section ? briefSection(section) : null }] });
+
+  it("credits the performed piano line over simultaneous chords, only where it plays", () => {
+    const brief = check();
+    expect(brief.roles).toMatchObject([{ melodyInstrument: "piano" }]);
+    expect(nativeBriefChecks(brief)).toEqual(["Include lead or melody (may be played by piano)"]);
+    expect(nativeCompletionIssues(backing, brief, "generation")).toContain("Requested lead or melody has no constructed material");
+    expect(nativeCompletionIssues(performance(1), brief, "generation")).toEqual([]);
+    expect(nativeCompletionIssues(performance(1), check("Answer"), "generation")).toContain("Requested lead or melody has no constructed material in Answer");
+    expect(nativeCompletionIssues(performance(2), check("Answer"), "generation")).toEqual([]);
+  });
+
+  it("recognizes free melody notes and requires a matching instrument and pitch movement", () => {
+    const score = structuredClone(backing);
+    const piano = score.parts[0]!;
+    piano.notes = hook;
+    expect(nativeCompletionIssues(score, check(), "generation")).toEqual([]);
+    piano.name = "Guitar";
+    expect(nativeCompletionIssues(score, check(), "generation")).toHaveLength(1);
+    piano.name = "Suitcase";
+    piano.device = { type: "gakki", parameters: {}, preset: { name: "presets/epiano", displayName: "Electronic Piano 1", ownerName: "users/audiotool", contentHash: "a".repeat(64) } };
+    expect(nativeCompletionIssues(score, check(), "generation")).toEqual([]);
+    piano.role = "percussion";
+    expect(nativeCompletionIssues(score, check(), "generation")).toHaveLength(1);
+    piano.role = "harmony";
+    piano.notes = [event("a", 0, 60), event("b", 960, 60)];
+    expect(nativeCompletionIssues(score, check(), "generation")).toHaveLength(1);
+  });
+
+  it("keeps separate lead requirements strict, including older captures and mixed requests", () => {
+    const score = performance(1);
+    for (const roles of [[strict], [{ ...strict, melodyInstrument: null }], [strict, shared], [shared, strict], [{ ...shared, melodyInstrument: "violin" }]]) {
+      const brief = capturedBrief(direction, { roles });
+      expect(nativeCompletionIssues(score, jobNativeBrief({ _brief: brief }), "generation")).toContain("Requested lead or melody has no constructed material");
+      expect(nativeCompletionIssues(applyNativeOperations(score, [{ kind: "addPart", part: part("synth", "melody") }]), brief, "generation")).toEqual([]);
+    }
+  });
+});
+
 describe("captured brief validation", () => {
   it("checks a shared section-length clause without inventing positions or accepting name-only evidence", () => {
     const quote = "three eight-bar sections: Arrival, Lift, and Afterglow";

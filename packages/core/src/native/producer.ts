@@ -19,13 +19,14 @@ import { z } from "zod";
 import { getConfig, REPOSITORY_ROOT } from "../config.js";
 import { producerTraceConfig } from "../observability.js";
 import { canonicalHash } from "../domain/hash.js";
+import { containsWords } from "../domain/words.js";
 import { heartbeat, JobControlError, type JobRecord } from "../db/repository.js";
 import { getPool } from "../db/pool.js";
 import { AccountedOpenAICalls, checkpoint } from "../agent/runtime.js";
 import { completeProviderEffect, failProviderEffect, markEffectDispatched, reserveProviderEffect } from "../providers/effects.js";
 import { analyzePreview, geminiAnalysisEffectKey, prepareLibrarySampleAnalysis, type GeminiGenerateClient } from "../providers/gemini.js";
 import { discoverNativeCapabilities, inspectNativeCapability } from "./catalog.js";
-import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, nativeDiff, nativeDocumentSchema, nativeHasMaterial, nativeMusicHash, nativeOperationSchema, pinnedContext, protectedPartHash, type NativeDocument, type NativeOperation } from "./model.js";
+import { analyzeNativeSection, applyNativeOperations, barTicks, materializedNotes, nativeDiff, nativeDocumentSchema, nativeHasMaterial, nativeMusicHash, nativeOperationSchema, pinnedContext, protectedPartHash, type NativeDocument, type NativeNote, type NativeOperation } from "./model.js";
 import { briefRoleRules, briefSectionLabel, chordPitchClasses, jobNativeBrief, nativeBriefChecks, nativeBriefPreservation, resolveBriefSection, type NativeBrief } from "./brief.js";
 import { needsNativeReviewResponse, nativeReviewResponseGuidance } from "./finishing.js";
 import { hasShorterConnectedAmbience } from "./ambience.js";
@@ -147,6 +148,39 @@ function containsChordProgression(document: NativeDocument, symbols: string[]): 
   return nextChord === symbols.length;
 }
 
+// Different pitches at single-pitch attacks provide evidence of a line. Moving
+// block chords alone do not. Coordinates are relative to the supplied notes.
+function hasMelodicMotion(notes: NativeNote[], start: number, end: number): boolean {
+  const attacks = new Map<number, number | null>();
+  for (const { startTick, pitch } of notes) {
+    if (startTick < start || startTick >= end) continue;
+    const prior = attacks.get(startTick);
+    attacks.set(startTick, prior === undefined || prior === pitch ? pitch : null);
+  }
+  const pitches = new Set(attacks.values());
+  pitches.delete(null);
+  return pitches.size >= 2;
+}
+
+function instrumentPlaysMelody(document: NativeDocument, instrument: string, start: number, end: number): boolean {
+  return document.parts.some(part => {
+    if (part.role === "percussion" || part.device.type === "audio" || part.device.type === "beatbox8") return false;
+    if (![part.name, part.device.preset?.displayName ?? ""].some(name => containsWords(name, instrument))) return false;
+    if (hasMelodicMotion(part.notes, start, end)) return true;
+    // A placed phrase can share every attack with accompaniment on the same
+    // instrument. Check the phrase in its played time window before combining voices.
+    for (const placement of part.placements) {
+      const motif = document.motifs.find(value => value.id === placement.motifId)!;
+      for (let repeat = 0; repeat < placement.repeats; repeat++) {
+        const tick = placement.startTick + repeat * motif.lengthTicks;
+        if (tick >= end) break;
+        if (tick + motif.lengthTicks > start && hasMelodicMotion(motif.notes, start - tick, end - tick)) return true;
+      }
+    }
+    return part.placements.length > 0 && hasMelodicMotion(materializedNotes(document, part.id), start, end);
+  });
+}
+
 /** Objective checks of a draft against the captured brief. Only validated brief
  * items are hard requirements; the direction text itself is never parsed here. */
 export function nativeCompletionIssues(document: NativeDocument, brief: NativeBrief, mode: "generation" | "revision", selectedSourceIds: string[] = [], base?: NativeDocument, targetSectionId?: string | null): string[] {
@@ -174,7 +208,9 @@ export function nativeCompletionIssues(document: NativeDocument, brief: NativeBr
     if (!arc.symbolicArcEvidenced) issues.push("Requested rise/build has no independently evidenced middle contrast and later arrival (symbolic evidence only). A section after the opening must differ from it in two of: changed notes, a highest note 4+ semitones above the opening's, 25% more note onsets per bar, a role the opening lacks, a control curve moving 0.2+ inside that section; and a later section must not repeat it");
   }
   const rules = brief.roles.map((rule) => ({ ...rule, ...briefRoleRules[rule.role] }));
-  if (mode === "generation") for (const rule of rules.filter((value) => !value.section && (value.kind === "required" || value.kind === "change"))) if (!active.some((part) => rule.matches.includes(part.role))) issues.push(`Requested ${rule.label} has no constructed material`);
+  const sharedMelody = (rule: NativeBrief["roles"][number], start = 0, end = document.bars * barTicks(document)) =>
+    mode === "generation" && rule.kind === "required" && rule.role === "lead" && !!rule.melodyInstrument && instrumentPlaysMelody(document, rule.melodyInstrument, start, end);
+  if (mode === "generation") for (const rule of rules.filter((value) => !value.section && (value.kind === "required" || value.kind === "change"))) if (!active.some((part) => rule.matches.includes(part.role)) && !sharedMelody(rule)) issues.push(`Requested ${rule.label} has no constructed material`);
   for (const rule of rules.filter((value) => !value.section && value.kind === "absent")) if (active.some((part) => rule.matches.includes(part.role))) issues.push(`Excluded ${rule.label} has constructed material`);
   for (const rule of rules.filter((value) => value.section && value.kind !== "preserve" && (value.kind === "absent" || mode === "generation"))) {
     const section = resolveBriefSection(rule.section!, document);
@@ -183,7 +219,7 @@ export function nativeCompletionIssues(document: NativeDocument, brief: NativeBr
     const present = active.some((part) => rule.matches.includes(part.role) && (
       materializedNotes(document, part.id).some((note) => note.startTick < end && note.startTick + note.durationTicks > start)
       || [...part.sourceRegions, ...(part.libraryRegions ?? [])].some((region) => region.startTick < end && region.startTick + region.durationTicks > start)
-    ));
+    )) || sharedMelody(rule, start, end);
     if (rule.kind === "absent" && present) issues.push(`Excluded ${rule.label} has constructed material in ${section.name}`);
     if (rule.kind !== "absent" && !present) issues.push(`Requested ${rule.label} has no constructed material in ${section.name}`);
   }

@@ -33,7 +33,8 @@ const itemSchemas = {
   meter: z.object({ numerator: z.int().min(2).max(12), denominator: z.union([z.literal(4), z.literal(8)]), quote }).strict(),
   sections: z.object({ section: sectionRefSchema, bars: z.int().min(1).max(128).nullable(), startBar: z.int().min(1).max(128).nullable(), endBar: z.int().min(1).max(128).nullable(), quote }).strict(),
   chordProgressions: z.object({ chords: z.array(z.string().max(12)).min(3).max(16), quote }).strict(),
-  roles: z.object({ kind: z.enum(["required", "absent", "change", "preserve"]), role: z.enum(briefRoles), section: sectionRefSchema.nullable(), reduceDensity: z.boolean(), quote }).strict(),
+  roles: z.object({ kind: z.enum(["required", "absent", "change", "preserve"]), role: z.enum(briefRoles), section: sectionRefSchema.nullable(), reduceDensity: z.boolean(), quote,
+    melodyInstrument: z.string().trim().min(1).max(80).nullish().catch(null) }).strict(),
   keep: z.object({ partId: z.string().max(64).nullable(), motifId: z.string().max(64).nullable(), theme: z.boolean(), section: sectionRefSchema.nullable(), quote }).strict(),
   construction: z.object({ kind: z.enum(briefConstructionKinds), quote }).strict(),
   guidance: z.object({ quote, reason: z.string().trim().max(200) }).strict()
@@ -129,7 +130,7 @@ export const nativeBriefJsonSchema = object({
   meter: nullable(object({ numerator: integer, denominator: { type: "integer", enum: [4, 8] }, quote: text })),
   sections: array(object({ section: sectionJson, bars: nullable(integer), startBar: nullable(integer), endBar: nullable(integer), quote: text })),
   chordProgressions: array(object({ chords: array(text), quote: text })),
-  roles: array(object({ kind: { type: "string", enum: ["required", "absent", "change", "preserve"] }, role: { type: "string", enum: [...briefRoles] }, section: nullable(sectionJson), reduceDensity: { type: "boolean" }, quote: text })),
+  roles: array(object({ kind: { type: "string", enum: ["required", "absent", "change", "preserve"] }, role: { type: "string", enum: [...briefRoles] }, section: nullable(sectionJson), reduceDensity: { type: "boolean" }, quote: text, melodyInstrument: nullable(text) })),
   keep: array(object({ partId: nullable(text), motifId: nullable(text), theme: { type: "boolean" }, section: nullable(sectionJson), quote: text })),
   construction: array(object({ kind: { type: "string", enum: [...briefConstructionKinds] }, quote: text })),
   guidance: array(object({ quote: text, reason: text }))
@@ -144,6 +145,7 @@ Hard items must be explicit and unambiguous:
 When a length applies to a list, reuse the complete quoted clause for each named section. For "three eight-bar sections: Arrival, Lift, and Afterglow", return three sections with bars 8, startBar null, endBar null, each quoting "three eight-bar sections: Arrival, Lift, and Afterglow". Do not calculate start/end positions that the user did not write. A section-name-only quote cannot substantiate a length. If the supporting words cannot fit in the quote, keep the request as guidance.
 - chordProgressions: an explicit ordered sequence of at least three chords, as symbols such as Dm9, Bbmaj7, Fmaj9, Cadd9, Am, C or G7.
 - roles: kind required (include, add, bring in), absent (explicitly exclude the role; avoiding extra layers is not removing it), change (simplify, thin, vary or brighten an existing role; set reduceDensity when asking for fewer notes or hits), preserve (keep a role unchanged or exactly as it is). role is drums, bass, harmony (chords, pads), lead (melody) or transitions (existing FX parts to preserve or exclude).
+For a new piece, if a named instrument is to play a hook or melody, include that phrase in the required lead role's quote and copy the instrument name into melodyInstrument ("short piano hook" → "piano"). Use null for a separate or unspecified lead, or any other role. Capture an explicitly separate lead as its own required role even if another instrument also plays a hook.
 Requests to add or develop transitions, risers, fills or endings belong in guidance: they can use existing instruments and do not require a separate FX part. For example, "Return with a clear ending" is guidance about the ending, never a required transitions role. Explicit keep/remove instructions for existing FX parts remain checks.
 - Recognizable identity is guidance, not exact preservation. "Keep the theme recognizable but vary its rhythm/register" must not create keep/preserve checks. Explicit "keep unchanged" still means exact preservation. For conflicting exact keep and change instructions on the same material, explain the conflict.
 - keep: in a revision, a named part or phrase to keep unchanged, using only ids from the document; theme true for "the theme", "the hook" or "the motif" without a specific phrase.
@@ -371,7 +373,13 @@ export function captureNativeBrief(raw: unknown, context: BriefContext): NativeB
     // must exist. Keep its direction without inventing a part-presence gate.
     // Exclusions/protections and already-stored captures remain unchanged.
     else if (item.role === "transitions" && (item.kind === "required" || item.kind === "change")) soften(item.quote, "Transitions can use existing parts; a separate FX part is not required");
-    else if (!brief.roles.some((other) => other.kind === item.kind && other.role === item.role && sameRef(other.section, resolved.ref))) brief.roles.push({ ...item, section: resolved.ref });
+    else {
+      const { melodyInstrument, ...role } = item;
+      const instrument = !context.baseRevisionId && role.kind === "required" && role.role === "lead" && melodyInstrument && containsWords(role.quote, melodyInstrument) ? melodyInstrument : undefined;
+      if (!brief.roles.some((other) => other.kind === role.kind && other.role === role.role && sameRef(other.section, resolved.ref) && other.melodyInstrument === instrument)) {
+        brief.roles.push({ ...role, section: resolved.ref, ...(instrument ? { melodyInstrument: instrument } : {}) });
+      }
+    }
   }
   // Contradictions use the effective scope, including the selected section.
   const conflicting = brief.roles.filter((rule) => rule.kind === "absent" && brief.roles.some((other) => other.role === rule.role && sameScope(other.section, rule.section) && ["required", "change", "preserve"].includes(other.kind)));
@@ -427,7 +435,7 @@ export function nativeBriefChecks(brief: NativeBrief, document?: NativeDocument 
     ...(brief.meter ? [`${brief.meter.numerator}/${brief.meter.denominator} meter`] : []),
     ...brief.sections.map((item) => item.startBar !== null && item.endBar !== null ? `${briefSectionLabel(item.section, document)} at bars ${item.startBar}–${item.endBar}` : `${item.bars}-bar ${briefSectionLabel(item.section, document)}`),
     ...brief.chordProgressions.map((item) => `Chords ${item.chords.join("–")}`),
-    ...brief.roles.map((rule) => `${verbs[rule.kind]} ${briefRoleRules[rule.role].label}${rule.reduceDensity ? " (fewer notes)" : ""}${where(rule.section)}`),
+    ...brief.roles.map((rule) => `${verbs[rule.kind]} ${briefRoleRules[rule.role].label}${rule.melodyInstrument ? ` (may be played by ${rule.melodyInstrument})` : ""}${rule.reduceDensity ? " (fewer notes)" : ""}${where(rule.section)}`),
     ...brief.keep.map((item) => `Keep unchanged: ${item.partId ? document?.parts.find((part) => part.id === item.partId)?.name ?? item.partId : item.motifId ? document?.motifs.find((motif) => motif.id === item.motifId)?.name ?? item.motifId : "the theme"}${where(item.section)}`),
     ...brief.construction.map((item) => ({ "shared-parallel-drums": "Shared parallel drum processing", sidechain: "Sidechain routing", automation: "Changing controls", rise: "A rise or build", "shorter-ambience": "Shorter reverb or delay tails" })[item.kind])
   ];

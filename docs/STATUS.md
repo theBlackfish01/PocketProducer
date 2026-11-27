@@ -1,5 +1,11 @@
 # Live implementation status
 
+## Melodies on a shared instrument — 2026-11-28
+
+Replaying the two saved Pebble Clock scene edits reproduced the false missing-melody result on an electric piano with 64 notes. New generation briefs can identify the instrument assigned to the hook. The same two-part score then passes the completion check with its original 64 piano and 16 bass notes. Separate lead requests retain their own check. Regression coverage includes section boundaries, repeated placements, block chords, and a scripted generation through the brief interpreter, database and worker.
+
+The replay matched the original production document hash. Local verification passed 378 unit tests, 218 PostgreSQL integration tests, lint, TypeScript and the production build.
+
 ## Selectable arrangement library — 2026-11-27
 
 New sessions can audition and choose six complete editable scores. Violet Overpass (synthwave), Patio Radio (bossa nova), and Tide Almanac (drumless ambient) join Mercury Arcade, Last Table, and The Paper Observatory. The recordings use reference instruments and cover the full form. Choosing a score alone saves it as written, while adding a direction lets the producer edit it. The selected score uses the existing durable step and recovery path. Preview, selection and removal leave the user's prompt intact. See the [template contract and recording instructions](native-text-to-music.md#choosing-and-hearing-a-template).
