@@ -108,13 +108,14 @@ export function analyzeNativeRichness(document: NativeDocument, depth: RichnessD
   return { depth, layers: { fullest, target: target.layers, bySection }, contrasts, boundaries: { marked: markedInner, total: inner.length }, endingWritten, movement: { automation, sends }, gaps };
 }
 
-/** The producer's per-turn form. It rides on every request, so it is codes and
- * one next step; the first finish explains every gap in full, once. */
+/** Describe the written form while composing. The requested ensemble, pocket and
+ * ending determine whether repeating a phrase or leaving space is appropriate. */
 export function richnessChecklist(analysis: NativeRichness) {
   return {
-    layers: `${analysis.layers.fullest} of ${analysis.layers.target} in the fullest section`,
-    stillThin: analysis.gaps.map((gap) => gap.code),
-    ...(analysis.gaps[0] ? { next: analysis.gaps[0].next } : {}),
-    note: "Targets, not requirements: the brief wins."
+    peakParts: analysis.layers.fullest,
+    sectionBoundaries: analysis.boundaries.total,
+    unchangedBoundaries: analysis.contrasts.filter(pair => pair.changed.length === 0).length,
+    finalBarRepeatsLoop: !analysis.endingWritten,
+    ...(analysis.depth === "detailed" ? { markedBoundaries: analysis.boundaries.marked, controlCurves: analysis.movement.automation, sharedSends: analysis.movement.sends } : {})
   };
 }

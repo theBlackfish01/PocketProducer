@@ -1,5 +1,11 @@
 # Live implementation status
 
+## Producer review and scoped recovery — 2026-11-27
+
+The local producer goes straight from objective completion to musical review. A part-count target no longer sends a complete score back for another turn. Detailed work asks for development of the actual returning figure, and a scoped revision can restore a previous step-kit pattern in selected bars. The validator also removes unsupported claims from the editor's headline.
+
+Four matched briefs used 39 billed job calls across the revised runs and 69 across the originals. A later detailed run exposed an ending edit that erased earlier drums. The final worker rejects that exact edit and can rest just the requested section. A live revision kept all 189 preceding hits intact. Across this pass, 16 generations and two revisions saved scores that passed offline Nexus mapping. The [experiment report](producer-review-experiment-2026-11-27.md) details the comparisons and costs. Railway release and listening in Audiotool Studio are pending.
+
 ## Original editable starters — 2026-11-27
 
 Three optional v1 starters are available to the local producer on a fresh generation. Each takes the requested chord cycle, section lengths and energy, final chord and an optional lead. Luna supplies the hook. The sound menu adds two scoped edits for thinning a passage and coordinating a landing. Revisions use the saved score and the existing protected-part and immutable-version checks.

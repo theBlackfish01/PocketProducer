@@ -63,6 +63,9 @@ describe("grounded symbolic editor", () => {
     const summary = symbolicNativeReview(score, null);
     const facts = summary.sections[0]!.parts[0]!;
     expect(summary.timing).toMatchObject({ meter: { numerator: 3, denominator: 4 }, ticksPerQuarter: 960, ticksPerBar: 2880 });
+    const section = summary.sections[0]!;
+    expect(section.durationTicks).toBe((section.lastBar - section.firstBar) * 2880);
+    expect(compactNativeReviewEvidence(summary, true).sections[0]!.durationTicks).toBe(section.durationTicks);
     expect(facts.onsetPreview).toHaveLength(8);
     expect(facts.omittedPreviewOnsets).toBe(4);
     expect(facts.finalOnsets.at(-1)).toEqual([5280, 38, 1, 240]);
@@ -145,10 +148,17 @@ it("checks the exact cited chord voicing without rejecting equivalent chord name
   const score = seedNativeDocument("Ending chord");
   score.parts[0]!.notes = [62, 65, 69].map((pitch, i) => ({ id: `tone-${i}`, pitch, startTick: 0, durationTicks: 960, velocity: 0.7 }));
   const finding = { priority: "medium", sectionId: score.sections[0]!.id, partId: score.parts[0]!.id, observation: "The final cited voicing is F6", suggestedChange: "Change its root", evidence: [62, 65, 69].map(pitch => ({ tick: 0, pitch })), claimedCitedChord: "F6" };
-  const bad = validateNativeReview({ verdict: "Check the cadence", findings: [finding], noChangeReason: null }, score, true);
+  const bad = validateNativeReview({ verdict: "The final chord is F6 and needs a new root", findings: [finding], noChangeReason: "The ending is F6" }, score, true);
   expect(bad.findings).toEqual([]);
   expect(bad.discardedFindings).toHaveLength(1);
   expect(bad.noChangeReason).toContain("no verified finding");
+  expect(bad.verdict).toContain("could not be verified");
+  expect(bad.noChangeReason).not.toContain("F6");
+  const validFinding = { ...finding, observation: "The three notes enter together", claimedCitedChord: "Dm" };
+  const mixed = validateNativeReview({ verdict: "The final chord is F6", findings: [finding, validFinding], noChangeReason: null }, score, true);
+  expect(mixed.verdict).toBe(validFinding.observation);
+  expect(mixed.findings).toHaveLength(1);
+  expect(mixed.discardedFindings).toHaveLength(1);
   const correct = validateNativeReview({ verdict: "Check the cadence", findings: [{ ...finding, observation: "The cited voicing is Dm", claimedCitedChord: "Dm" }], noChangeReason: null }, score, true);
   expect(correct.findings).toHaveLength(1);
   score.parts[0]!.notes.push({ id: "seventh", pitch: 72, startTick: 0, durationTicks: 960, velocity: 0.7 });

@@ -182,7 +182,7 @@ export function assertNativeDeviceMapping(document: NativeDocument): void {
       if (item.notes.length || item.placements.length || document.motifs.some((value) => value.partId === item.id)) throw new Error(`Audio part ${item.id} cannot carry MIDI notes or motif placements; use a native instrument part`);
     } else if (item.sourceRegions.length || item.libraryRegions?.length) throw new Error(`Instrument part ${item.id} cannot carry source clips; use an audio part`);
     if (item.device.type !== "beatbox8") continue;
-    if (item.notes.length) throw new Error(`Beatbox8 ${item.id} uses on/off pattern slots, not direct MIDI notes. Inspect the section placements and use replaceMotif on a section-only drum motif, or place a distinct motif if it is shared. Steps use a 240-tick grid, duration 240, velocity 1.`);
+    if (item.notes.length) throw new Error(`Beatbox8 ${item.id} uses on/off pattern slots, not direct MIDI notes. Use edit_native_passage/reuseKitPattern for an existing groove, or replaceMotif on a section-only pattern. Steps use a 240-tick grid, duration 240, velocity 1.`);
     const phrases = document.motifs.filter((value) => value.partId === item.id);
     if (phrases.length > 5) throw new Error(`Beatbox8 ${item.id} has more than five pattern slots`);
     if (item.placements.some((value) => value.transpose !== 0)) throw new Error(`Beatbox8 ${item.id} cannot transpose fixed drum lanes`);
@@ -361,7 +361,7 @@ export function applyNativeOperations(base: NativeDocument, operations: NativeOp
       case "sequenceSectionPattern": {
         const item = findPart(op.partId), section = next.sections.find((value) => value.id === op.sectionId);
         if (!section) throw new NativeUnknownIdError("section", op.sectionId);
-        if (["audio", "beatbox8"].includes(item.device.type)) throw new Error("Expressive pattern notes need a MIDI-capable native instrument. For Beatbox8, inspect the placed motif and use replaceMotif for a section-only pattern. Steps use a 240-tick grid, duration 240, velocity 1.");
+        if (["audio", "beatbox8"].includes(item.device.type)) throw new Error("Expressive pattern notes need a MIDI-capable native instrument. For Beatbox8 reuse a placed groove with edit_native_passage/reuseKitPattern, or use replaceMotif for a section-only pattern. Steps use a 240-tick grid, duration 240, velocity 1.");
         const ticksPerBar = barTicks(next), sectionStart = section.startBar * ticksPerBar, sectionEnd = section.endBar * ticksPerBar, cycleTicks = op.cycleBars * ticksPerBar, operationHash = canonicalHash(op);
         if (op.hits.some((hit) => hit.tick >= cycleTicks)) throw new Error("Pattern hit exceeds its cycle");
         if (op.replace) item.notes = item.notes.filter((value) => value.startTick < sectionStart || value.startTick >= sectionEnd);

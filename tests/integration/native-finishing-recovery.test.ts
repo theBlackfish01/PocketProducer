@@ -69,6 +69,34 @@ it("returns first actionable findings before explicit best-effort acceptance, wi
   expect(calls[0]).toMatchObject({ state: "succeeded", cost_status: "observed" });
 });
 
+it("rejects a whole-kit rewrite that loses the middle during an ending repair, then saves the section rest", async () => {
+  const { job, session } = await prepared("standard", "gpt-6-luna");
+  const placements = ["open", "middle", "ending"].map((id, i) => ({
+    id, motifId: "beat", startTick: [0, 3840, 11520][i]!, repeats: i === 1 ? 2 : 1, transpose: 0
+  }));
+  await session.apply("arranged-kit", [
+    { kind: "setStructure", bars: 4, sections: [
+      { id: "open", name: "Open", startBar: 0, endBar: 1, intent: "Introduce the beat" },
+      { id: "middle", name: "Middle", startBar: 1, endBar: 3, intent: "Keep the beat" },
+      { id: "ending", name: "Ending", startBar: 3, endBar: 4, intent: "Leave space" }
+    ] },
+    { kind: "addPart", part: { ...session.document.parts[0]!, id: "kit", name: "Kit", role: "percussion", device: { type: "beatbox8", parameters: {} }, notes: [], placements: [] } },
+    { kind: "defineMotif", motif: { id: "beat", name: "Kick", partId: "kit", lengthTicks: 3840, notes: [{ id: "kick", startTick: 0, durationTicks: 240, pitch: 36, velocity: 1 }] } },
+    ...placements.map(placement => ({ kind: "placeMotif" as const, partId: "kit", placement }))
+  ]);
+  const reviewer = fakeModel().respond(new AIMessage(JSON.stringify({ verdict: "The ending needs space.", findings: [{ priority: "medium", sectionId: "ending", partId: "kit", observation: "The kick continues into the last bar.", suggestedChange: "Rest the kit in the ending." }], noChangeReason: null }))).respond(good());
+  const producer = fakeModel().respondWithTools([{ name: "finish_native_arrangement", args: {} }])
+    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "drops-middle", operations: [{ kind: "replacePlacements", partId: "kit", placements: [placements[0]] }] } }])
+    .respondWithTools([{ name: "edit_native_passage", args: { stepKey: "rest-ending", sectionId: "ending", edit: { kind: "restKitSection", partId: "kit" } } }])
+    .respondWithTools([{ name: "finish_native_arrangement", args: {} }]);
+  await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null) });
+  expect(JSON.stringify(producer.calls[2]!.messages)).toContain("would also silence Middle");
+  expect((await jobSnapshot(owner, job.id)).state).toBe("succeeded");
+  const saved = (await nativeSnapshot(owner, job.projectId)).current!.document;
+  expect(materializedNotes(saved, "kit").map(n => n.startTick)).toEqual([0, 3840, 7680]);
+  expect(reviewer.callCount).toBe(2);
+});
+
 it("gives an empty ending one correction after normal final text and saves fresh review with retained suggestions", async () => {
   const { job } = await prepared("standard", "gpt-6-luna");
   const producer = fakeModel().respond(new AIMessage("Finished."))
@@ -556,11 +584,11 @@ it("fits the full batch menu, a thin piece's scorecard and an oversized exchange
   await processJob(job, { scriptedModel: producer, scriptedReviewer: fakeModel().respond(good()), library: createNativeLibrary(null), richness: "detailed" });
   const snapshot = await jobSnapshot(owner, job.id);
   expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
-  type Sheet = { arrangement?: { stillThin: string[]; next: string }; musicality?: unknown; omittedAdvice?: string[]; omittedStarterGuidance?: boolean };
+  type Sheet = { arrangement?: { peakParts: number }; musicality?: unknown; omittedAdvice?: string[]; omittedStarterGuidance?: boolean };
   const sheetOf = (call: { messages: Array<{ text: string }> }) => { const found = checklistIn(call.messages).text; return JSON.parse(found.slice(found.indexOf("{"))) as Sheet; };
-  // An ordinary turn carries the scorecard as codes and one next step.
+  // The scorecard reports what repeats while leaving instrumentation to the brief.
   const scorecard = sheetOf(producer.calls[1]!).arrangement!;
-  expect(scorecard.stillThin).toEqual(["THIN_ARRANGEMENT", "FLAT_SECTIONS", "NO_TRANSITIONS", "NO_ENDING", "STATIC_SOUND", "SHARED_PATCH"]);
+  expect(scorecard).toEqual({ peakParts: 2, sectionBoundaries: 1, unchangedBoundaries: 1, finalBarRepeatsLoop: true, markedBoundaries: 0, controlCurves: 0, sharedSends: 0 });
   expect(JSON.stringify(scorecard).length).toBeLessThan(420);
   // The turn after the oversized exchange has the batch menu open. Advice is the last
   // thing dropped to fit, and what was dropped is named; the request is never refused for it.
@@ -730,9 +758,9 @@ it("pins a GM kit named on a scene part, writes its groove and shared reverb, an
   expect(materializedNotes(steps, "drums").every((note) => note.velocity === 1 && note.startTick % 240 === 0)).toBe(true);
 }, 30_000);
 
-it("nudges a thin new piece toward development once, before any review is spent", async () => {
-  const project = await createProject(owner, "Development nudge test");
-  const text = "An 8-bar groove";
+it("finishes an intentional two-part loop on its first review and saves the reviewed score", async () => {
+  const project = await createProject(owner, "Small ensemble test");
+  const text = "An 8-bar groove. Keep just bass and keys, repeating throughout.";
   const checked = await interpretNativeDirection(owner, project.id, randomUUID(), { direction: text, expectedHeadId: null }, scriptedBrief({ totalBars: { value: 8, quote: "An 8-bar groove" } }));
   const made = await createNativeJob({ ownerId: owner, projectId: project.id, kind: "native-generation", idempotencyKey: randomUUID(), request: { direction: text, profile: "standard", model: "gpt-6-luna", interpretationId: checked.interpretationId }, expectedHeadId: null });
   await dispatchOutbox();
@@ -744,24 +772,18 @@ it("nudges a thin new piece toward development once, before any review is spent"
     placements: [{ partId: "keys", placement: { id: "k-all", motifId: "k", startTick: 0, repeats: 8, transpose: 0 } }, { partId: "bass", placement: { id: "b-all", motifId: "b", startTick: 0, repeats: 8, transpose: 0 } }] };
   const producer = fakeModel().respondWithTools([{ name: "compose_native_scene", args: scene }])
     .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
-    .respondWithTools([{ name: "apply_native_batch", args: { stepKey: "ending", operations: [{ kind: "addNotes", partId: "bass", notes: [{ id: "last", startTick: 7 * 3840 + 3600, durationTicks: 240, pitch: 38, velocity: 0.8 }] }] } }])
-    .respondWithTools([{ name: "finish_native_arrangement", args: {} }])
     .respond(new AIMessage("Finished"));
   const reviewer = fakeModel().respond(good());
   await processJob(job, { scriptedModel: producer, scriptedReviewer: reviewer, library: createNativeLibrary(null), richness: "focused" });
   const snapshot = await jobSnapshot(owner, job.id);
   expect(snapshot.state, snapshot.error_message ?? "").toBe("succeeded");
-  // Once music exists, the checklist carries the scorecard.
-  expect(checklistIn(producer.calls[1]!.messages).text).toContain('"arrangement"');
-  // The first finish names what is thin and spends no review.
-  const nudge = JSON.stringify(producer.calls[2]!.messages);
-  expect(nudge).toMatch(/category\\*":\\*"development/);
-  expect(nudge).toContain("THIN_ARRANGEMENT");
-  expect(nudge).toContain("NO_ENDING");
-  // The second finish proceeds although the piece is still below target: one nudge, never a gate.
+  expect(checklistIn(producer.calls[1]!.messages).text).toContain('"finalBarRepeatsLoop":true');
   expect(reviewer.calls).toHaveLength(1);
-  expect(producer.calls).toHaveLength(4);
-  expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(2);
+  expect(producer.calls).toHaveLength(2);
+  expect((await nativeDraftView(owner, job.projectId, job.id)).stepCount).toBe(1);
+  const score = (await nativeSnapshot(owner, job.projectId)).current!.document;
+  expect(score.parts.map(p => p.id)).toEqual(["keys", "bass"]);
+  expect(await loadNativePlan(job.id)).toMatchObject({ stage: "reviewed", review: { documentHash: canonicalHash(score), modelUsed: true } });
 }, 30_000);
 
 it("says when a section pattern joined existing notes, and writes over them with replace", async () => {

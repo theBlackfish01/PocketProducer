@@ -40,11 +40,9 @@ describe("arrangement richness scorecard", () => {
     expect(analysis.contrasts).toEqual([{ from: "a", to: "b", changed: [] }]);
     expect(analysis.gaps.map((gap) => gap.code)).toEqual(["THIN_ARRANGEMENT", "FLAT_SECTIONS", "NO_TRANSITIONS", "NO_ENDING", "STATIC_SOUND"]);
     const checklist = richnessChecklist(analysis);
-    // Codes and one next step: this form rides on every request.
-    expect(checklist.stillThin).toEqual(["THIN_ARRANGEMENT", "FLAT_SECTIONS", "NO_TRANSITIONS", "NO_ENDING", "STATIC_SOUND"]);
-    expect(checklist.next).toBe(analysis.gaps[0]!.next);
+    // The producer receives descriptive facts even when all diagnostic targets flag.
+    expect(checklist).toEqual({ peakParts: 3, sectionBoundaries: 1, unchangedBoundaries: 1, finalBarRepeatsLoop: true });
     expect(JSON.stringify(checklist).length).toBeLessThan(420);
-    expect(checklist.note).toContain("the brief wins");
     expect(JSON.stringify(richnessChecklist(analyzeNativeRichness(thin, "detailed"))).length).toBeLessThan(420);
   });
 

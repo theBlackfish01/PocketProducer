@@ -1,5 +1,9 @@
 # Text-to-native-music construction pass
 
+### From composition to review
+
+The per-turn scorecard describes the music already written. A complete piece can proceed directly to the focused review. For a requested developed answer the editor compares the opening and returning phrases. The producer can fix a consequential finding with a scoped edit or explicitly retain a suggestion. A section edit can restore whole repetitions of an existing Beatbox8 groove while preserving the surrounding material. See the [matched generation and recovery experiments](producer-review-experiment-2026-11-27.md).
+
 ### Original arrangement starters
 
 For a bass-led piece, `starter.bassLine: "authored"` keeps the bass device and mix and leaves its notes to the producer. It can place a bass motif in the first scene alongside the supplied drums and chords. The default v1 bass performances remain available. See the [live starter evaluation](starter-evaluation-2026-11-27.md) for contrasts, failures and the limits of the listening evidence.

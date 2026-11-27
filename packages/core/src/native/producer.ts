@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { assertNativeModelCompletion } from "./model-completion.js";
-import { editPassage, passageEdit } from "./passage-edits.js";
+import { checkReviewedKitReplacement, editPassage, passageEdit } from "./passage-edits.js";
 import { starterSuggestions } from "./starters.js";
 export { assertNativeModelCompletion } from "./model-completion.js";
 import { resolve } from "node:path";
@@ -697,9 +697,8 @@ export async function produceNative(input: { session: NativeToolSession; directi
       if (richnessCache?.hash !== hash) richnessCache = { hash, value: analyzeNativeRichness(document, depth) };
       return richnessCache.value;
     };
-    let developmentNudged = false;
     let finalizedHash: string | null = null;
-    let presentedReviewHash: string | null = null;
+    let presentedReview: NativeReview | null = null;
     const completionChecklist = async () => {
       const saved = await loadNativePlan(input.session.job.id);
       const hash = canonicalHash(input.session.document);
@@ -771,7 +770,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
       if (hasErrorCode(error, [...boundedStopCodes, ...uncertainOutcomeCodes, ...heldOutcomeCodes, "MODEL_STEP_EFFECT_LIMIT_EXCEEDED", "MODEL_FORMAT_RECOVERY_EXHAUSTED"])) throw error;
       return toolFailure(error);
     } };
-    const finishArrangement = async (acceptRemainingSuggestions = false, serverSide = false) => {
+    const finishArrangement = async (acceptRemainingSuggestions = false) => {
       const before = await completionChecklist();
       // A blocked rise says what the score measures now, so the next edit can aim at it.
       const arc = input.mode === "generation" && brief.construction.some((item) => item.kind === "rise") ? nativeArcEvidence(input.session.document) : null;
@@ -779,21 +778,6 @@ export async function produceNative(input: { session: NativeToolSession; directi
         ...(arc && !arc.symbolicArcEvidenced ? { riseMeasured: { closestSection: arc.middleSectionId, differsFromOpeningIn: arc.openingToMiddle } } : {}),
         recovery: convergence.finishFeedback(nativeMusicHash(input.session.document), before.objectiveMissing) };
       convergence.requirementsMet();
-      // One development nudge before the paid review: say what is still thin.
-      // It is shown once and never blocks again, so the producer either develops
-      // the piece or proceeds on its next call. A server-side finish has no
-      // reader for it and skips it. Once a review has been paid for (a server-side
-      // finish, or an earlier run of this request) it is too late to be useful:
-      // following it would cost another review.
-      if (richnessDepth && !developmentNudged && !serverSide && !before.saved?.reviewCount) {
-        const gaps = richnessFor(input.session.document, richnessDepth).gaps;
-        if (gaps.length) {
-          developmentNudged = true;
-          return { ready: false, category: "development", documentHash: before.hash, reviewSpent: false,
-            stillThin: gaps.map((gap) => ({ code: gap.code, detail: gap.detail, next: gap.next })),
-            next: "This is a sketch of the piece rather than a full arrangement. Make one or two development passes (one scene or batch each) that address these, then call finish_native_arrangement again. The brief wins: if it asks for a sparse piece or names the exact parts, develop within the existing parts (variation, a fill, an ending, movement) rather than adding layers. Calling finish_native_arrangement again without changes proceeds to the review." };
-        }
-      }
       // The same canonical inspections as the individual tools; no simulated
       // evidence and no paid producer turn for procedural stage bookkeeping.
       const sections = input.session.document.sections;
@@ -808,11 +792,11 @@ export async function produceNative(input: { session: NativeToolSession; directi
       if (after.hash !== before.hash || after.objectiveMissing.length || ((!input.scriptedModel || input.scriptedReviewer) && !after.reviewCurrent)) return { ready: false, missing: ["The music or requirements changed during final review. Inspect current state before finishing."] };
       if (needsNativeReviewResponse(review, after.saved!.reviewHistory, nativeMusicHash(input.session.document))
         && !(after.saved!.stage === "reviewed" && after.saved!.inspectedDocumentHash === after.hash)
-        && !(acceptRemainingSuggestions && before.reviewCurrent && presentedReviewHash === canonicalHash(before.saved!.review))) {
+        && !(acceptRemainingSuggestions && before.reviewCurrent && presentedReview && canonicalHash(presentedReview) === canonicalHash(before.saved!.review))) {
         await recordStage("refining");
         const menuOpened = specialistTools === "none" || specialistTools === "scene";
         if (menuOpened) specialistTools = "batch";
-        return { ready: false, category: "review_response", documentHash: after.hash, review, ...(menuOpened ? { toolMenu: "batch is now active: use apply_native_batch for the focused correction" } : {}),
+        return { ready: false, category: "review_response", documentHash: after.hash, review, ...(menuOpened ? { toolMenu: "batch is active: edit_native_passage and apply_native_batch are available for the focused correction" } : {}),
           findings: [...review.findings].sort((a, b) => (a.priority === "high" ? 0 : 1) - (b.priority === "high" ? 0 : 1)),
           missing: [nativeReviewResponseGuidance], canAcceptRemainingSuggestions: true,
           ...(review.findings.some((finding) => finding.citedChord) ? { citedChordNote: "citedChord is the application's name for the notes that finding cites; an inversion is the same chord. A finding that calls those notes a different chord misreads the harmony, and a justified no-change answers it." } : {}),
@@ -833,7 +817,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
         tool(async (raw: unknown) => {
           const args = passageTool.parse(raw);
           return applyAndInspect(args.stepKey, doc => editPassage(doc, args.sectionId, args.edit), { sectionIds: [args.sectionId], soundPartIds: [] });
-        }, { name: "edit_native_passage", description: "Thin selected pitched parts' last attacks and step-kit hats in one section, or land selected voices on explicit MIDI pitches in its final bar ([] rests).", schema: passageTool }),
+        }, { name: "edit_native_passage", description: "Thin a section, land voices in its final bar ([] rests), or restore an existing Beatbox8 groove with reuseKitPattern: partId, motifId, offsetBars from section start (0 = first bar), repeats. restKitSection rests only this section.", schema: passageTool }),
         tool(async (raw: unknown) => { const parsed = nativeSceneSchema.parse(raw);
           let args: typeof parsed; try { args = await withGmSounds(parsed); } catch (error) {
           // A re-sent scene cannot be compared with its committed step while the library is unreachable; say that its step is saved.
@@ -853,13 +837,13 @@ export async function produceNative(input: { session: NativeToolSession; directi
             !p.notes.length && !p.placements.length).map(p => p.id);
           return { ...result, starter: args.starter.id, parts: current.parts.map(p => p.id), sound: "Starter voices already have device settings, effects and mix.", next: openHooks.length
             ? `Place your phrases on ${openHooks.join(" and ")} and develop the answer.` : "Inspect the section contrast and check the landing." };
-        }, { name: "compose_native_scene", description: "Build exact-tick scenes (960/quarter). Optional first-scene starter supplies bass, keys, drums (except waltz) and empty lead; provide structure, chords, arc, landing and original patterns/placements. Compose freely for other briefs. Recipes, GM kit/instrument, harmony, grooves, space and inspect also work.", schema: nativeSceneSchema }),
+        }, { name: "compose_native_scene", description: "Build exact-tick scenes (960/quarter). Optional first-scene starter supplies bass, keys, drums (except waltz) and empty lead; provide structure, chords, arc, landing and original patterns/placements. Compose freely for other briefs. Harmony, grooves, space and inspection are available. " + (input.session.library ? "Use a local recipe or connected GM kit/instrument." : "Use local recipes or explicit devices. For electric piano use lofi-keys. GM kit/instrument fields require a connection."), schema: nativeSceneSchema }),
         tool(async (raw: unknown) => { const args = themeDevelopmentSchema.parse(raw); return applyAndInspect(args.stepKey, args.operations, args.inspect); }, { name: "develop_native_theme", description: "Develop named motif instances, hand a theme to another instrument, or transform selected section notes together. With a scale, diatonicSteps moves notes within the key and invertAround mirrors a phrase in key; developSectionNotes feel adds swing/humanize to a MIDI part. Explicit transformations preserve canonical family lineage and pass all scope/protection checks. Inspect selected sections in the same call.", schema: themeDevelopmentSchema }),
         tool(async (raw: unknown) => { const args = sectionSoundSchema.parse(raw); return applyAndInspect(args.stepKey, args.operations, args.inspect); }, { name: "shape_native_sections", description: "Shape existing control curves, reverb/delay feedback or clip levels across named sections in one atomic edit. Points use exact absolute ticks and explicit values; existing outside-section behavior is preserved. Create routing/initial curves with apply_native_batch first. Optional inspection verifies the result.", schema: sectionSoundSchema }),
         tool(async (raw: unknown) => { try { const plan = nativePlanSchema.parse(raw); await saveNativePlan(input.session.job, plan); return { saved: true, sectionCount: plan.sections.length, next: "Construct in small batches, then inspect sections and refine" }; } catch (error) { return toolFailure(error); } }, { name: "record_native_plan", description: "Persist an original form, sound and development plan for this request. Keep hard constraints distinct from subjective sound goals. The plan is progress, not accepted music.", schema: nativePlanSchema }),
         tool(async (raw: unknown) => { try { const state = nativeCreativeStateSchema.parse(raw); await saveNativeCreativeState(input.session.job, state); return { saved: true, identity: state.identity, palette: state.palette.map((item) => ({ role: item.role, resourceId: item.resourceId, resourceHash: item.resourceHash ?? null })), unfinished: state.unfinishedTasks.length }; } catch (error) { return toolFailure(error); } }, { name: "record_native_creative_state", description: "Save palette IDs/hashes, guidance, decisions, failures, tasks and confirmed entity links after discoveries or edits. Exclude credentials and signed URLs.", schema: nativeCreativeStateSchema }),
         tool(reviewScore, { name: "review_native_score", description: "Preflight objective requirements before spending a bounded symbolic review. Use this for one targeted refinement pass, not repeated perfection seeking. Suggestions do not themselves block completion. Reuse a current review; edits invalidate it. Prefer finish_native_arrangement when ready to save.", schema: z.object({}) }),
-        tool((raw: unknown) => finishArrangement(z.object({ acceptRemainingSuggestions: z.boolean().optional() }).parse(raw).acceptRemainingSuggestions), { name: "finish_native_arrangement", description: "Call alone to check requirements, inspect and review. A thin first sketch may return development advice before review. Clean reviews finish. For actionable findings refine once or read the review and acceptRemainingSuggestions. Hard requirements, locks and current review still apply. No copy or audio playback.", schema: z.object({ acceptRemainingSuggestions: z.boolean().optional() }) }),
+        tool((raw: unknown) => finishArrangement(z.object({ acceptRemainingSuggestions: z.boolean().optional() }).parse(raw).acceptRemainingSuggestions), { name: "finish_native_arrangement", description: "Call alone once the musical brief is met. Checks requirements, inspects the score and obtains its final symbolic review. For actionable findings refine once or read and acceptRemainingSuggestions.", schema: z.object({ acceptRemainingSuggestions: z.boolean().optional() }) }),
         tool((raw: unknown) => searchNativeExamples(z.object({ query: z.string().max(80).default("") }).parse(raw).query), { name: "search_native_examples", description: "Find original musical examples with a phrase up to 80 characters. Adapt ideas, not notes.", schema: z.object({ query: z.string().max(80).default("") }) }),
         tool((raw: unknown) => readNativeExample(z.object({ id: z.string().max(80) }).parse(raw).id), { name: "read_native_example", description: "Read one validated reference form, section/motif map and rationale after search. Adapt the relationship rather than copying its notes.", schema: z.object({ id: z.string().max(80) }) }),
         tool((raw: unknown) => { const { offset, length } = z.object({ offset: z.number().int().min(0), length: z.number().int().min(1).max(3000).default(1500) }).parse(raw); return { offset, totalLength: input.direction.length, text: input.direction.slice(offset, offset + length), nextOffset: offset + length < input.direction.length ? offset + length : null }; }, { name: "read_native_brief", description: "Read an exact bounded character window of the original, losslessly stored user direction, including its ending. Use offsets when details are not in the compact context.", schema: z.object({ offset: z.number().int().min(0), length: z.number().int().min(1).max(3000).default(1500) }) }),
@@ -927,7 +911,14 @@ export async function produceNative(input: { session: NativeToolSession; directi
         tool((raw: unknown) => { try { const { partId, noteOffset, noteLimit } = z.object({ partId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(24).default(12) }).parse(raw); const part = input.session.document.parts.find((value) => value.id === partId); if (!part) throw new NativeUnknownIdError("part", partId); const realized = materializedNotes(input.session.document, partId); latestInspection = { documentHash: canonicalHash(input.session.document), part: { ...part, notes: part.notes.slice(noteOffset, noteOffset + noteLimit) }, totalFreeNotes: part.notes.length, motifs: input.session.document.motifs.filter((value) => value.partId === partId).map((motif) => ({ id: motif.id, name: motif.name, familyId: motif.familyId ?? (motif.derivedFromMotifId ? null : motif.id), derivedFromMotifId: motif.derivedFromMotifId ?? null, lengthTicks: motif.lengthTicks, totalNotes: motif.notes.length, preview: motif.notes.slice(0, 4) })), materializedNotes: realized.slice(noteOffset, noteOffset + noteLimit), totalMaterializedNotes: realized.length, noteOffset, nextNoteOffset: noteOffset + noteLimit < realized.length ? noteOffset + noteLimit : null, protected: input.session.document.protectedPartIds.includes(partId) }; return latestInspection; } catch (error) { return toolFailure(error); } }, { name: "inspect_native_part", description: "Read one part, sound, placements, sources and paged notes. For full motifs use inspect_native_motif.", schema: z.object({ partId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(24).default(12) }) }),
         tool((raw: unknown) => { const { motifId, noteOffset, noteLimit } = z.object({ motifId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(64).default(32) }).parse(raw); const motif = input.session.document.motifs.find((value) => value.id === motifId); if (!motif) throw new NativeUnknownIdError("motif", motifId); latestInspection = { documentHash: canonicalHash(input.session.document), motif: { ...motif, notes: motif.notes.slice(noteOffset, noteOffset + noteLimit) }, totalNotes: motif.notes.length, noteOffset, instances: input.session.document.parts.flatMap((part) => part.placements.filter((placement) => placement.motifId === motifId).map((placement) => ({ partId: part.id, placement }))), protected: input.session.document.protectedMotifIds.includes(motifId) }; return latestInspection; }, { name: "inspect_native_motif", description: "Read exact motif notes in a bounded page and every placement that depends on it, to prevent an instance-targeted edit from changing shared uses.", schema: z.object({ motifId: z.string(), noteOffset: z.number().int().min(0).default(0), noteLimit: z.number().int().min(1).max(64).default(32) }) }),
         tool((raw: unknown) => { const { sectionId, focusPartId } = z.object({ sectionId: z.string(), focusPartId: z.string().optional() }).parse(raw); latestInspection = analyzeNativeSection(input.session.document, sectionId, focusPartId); const hash = canonicalHash(input.session.document); if (inspectionHash !== hash) { inspectionHash = hash; inspectedSections.clear(); } inspectedSections.add(sectionId); return latestInspection; }, { name: "inspect_native_section", description: "Inspect a section's actual note onsets, sounding overlap, density, ranges, repeated motif instances, source intervals and automation targets. Includes material spanning its boundaries; optionally preview eight notes for one part.", schema: z.object({ sectionId: z.string(), focusPartId: z.string().optional() }) }),
-        tool(async (raw: unknown) => { const args = nativeBatchSchema.parse(raw); return applyAndInspect(args.stepKey, (document) => compileToolOperations(args.operations, document), args.inspect); }, { name: "apply_native_batch", description: "Apply up to 128 explicit canonical operations atomically with a stable stepKey. Optional inspect returns up to three section and sound inspections after commit. A committed receipt remains successful if inspection fails; retry only the read. Use this for exact notes, harmony/groove, shared/parallel routing, sends, sound parameters and automation. Also accepts chordProgression (chord symbols voiced with smooth voice leading, comping patterns, a bass line and feel, written into empty sections) and applyRecipe (a recipe's device and effect chain). Local clip and curve operations preserve outside-section behavior. Locks cannot be changed by the producer. Inspect editable sound for legal paths; scene/theme/section tools provide focused shortcuts.", schema: nativeBatchSchema })
+        tool(async (raw: unknown) => {
+          const args = nativeBatchSchema.parse(raw);
+          return applyAndInspect(args.stepKey, document => {
+            const operations = compileToolOperations(args.operations, document);
+            checkReviewedKitReplacement(document, operations, presentedReview);
+            return operations;
+          }, args.inspect);
+        }, { name: "apply_native_batch", description: "Apply up to 128 explicit canonical operations atomically with a stable stepKey. Optional inspect returns up to three section and sound inspections after commit. A committed receipt remains successful if inspection fails; retry only the read. Use this for exact notes, harmony/groove, shared/parallel routing, sends, sound parameters and automation. Also accepts chordProgression (chord symbols voiced with smooth voice leading, comping patterns, a bass line and feel, written into empty sections) and applyRecipe (a recipe's device and effect chain). Local clip and curve operations preserve outside-section behavior. Locks cannot be changed by the producer. Inspect editable sound for legal paths; scene/theme/section tools provide focused shortcuts.", schema: nativeBatchSchema })
       ],
       middleware: [createMiddleware({ name: "VerifiedNativeContext", wrapToolCall: async (request, handler) => {
         const respond = (feedback: NativeToolFeedback) => {
@@ -960,7 +951,7 @@ export async function produceNative(input: { session: NativeToolSession; directi
         const checklist = await completionChecklist();
         // Acceptance refers to feedback in this model turn's trusted context,
         // never a review another tool produced concurrently in the same turn.
-        presentedReviewHash = checklist.reviewCurrent ? canonicalHash(checklist.saved!.review) : null;
+        presentedReview = checklist.reviewCurrent ? checklist.saved!.review : null;
         if (finalizedHash === checklist.hash && !checklist.missing.length) {
           // A tool has already completed the trusted lifecycle. Do not buy a
           // provider turn merely to say goodbye or invite more optional edits.
@@ -983,7 +974,8 @@ export async function produceNative(input: { session: NativeToolSession; directi
           // operation with the same inspection; repeating them would cost ~8 KB per call.
           if (name === "develop_native_theme" || name === "shape_native_sections") return specialistTools !== "batch";
           if (name === "compose_native_scene") return !["batch", "sound", "beat-form"].includes(specialistTools);
-          if (name === "configure_native_sound" || name === "edit_native_passage") return specialistTools === "sound";
+          if (name === "edit_native_passage") return specialistTools === "sound" || specialistTools === "batch";
+          if (name === "configure_native_sound") return specialistTools === "sound";
           if (name === "apply_native_batch") return specialistTools === "batch";
           if (name === "compose_native_form") return specialistTools === "beat-form";
           if (name === "inspect_native_capability") return specialistTools === "sdk";
@@ -1026,9 +1018,9 @@ export async function produceNative(input: { session: NativeToolSession; directi
       checkpointer: await checkpoint(), skills: ["/skills/"],
       permissions: [{ operations: ["read"], paths: ["/skills/**", "/workspace/**"] }, { operations: ["write"], paths: ["/**"], mode: "deny" }, { operations: ["read"], paths: ["/**"], mode: "deny" }],
       systemPrompt: `You are Pocket Producer's native music producer. Text alone is a complete creative input; sources are optional. Record a concise durable plan: form, sounds, explicit constraints and development. Distinguish user requirements from your interpretations. Retain chosen resources, decisions, failures and remaining work in record_native_creative_state; this is bookkeeping, not music.
-For new music, use compose_native_scene. A matching optional starter supplies a pocket and palette. Choose the chords, arc, landing and original hook; use lead:false for bass-led music. Compose freely for other briefs or exact instrument lists. Free scenes replace the seed with replaceSeed:true. Develop section contrast, phrase returns and a coordinated ending. Section names short; details in intent. Chord cycles <=16 bars; rhythmic comp/bass <=8 bars and 96 notes. Respect local revision scope. Theme edits vary or hand off a hook. Sound menu edit_native_passage thins a groove or lands selected parts. Menus replace each other; return to scene to compose.
+For new music, use compose_native_scene. A matching optional starter supplies a pocket and palette. Choose the chords, arc, landing and original hook; use lead:false for bass-led music. Compose freely for other briefs or exact instrument lists. Free scenes replace the seed with replaceSeed:true. Develop section contrast, phrase returns and a coordinated ending. Section names short; details in intent. Chord cycles <=16 bars; rhythmic comp/bass <=8 bars and 96 notes. Respect local revision scope. Theme edits vary or hand off a hook. Sound/batch edit_native_passage can thin, land, or reuse an existing step-kit pattern in selected bars. Menus replace each other; return to scene to compose.
 Start with the full form and a few core patterns. Use compact [startTick,durationTicks,pitch,velocity] events and repeated placements. Add roles and patch detail in later scenes; avoid long note-object lists. Reuse retained skill excerpts after compaction.
-Develop the sketch in two or three scene/batch passes: supporting layers, contrasting density/register, phrase variations and fills, a written ending, distinct patches, automation and shared space. Use the arrangement scorecard; respect sparse briefs and exact part lists.
+${input.mode === "revision" ? "Make the requested change within its scope." : richnessDepth === "detailed" ? "Develop the main idea across sections. For a requested answer, write a distinct return phrase or responding voice. Shape the transition and ending. Add supporting voices or timbral movement where they serve the brief." : "Give the piece a recognizable musical idea and a deliberate ending. If the first scene already delivers the brief, finish it. Otherwise develop the part or passage that needs it."}
 Check promised motif changes in timing, contour or tone against current section evidence. Configure defining voices with explicit settings or an inspected recipe; a deliberate default is valid. These are musical goals, not completion gates.
 Use inspect_editable_sound with a parameter query for valid controls, not repeated broad SDK discovery. Reuse the injected current plan and confirmed state; reread only missing details. Group related edits atomically with stable step keys and inspect the changed sections in the same call. On an argument error, correct the named field; on a committed receipt with an inspection error, retry only the read. Do not mistake stage/plan bookkeeping for musical progress. Move toward a useful identity within ten turns and complete reviewed work before fifty where possible, without skipping requirements.
 Inspect actual notes, section timing, routing, source intervals and curves. Prefer the bounded inspect argument on mutation tools to separate rereads. Reuse observations only at the current document hash; shared sound, routing and tempo changes can affect other parts. After a rejected operation, correct the named field or choose a supported operation; do not repeat the same invalid musical parameters. Search queries are short phrases (80 characters maximum), guidanceRefs are short identifiers (120 characters maximum), not prose. Build a coherent complete form before optional layers. Verify promised thinning, held endings and phrase development against actual section facts. One global tempo of 40–220 BPM is supported: do not claim actual acceleration or silently substitute an unsupported tempo. Distinguish any supported approximation from the original request. Before completion, obtain current section inspections and a valid symbolic review, using finish_native_arrangement or the individual tools. Resolve objective failures; consider grounded subjective findings in one focused refinement pass and retain remaining suggestions for later. Edits require a fresh review. A reasoned no-change is valid, an unavailable review is not approval. For revisions, inspect targets first and protect unrelated material, shared dependencies and named locks. Read exact brief windows if context loses detail.
@@ -1081,7 +1073,7 @@ Root motif familyId equals its own id (or omit it); derived motifs reference the
       // entire creative loop for up to eight more rounds.
       if (!input.scriptedModel || input.scriptedReviewer) {
         const ready = await completionChecklist();
-        if (!ready.objectiveMissing.length && ready.missing.length) await finishArrangement(false, true);
+        if (!ready.objectiveMissing.length && ready.missing.length) await finishArrangement();
       }
       if (!input.scriptedModel || input.scriptedReviewer) {
         const saved = await loadNativePlan(input.session.job.id);

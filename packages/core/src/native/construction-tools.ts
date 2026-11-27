@@ -94,7 +94,7 @@ export function compileChordProgression(raw: ChordProgression, document: NativeD
     const part = midiPart(document, partId), notes = materializedNotes(document, partId);
     for (const section of sections) {
       const start = section.startBar * grid.barTicks, end = section.endBar * grid.barTicks;
-      if (notes.some((note) => note.startTick < end && note.startTick + note.durationTicks > start)) throw invalid(`${part.name} already plays in ${section.name}; a chord progression writes new notes there`, "Use a part that is silent in these sections (add a new part if needed)");
+      if (notes.some((note) => note.startTick < end && note.startTick + note.durationTicks > start)) throw invalid(`${part.name} already plays in ${section.name}; a chord progression writes new notes there`, "For a new instrument, write the chords first. In the next scene omit parts, reference its existing id and place the melody in a clear register. For existing music choose an empty passage.");
     }
   };
   const ops: unknown[] = [];
@@ -223,7 +223,7 @@ export const nativeSceneSchema = z.object({
   motifs: z.array(nativeDocumentSchema.shape.motifs.element).max(24).default([]).describe("Root familyId omitted or own id. Derived motifs reference parent and its family."),
   patterns: z.array(compactPattern).max(24).default([]).describe("[startTick,durationTicks,pitch,velocity]. Root familyId omitted or own id. Derived patterns reference parent and its family."),
   placements: z.array(z.object({ partId: id, placement: nativeDocumentSchema.shape.parts.element.shape.placements.unwrap().element })).max(48).default([]),
-  harmony: z.array(chordProgressionBody).max(6).default([]).describe("Voice chord symbols with optional bass."),
+  harmony: z.array(chordProgressionBody).max(6).default([]).describe("Voice chords on silent parts. Solo keys: write chords first, then place the melody on the same part in a second scene with no parts declaration."),
   grooves: z.array(drumGrooveBody).max(4).default([]).describe("Kit grooves with section fills."),
   space: z.enum(["room", "hall"]).optional().describe("Shared reverb by role."),
   inspect: inspectionScope.optional()

@@ -152,7 +152,7 @@ export function symbolicNativeReview(document: NativeDocument, plan: NativePlan 
         motifIds: [...new Set(part.placements.map((placement) => placement.motifId))].slice(0, 8),
         automation: activeCurves.slice(0, 4), omittedAutomation: Math.max(0, activeCurves.length - 4) };
     });
-    return { id: section.id, name: section.name, firstBar: section.startBar, lastBar: section.endBar,
+    return { id: section.id, name: section.name, firstBar: section.startBar, lastBar: section.endBar, durationTicks: end - start,
       intent: section.intent, totalOnsets: partFacts.reduce((sum, part) => sum + part.newOnsets, 0),
       parts: partFacts.filter((part) => part.soundingNotes || part.clips || part.automation.length).slice(0, 12),
       additionalActiveParts: Math.max(0, partFacts.filter((part) => part.soundingNotes || part.clips || part.automation.length).length - 12) };
@@ -235,6 +235,8 @@ export function validateNativeReview(raw: unknown, document: NativeDocument, mod
     return !reason;
   }).map((finding) => { const chord = citedChord(finding, document); return chord ? { ...finding, citedChord: chord } : finding; });
   if (!discarded.length) return { ...parsed, findings };
+  // Its headline can repeat a rejected claim even after the finding is removed.
   return { ...parsed, findings, discardedFindings: discarded,
-    noChangeReason: findings.length ? parsed.noChangeReason : parsed.noChangeReason ?? "Its findings contradicted confirmed score facts, so they were discarded; no verified finding remains." };
+    verdict: findings.length ? findings[0]!.observation : "The editor’s suggested changes could not be verified against this score.",
+    noChangeReason: findings.length ? null : "The editor’s unsupported findings were discarded. There is no verified finding to act on." };
 }

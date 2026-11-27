@@ -4,9 +4,9 @@ import { compileRecipe, sceneOperations } from "./construction-tools.js";
 import { applyNativeOperations, barTicks, materializedNotes, nativeMusicHash } from "./model.js";
 import { seedNativeDocument } from "./producer.js";
 import { buildReference, referenceScene, starterReferences } from "./starter-references.js";
-import { editPassage } from "./passage-edits.js";
+import { checkReviewedKitReplacement, editPassage } from "./passage-edits.js";
 import { starterSuggestions } from "./starters.js";
-import { symbolicNativeReview } from "./critique.js";
+import { symbolicNativeReview, validateNativeReview } from "./critique.js";
 
 describe("original arrangement starters", () => {
   const v1Hashes = {
@@ -78,6 +78,66 @@ describe("original arrangement starters", () => {
     expect(() => applyNativeOperations(locked, editPassage(locked, section.id, { kind: "thin", partIds: ["keys"] }))).toThrow(/protected/i);
     await validateNativeOffline(after);
   });
+  it("restores a placed kit pattern for two bars without changing surrounding hits or any other voice", async () => {
+    const before = buildReference(starterReferences[1]!);
+    const section = before.sections[3]!, bar = barTicks(before);
+    const edit = { kind: "reuseKitPattern" as const, partId: "drums", motifId: "kit-pocket", offsetBars: 2, repeats: 2 };
+    const ops = editPassage(before, section.id, edit);
+    expect(ops).toEqual(editPassage(before, section.id, edit));
+    expect(ops.map(o => o.kind)).toEqual(["replacePlacements"]);
+    const after = applyNativeOperations(before, ops);
+    const start = (section.startBar + edit.offsetBars) * bar, end = start + 2 * bar;
+    const hits = (doc: typeof before) => materializedNotes(doc, "drums")
+      .sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch).map(n => [n.startTick, n.pitch, n.durationTicks, n.velocity]);
+    const outside = (n: number[]) => n[0]! < start || n[0]! >= end;
+    expect(hits(after).filter(outside)).toEqual(hits(before).filter(outside));
+    const pattern = before.motifs.find(m => m.id === edit.motifId)!;
+    expect(hits(after).filter(n => !outside(n))).toEqual([start, start + bar].flatMap(t =>
+      [...pattern.notes].sort((a, b) => a.startTick - b.startTick || a.pitch - b.pitch).map(n => [t + n.startTick, n.pitch, n.durationTicks, n.velocity])));
+    expect(after.motifs).toEqual(before.motifs);
+    expect(after.parts.filter(p => p.id !== "drums")).toEqual(before.parts.filter(p => p.id !== "drums"));
+    expect(() => editPassage(after, section.id, edit)).toThrow(/already fills/);
+    expect(() => editPassage(before, section.id, { ...edit, repeats: 8 })).toThrow(/beyond/);
+    expect(() => editPassage(before, section.id, { ...edit, partId: "bass" })).toThrow(/same Beatbox8/);
+    expect(() => editPassage({ ...before, protectedPartIds: ["drums"] }, section.id, edit)).toThrow(/protected/);
+    expect(() => editPassage({ ...before, protectedMotifIds: ["kit-lift"] }, section.id, edit)).toThrow(/protected/);
+    await validateNativeOffline(after);
+  });
+
+  it("rejects a kit replacement that would cut into a neighboring repetition", () => {
+    const score = buildReference(starterReferences[1]!);
+    const section = score.sections[3]!, bar = barTicks(score);
+    score.motifs.find(m => m.id === "kit-lift")!.lengthTicks = 2 * bar;
+    score.parts.find(p => p.id === "drums")!.placements = [{ id: "two-bars", motifId: "kit-lift", startTick: section.startBar * bar, repeats: 2, transpose: 0 }];
+    const edit = { kind: "reuseKitPattern" as const, partId: "drums", motifId: "kit-pocket", offsetBars: 1, repeats: 1 };
+    expect(() => editPassage(score, section.id, edit)).toThrow(/complete drum repetitions/);
+  });
+
+  it("keeps a local drum repair from silencing earlier sections and can rest the requested section with all slots occupied", async () => {
+    const score = buildReference(starterReferences[1]!);
+    const section = score.sections[3]!, kit = score.parts.find(p => p.id === "drums")!;
+    const review = validateNativeReview({ verdict: "Give the arrival more space.", noChangeReason: null,
+      findings: [{ priority: "medium", sectionId: section.id, partId: kit.id, observation: "The kit remains busy.", suggestedChange: "Leave the kit silent in this section." }] }, score, true);
+    const incomplete = [{ kind: "replacePlacements" as const, partId: kit.id, placements: kit.placements.slice(0, 1) }];
+    expect(score.motifs.filter(m => m.partId === kit.id)).toHaveLength(5);
+    expect(() => checkReviewedKitReplacement(score, incomplete, review)).toThrow(/would also silence/);
+    expect(() => checkReviewedKitReplacement(score, [...incomplete, { kind: "setMix", partId: kit.id, gain: 0.5 }], review)).toThrow(/would also silence/);
+    expect(() => checkReviewedKitReplacement(score, incomplete, null)).not.toThrow();
+    expect(() => checkReviewedKitReplacement(score, incomplete, { ...review, findings: review.findings.map(f => ({ ...f, sectionId: null })) })).not.toThrow();
+    const rest = { kind: "restKitSection" as const, partId: kit.id };
+    const scoped = editPassage(score, section.id, rest);
+    expect(() => checkReviewedKitReplacement(score, scoped, review)).not.toThrow();
+    const after = applyNativeOperations(score, scoped), bar = barTicks(score);
+    const outside = materializedNotes(score, kit.id).filter(n => n.startTick < section.startBar * bar || n.startTick >= section.endBar * bar);
+    expect(materializedNotes(after, kit.id)).toEqual(outside);
+    expect(after.motifs).toEqual(score.motifs);
+    expect(() => editPassage(after, section.id, rest)).toThrow(/already silent/);
+    expect(() => editPassage({ ...score, protectedPartIds: [kit.id] }, section.id, rest)).toThrow(/editable Beatbox8/);
+    expect(() => editPassage({ ...score, protectedMotifIds: ["kit-lift"] }, section.id, rest)).toThrow(/protected phrase/);
+    expect(() => editPassage({ ...score, protectedPartIds: [kit.id] }, section.id, rest)).toThrow(/editable/);
+    await validateNativeOffline(after);
+  });
+
   it("lands voices together inside a two-bar lead phrase and preserves its earlier performance", async () => {
     const before = buildReference(ref), last = before.sections.at(-1)!, landing = (before.bars - 1) * barTicks(before);
     const args = { kind: "land" as const, voices: [{ partId: "lead", pitches: [74] }, { partId: "bass", pitches: [38] }, { partId: "keys", pitches: [53, 57, 60, 64] }, { partId: "drums", pitches: [] }] };

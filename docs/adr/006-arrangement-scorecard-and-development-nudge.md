@@ -2,6 +2,8 @@
 
 Accepted 2026-10-12 by explicit user direction (iterate on musical complexity with measured local builds, without regressions).
 
+Amended 2026-11-27 after [paired generation and revision experiments](../producer-review-experiment-2026-11-27.md). The first-finish development nudge and fixed pass count below are historical. The live producer receives descriptive arrangement facts and goes straight from objective completion to musical review. The scorecard remains available for offline comparisons, and the scene building blocks and recovery limits continue to apply.
+
 ## Context
 
 The [music quality review](../music-quality-review.md) found that every gate checks that the music is not wrong and none measures how much music there is. Nine hosted builds were 2–5 parts with a median of three writes. The prompt told the producer to finish after one refinement pass, and the craft guidance argued for fewer parts. Builds used 1–2% of their budget.
